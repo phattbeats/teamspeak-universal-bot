@@ -376,6 +376,14 @@ pub async fn run(
                     }
                     Some(Ok(StreamItem::DisconnectedTemporarily(reason))) => {
                         log::warn!("temporary disconnect: {reason:?}");
+                        // Nobody can be mid-sentence across a disconnect, and
+                        // their `speaker_stop` is never coming. Without this
+                        // the duck flag latches on and the music lane stays at
+                        // 0.25 forever — the mixer outlives the connection.
+                        for cid in known_talkers.drain() {
+                            let _ = event_tx.send(BridgeEvent::SpeakerStop { client_id: cid });
+                        }
+                        mixer.lock().unwrap().set_human_speaking(false);
                         let _ = event_tx.send(BridgeEvent::State { connected: false, channel_id: 0, channel_name: String::new() });
                     }
                     Some(Ok(_)) => {}
@@ -385,6 +393,13 @@ pub async fn run(
             }
         }
     }
+
+    // Same for the loop exiting outright: `main` reconnects with a fresh
+    // connection but the same mixer, so leave the duck envelope released.
+    for cid in known_talkers.drain() {
+        let _ = event_tx.send(BridgeEvent::SpeakerStop { client_id: cid });
+    }
+    mixer.lock().unwrap().set_human_speaking(false);
 
     let _ = con.disconnect(DisconnectOptions::new());
     let _ = event_tx.send(BridgeEvent::State { connected: false, channel_id: 0, channel_name: String::new() });
