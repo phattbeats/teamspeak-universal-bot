@@ -51,6 +51,12 @@ const BACKOFF_MAX: Duration = Duration::from_secs(3600);
 /// How long to wait for the server to answer our `channellist` request before
 /// giving up on resolving the watched channel.
 const CHANNEL_TREE_TIMEOUT: Duration = Duration::from_secs(15);
+/// No catch-up PMs for this long after connecting. The server streams the
+/// existing client list to us as a burst of "client added" events just after
+/// the channel list, and those clients did not join anything — our own
+/// connect is not their arrival. Without this a bot restart PMs the whole
+/// room.
+const STARTUP_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "sexton", about = "The Sexton — persistent TeamSpeak channel chat logger")]
@@ -122,6 +128,8 @@ struct ChannelState {
     /// Clients that were already connected when the bot came up — never PM'd
     /// on account of our own connect.
     preexisting: HashSet<ClientId>,
+    /// Catch-up PMs are suppressed until this instant (see STARTUP_GRACE).
+    quiet_until: tokio::time::Instant,
 }
 
 impl ChannelState {
@@ -138,6 +146,7 @@ impl ChannelState {
             last_pm: HashMap::new(),
             log_dir,
             preexisting,
+            quiet_until: tokio::time::Instant::now() + STARTUP_GRACE,
         }
     }
 
@@ -514,6 +523,12 @@ fn maybe_send_catchup(
     client_id: ClientId,
 ) {
     if client_id == own_client_id || state.preexisting.contains(&client_id) {
+        return;
+    }
+    // The initial client-list burst arrives just *after* we snapshot
+    // `preexisting`, so the snapshot alone does not catch everyone who was
+    // already here. Stay quiet for the first few seconds as well.
+    if tokio::time::Instant::now() < state.quiet_until {
         return;
     }
     let now_in_channel = con

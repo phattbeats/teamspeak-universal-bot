@@ -2,11 +2,21 @@
 # container name (`teamspeak6-server:9987`), not `network_mode: host` /
 # `teamspeak.phatt.vip` — PHATT-RAID and the TS6 server share one public IP,
 # so routing out and back in over the public hostname hairpins and gets
-# flood-scored as if from the public internet (PHA-3099 finding #5).
+# flood-scored as if from the public internet (PHA-3099 finding #5). Running
+# it that way returned `ConnectFailedBanned` on every retry; by container name
+# it connects first try.
+#
+# To run the bot somewhere that is NOT on this Docker network, add
+# `--public-fallback` to the command; it ignores `-a` and dials
+# teamspeak.phatt.vip instead.
+#
+# Deploy from a checkout of this repo:
+#   docker compose -f sexton/deploy/sexton-compose.yml up -d --build
 services:
   sexton:
     image: phattbeats/sexton:latest
-    build: /mnt/user/appdata/sexton/build-context-v2
+    # Build context is the crate root (this file lives in sexton/deploy/).
+    build: ..
     container_name: sexton
     restart: unless-stopped
     networks:
@@ -16,15 +26,18 @@ services:
     volumes:
       - /mnt/user/scratch/sexton/sexton-id.txt:/run/secrets/sexton-identity:ro
       - /mnt/user/scratch/sexton/secrets/paperclip-bearer:/run/secrets/paperclip-bearer:ro
-      - /mnt/user/appdata/sexton:/var/sexton-logs
+      - /mnt/user/appdata/sexton/logs:/var/sexton-logs
+    # The image's ENTRYPOINT is the bot itself; override it so the identity can
+    # be read out of the mounted secret at start.
+    entrypoint: ["/bin/sh", "-c"]
     command: >
-      sh -c 'exec sexton -a teamspeak6-server -p 9987
+      exec /usr/local/bin/sexton -a teamspeak6-server -p 9987
             -n Sexton
             -c "General Shit"
             -i "$$(cat /run/secrets/sexton-identity)"
             -A /usr/local/share/sexton-avatar/brandon.png
             -l /var/sexton-logs
-            --on-connected /usr/local/bin/on-connected'
+            --on-connected /usr/local/bin/on-connected
     healthcheck:
       test: ["CMD", "pgrep", "-f", "/usr/local/bin/sexton"]
       interval: 30s

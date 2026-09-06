@@ -22,8 +22,9 @@ use tracing::info;
 
 use tsclientlib::prelude::*;
 use tsclientlib::messages::c2s::{
-    OutChannelCreateMessage, OutChannelCreatePart, OutChannelListRequestMessage,
-    OutClientMoveMessage, OutClientMovePart,
+    OutChannelCreateMessage, OutChannelCreatePart, OutChannelDescriptionRequestMessage,
+    OutChannelDescriptionRequestPart, OutChannelListRequestMessage, OutClientMoveMessage,
+    OutClientMovePart,
 };
 use tsclientlib::{
     events::Event, ChannelId, ClientId, Connection, DisconnectOptions, Identity, MessageTarget,
@@ -48,6 +49,11 @@ struct Args {
     #[arg(short = 'c', long)]
     channel: String,
 
+    /// Identity to connect with ("counter V base64"). Empty => a fresh
+    /// throwaway. Pass the same value twice to reconnect as the same account.
+    #[arg(short = 'i', long, default_value = "")]
+    identity: String,
+
     /// Comma-separated script of steps (see module docs). Empty => just join.
     #[arg(short = 's', long, default_value = "")]
     script: String,
@@ -69,7 +75,11 @@ async fn main() -> Result<()> {
         .init();
     let args = Args::parse();
 
-    let identity = Identity::create();
+    let identity = if args.identity.is_empty() {
+        Identity::create()
+    } else {
+        Identity::new_from_str(&args.identity).map_err(|e| anyhow!("parsing identity: {e:?}"))?
+    };
     let mut con = Connection::build(args.address.clone())
         .identity(identity)
         .name(args.nickname.clone())
@@ -120,6 +130,28 @@ async fn main() -> Result<()> {
     if args.linger_seconds > 0 {
         info!(seconds = args.linger_seconds, "lingering");
         pump(&mut con, StdDuration::from_secs(args.linger_seconds)).await?;
+    }
+
+    // Ask the server for the watched channel's description — exactly what a
+    // real client does when you click the channel, and the only honest proof
+    // that the Sexton's channeledit was accepted rather than merely sent.
+    OutChannelDescriptionRequestMessage::new(&mut std::iter::once(
+        OutChannelDescriptionRequestPart { channel_id },
+    ))
+    .send(&mut con)
+    .map_err(|e| anyhow!("channelgetdescription: {e}"))?;
+    pump(&mut con, STEP_SETTLE).await?;
+    {
+        let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
+        let desc = state
+            .channels
+            .get(&channel_id)
+            .and_then(|ch| ch.optional_data.as_ref())
+            .map(|d| d.description.clone())
+            .unwrap_or_else(|| "<server returned no description>".to_string());
+        println!("=== channel description as {} sees it ({} bytes) ===", args.nickname, desc.len());
+        println!("{desc}");
+        println!("=== end description ===");
     }
 
     con.disconnect(DisconnectOptions::new())
