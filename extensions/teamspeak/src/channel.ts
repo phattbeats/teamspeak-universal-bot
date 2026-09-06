@@ -66,7 +66,7 @@ export function startTeamSpeakVoiceRuntime(params: {
       ? { minBargeInAudioEndMs: realtimeConfig.minBargeInAudioEndMs }
       : {}),
     log: (message) => logger.info(message),
-    createSpeakerSession: (client, playback) =>
+    createSpeakerSession: (client, playback, tools) =>
       new TeamSpeakRealtimeSpeakerSession({
         client,
         sessionId: `teamspeak:${account.accountId}:${client.clientId}`,
@@ -76,6 +76,9 @@ export function startTeamSpeakVoiceRuntime(params: {
         mode,
         realtimeConfig,
         playback,
+        // PHA-3176: play_music / stop_music / set_volume / what_did_i_miss /
+        // who_is_here / poke, executed by the runtime that owns the bridge.
+        ...(tools ? { toolRegistration: tools } : {}),
         humanParticipantCount: () => runtime.snapshot().humanParticipants,
         onTerminalError: (error) =>
           logger.warn(

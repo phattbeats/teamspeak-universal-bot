@@ -51,6 +51,11 @@ export class SpeakerSessionManager {
     return this.roster.size;
   }
 
+  /** The last roster snapshot, minus the bot — what `who_is_here` answers with. */
+  rosterEntries(): RosterEntry[] {
+    return Array.from(this.roster.values());
+  }
+
   hasSession(clientId: TeamSpeakClientId): boolean {
     return this.sessions.has(clientId);
   }

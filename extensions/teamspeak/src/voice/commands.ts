@@ -139,6 +139,8 @@ export type StatusSnapshot = {
   bargeInEnabled: boolean;
   muted: boolean;
   playbackActive: boolean;
+  /** Music lane summary, omitted when the music tools are disabled. */
+  music?: string | undefined;
 };
 
 /** `!sexton status` reply. One line per fact so it stays readable in TS chat. */
@@ -149,5 +151,6 @@ export function formatStatusReply(snapshot: StatusSnapshot): string {
     `listening to ${snapshot.speakerSessions} of ${snapshot.humanParticipants} in channel`,
     `wake name ${snapshot.wakeNameRequired ? `required (${snapshot.wakeNames.join(", ") || "none configured"})` : "not required"}`,
     `barge-in ${snapshot.bargeInEnabled ? "on" : "off"}, playback ${snapshot.playbackActive ? "active" : "idle"}`,
+    ...(snapshot.music ? [`music: ${snapshot.music}`] : []),
   ].join("\n");
 }

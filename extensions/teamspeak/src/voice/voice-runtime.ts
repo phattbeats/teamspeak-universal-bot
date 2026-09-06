@@ -11,16 +11,23 @@ import type {
   TextMessageHeader,
 } from "../bridge/protocol.js";
 import {
+  areTeamSpeakToolsEnabled,
   DEFAULT_COMMAND_PREFIX,
+  isTeamSpeakMusicEnabled,
+  resolveSextonLogDir,
   resolveTeamSpeakVoiceMode,
   type TeamSpeakAccountConfig,
 } from "../config.js";
+import type { ReadChannelLog } from "../tools/catch-up.js";
+import { MusicPlayer, type MusicController, type MusicSink } from "../tools/music.js";
+import { createTeamSpeakToolRegistration } from "../tools/registry.js";
 import {
   formatStatusReply,
   parseTeamSpeakCommand,
   type StatusSnapshot,
   type TeamSpeakCommand,
 } from "./commands.js";
+import type { TeamSpeakRealtimeToolRegistration } from "./realtime-speaker-session.js";
 import { RoomPlaybackQueue } from "./room-playback.js";
 import {
   SpeakerSessionManager,
@@ -36,11 +43,28 @@ export type VoiceSpeakerSession = SpeakerSession & {
   readonly bargeInEnabled: boolean;
 };
 
+/**
+ * Test/deployment seams for the realtime tools. `createMusic` receives the
+ * runtime's own music sink, so a substitute player still writes to the bridge's
+ * `music_audio` lane; returning undefined from it disables the music tools.
+ */
+export type TeamSpeakToolOverrides = {
+  createMusic?: ((sink: MusicSink) => MusicController | undefined) | undefined;
+  readLog?: ReadChannelLog | undefined;
+  now?: (() => Date) | undefined;
+  logDir?: string | undefined;
+};
+
 export type TeamSpeakVoiceRuntimeParams = {
   accountId: string;
   config: TeamSpeakAccountConfig;
   createSocket: BridgeSocketFactory;
-  createSpeakerSession: (client: RosterEntry, playback: RoomPlaybackQueue) => VoiceSpeakerSession;
+  createSpeakerSession: (
+    client: RosterEntry,
+    playback: RoomPlaybackQueue,
+    tools: TeamSpeakRealtimeToolRegistration | undefined,
+  ) => VoiceSpeakerSession;
+  toolOverrides?: TeamSpeakToolOverrides | undefined;
   minBargeInAudioEndMs?: number | undefined;
   /**
    * Roster changes are delivered into the agent session as silent events: they
@@ -57,6 +81,8 @@ export class TeamSpeakVoiceRuntime {
   private readonly bridge: TeamSpeakBridgeClient;
   private readonly playback: RoomPlaybackQueue;
   private readonly sessions: SpeakerSessionManager;
+  private readonly music: MusicController | undefined;
+  private readonly tools: TeamSpeakRealtimeToolRegistration | undefined;
   private state: BridgeStateHeader = { connected: false, channelId: 0, channelName: "" };
   private muted = false;
   private selfClientId: TeamSpeakClientId | undefined;
@@ -71,7 +97,7 @@ export class TeamSpeakVoiceRuntime {
       log: params.log,
     });
     this.sessions = new SpeakerSessionManager({
-      createSession: (client) => this.params.createSpeakerSession(client, this.playback),
+      createSession: (client) => this.params.createSpeakerSession(client, this.playback, this.tools),
       selfClientId: () => this.selfClientId,
       onRosterEvent: (event) => this.handleRosterEvent(event),
       onSessionError: (clientId, error) =>
@@ -96,6 +122,9 @@ export class TeamSpeakVoiceRuntime {
           // clientId we were keyed on is void; rebuild from the next roster.
           this.sessions.closeAll(`bridge-disconnected:${reason}`);
           this.playback.handleBargeIn("bridge-disconnected", { force: true });
+          // Music is paced against a socket that no longer exists; a reconnect
+          // would resume mid-track with the wrong clock, so end the track.
+          this.music?.stop(`bridge-disconnected:${reason}`);
           this.state = { ...this.state, connected: false };
         },
         onState: (state) => {
@@ -111,6 +140,29 @@ export class TeamSpeakVoiceRuntime {
         onError: (error) => this.params.log?.(`teamspeak bridge: ${error.message}`),
       },
     });
+    this.music = this.createMusicController();
+    this.tools = areTeamSpeakToolsEnabled(params.config)
+      ? createTeamSpeakToolRegistration({
+          config: params.config.tools,
+          music: this.music,
+          roster: () => this.sessions.rosterEntries(),
+          channelName: () => this.state.channelName,
+          poke: (clientId, text) => this.bridge.poke(clientId, text),
+          logDir: params.toolOverrides?.logDir ?? resolveSextonLogDir(params.config),
+          ...(params.toolOverrides?.readLog ? { readLog: params.toolOverrides.readLog } : {}),
+          ...(params.toolOverrides?.now ? { now: params.toolOverrides.now } : {}),
+          ...(params.log ? { log: params.log } : {}),
+        })
+      : undefined;
+  }
+
+  /** The tools the speaker sessions register on their provider session. */
+  get toolRegistration(): TeamSpeakRealtimeToolRegistration | undefined {
+    return this.tools;
+  }
+
+  get musicController(): MusicController | undefined {
+    return this.music;
   }
 
   start(): void {
@@ -118,9 +170,29 @@ export class TeamSpeakVoiceRuntime {
   }
 
   stop(): void {
+    this.music?.close();
     this.sessions.close("runtime-stop");
     this.playback.close();
     this.bridge.close();
+  }
+
+  private createMusicController(): MusicController | undefined {
+    const sink: MusicSink = {
+      sendMusicAudio: (pcm) => this.bridge.sendMusicAudio(pcm),
+      setMusicGain: (gain) => this.bridge.setMusicGain(gain),
+    };
+    const createMusic = this.params.toolOverrides?.createMusic;
+    if (createMusic) {
+      return createMusic(sink);
+    }
+    if (!isTeamSpeakMusicEnabled(this.params.config)) {
+      return undefined;
+    }
+    return new MusicPlayer({
+      config: this.params.config.tools?.music,
+      sink,
+      ...(this.params.log ? { log: this.params.log } : {}),
+    });
   }
 
   /** Exposed for `!sexton status` and for tests. */
@@ -141,6 +213,7 @@ export class TeamSpeakVoiceRuntime {
       bargeInEnabled: session?.bargeInEnabled ?? false,
       muted: this.muted,
       playbackActive: this.playback.isActive(),
+      ...(this.music ? { music: describeMusic(this.music) } : {}),
     };
   }
 
@@ -212,6 +285,7 @@ export class TeamSpeakVoiceRuntime {
       case "vc-leave": {
         this.sessions.closeAll("vc-leave");
         this.playback.handleBargeIn("vc-leave", { force: true });
+        this.music?.stop("vc-leave");
         this.reply(message, "Leaving voice.");
         return;
       }
@@ -220,6 +294,9 @@ export class TeamSpeakVoiceRuntime {
         this.bridge.setMuted(command.muted);
         if (command.muted) {
           this.playback.handleBargeIn("vc-mute", { force: true });
+          // The bridge stops sending our mixed stream while muted; leaving
+          // ffmpeg running would burn CPU on audio nobody can hear.
+          this.music?.stop("vc-mute");
         }
         this.reply(message, command.muted ? "Muted." : "Unmuted.");
         return;
@@ -238,4 +315,11 @@ export class TeamSpeakVoiceRuntime {
     }
     this.bridge.sendText(message.target === "server" ? "server" : "channel", text);
   }
+}
+
+/** One-line music state for `!sexton status`. */
+function describeMusic(music: MusicController): string {
+  const volume = `${Math.round(music.volume * 100)}%`;
+  const track = music.nowPlaying;
+  return track ? `playing "${track.title}" at ${volume}` : `idle (volume ${volume})`;
 }

@@ -71,6 +71,61 @@ export type TeamSpeakVoiceConfig = {
   realtime?: TeamSpeakVoiceRealtimeConfig;
 };
 
+/**
+ * `play_music` settings (PHA-3176).
+ *
+ * The pipeline is TS3AudioBot's, which is the one proven against a TeamSpeak
+ * server: yt-dlp resolves a direct stream URL, ffmpeg decodes it to 48 kHz mono
+ * PCM16, and the plugin paces that onto the bridge's music lane. Both binaries
+ * live in the gateway image; the paths exist so a non-standard image can point
+ * at them.
+ */
+export type TeamSpeakMusicConfig = {
+  /** Enable `play_music` / `stop_music` / `set_volume` (default: true). */
+  enabled?: boolean;
+  /** yt-dlp executable. Default: "yt-dlp". */
+  ytdlpPath?: string;
+  /** ffmpeg executable. Default: "ffmpeg". */
+  ffmpegPath?: string;
+  /**
+   * Netscape cookie file for yt-dlp, from a throwaway account. YouTube
+   * intermittently challenges datacenter IPs; the yt-dlp wiki's answer is this
+   * plus the bgutil POT provider plugin, which is an image concern, not a
+   * config one.
+   */
+  cookiesFile?: string;
+  /** Extra yt-dlp arguments, inserted before the target. */
+  ytdlpArgs?: string[];
+  /** Music lane gain, 0..1, applied before the bridge's ducking. Default: 0.6. */
+  defaultVolume?: number;
+  /** Timeout for the yt-dlp resolve step. Default: 20000ms. */
+  resolveTimeoutMs?: number;
+  /**
+   * Audio handed to the bridge ahead of realtime, in milliseconds. This is the
+   * jitter buffer *and* the floor on how long `stop_music` takes to fall
+   * silent, because the bridge's music queue is unbounded and cannot be
+   * cleared. Default: 240ms.
+   */
+  prebufferMs?: number;
+};
+
+/** Realtime voice tool settings (PHA-3176). */
+export type TeamSpeakToolsConfig = {
+  /** Register the TeamSpeak realtime tools at all (default: true). */
+  enabled?: boolean;
+  /**
+   * Root of the Sexton's markdown logs, the same `--log-dir` the logger bot
+   * runs with. `what_did_i_miss` reads `<logDir>/<channel>/YYYY-MM-DD.md`.
+   * Default: TEAMSPEAK_SEXTON_LOG_DIR, else /mnt/user/appdata/sexton.
+   */
+  logDir?: string;
+  /** Lines `what_did_i_miss` returns when no window is given. Default: 15. */
+  catchUpDefaultLines?: number;
+  /** Hard cap on lines returned in one catch-up. Default: 40. */
+  catchUpMaxLines?: number;
+  music?: TeamSpeakMusicConfig;
+};
+
 export type TeamSpeakAccountConfig = {
   enabled?: boolean;
   /** WebSocket URL of the plnt-ts-bridge sidecar, e.g. ws://ts-bridge:9099. */
@@ -82,10 +137,37 @@ export type TeamSpeakAccountConfig = {
   /** TeamSpeak client ids allowed to issue `!vc` / `!sexton` commands. Unset allows anyone in the channel. */
   commandAllowFrom?: number[];
   voice?: TeamSpeakVoiceConfig;
+  tools?: TeamSpeakToolsConfig;
 };
 
 export const DEFAULT_COMMAND_PREFIX = "!";
 export const DEFAULT_VOICE_MODE: TeamSpeakVoiceMode = "agent-proxy";
+export const DEFAULT_SEXTON_LOG_DIR = "/mnt/user/appdata/sexton";
+export const DEFAULT_CATCH_UP_LINES = 15;
+export const DEFAULT_CATCH_UP_MAX_LINES = 40;
+export const DEFAULT_MUSIC_VOLUME = 0.6;
+export const DEFAULT_MUSIC_PREBUFFER_MS = 240;
+export const DEFAULT_MUSIC_RESOLVE_TIMEOUT_MS = 20_000;
+
+export function areTeamSpeakToolsEnabled(config: TeamSpeakAccountConfig | undefined): boolean {
+  return config?.tools?.enabled !== false;
+}
+
+export function isTeamSpeakMusicEnabled(config: TeamSpeakAccountConfig | undefined): boolean {
+  return areTeamSpeakToolsEnabled(config) && config?.tools?.music?.enabled !== false;
+}
+
+/** Log root for `what_did_i_miss`; env fallback so a container can set it once. */
+export function resolveSextonLogDir(
+  config: TeamSpeakAccountConfig | undefined,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return (
+    config?.tools?.logDir?.trim() ||
+    env.TEAMSPEAK_SEXTON_LOG_DIR?.trim() ||
+    DEFAULT_SEXTON_LOG_DIR
+  );
+}
 
 export function isTeamSpeakVoiceEnabled(config: TeamSpeakAccountConfig | undefined): boolean {
   return config?.voice?.enabled !== false;

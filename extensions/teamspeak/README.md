@@ -76,6 +76,22 @@ voice block can be copied across unchanged.
           "toolPolicy": "owner",
           "consultPolicy": "always"
         }
+      },
+      "tools": {
+        "enabled": true,                     // default; false removes every tool
+        "logDir": "/mnt/user/appdata/sexton", // or TEAMSPEAK_SEXTON_LOG_DIR
+        "catchUpDefaultLines": 15,           // default
+        "catchUpMaxLines": 40,               // default
+        "music": {
+          "enabled": true,                   // false keeps the other tools
+          "ytdlpPath": "yt-dlp",             // default
+          "ffmpegPath": "ffmpeg",            // default
+          "cookiesFile": "/etc/sexton/cookies.txt", // optional
+          "ytdlpArgs": [],                   // extra yt-dlp flags
+          "defaultVolume": 0.6,              // music lane gain, before ducking
+          "resolveTimeoutMs": 20000,         // yt-dlp search timeout
+          "prebufferMs": 240                 // jitter buffer = stop latency
+        }
       }
     }
   }
@@ -95,7 +111,8 @@ PM stays a PM.
 - `!vc leave` — close every speaker session and stop playback
 - `!vc mute [on|off]` — mute the outbound lane (bare form toggles); muting also
   drops audio already queued
-- `!sexton status` — bridge/channel/session/wake-name/barge-in state
+- `!sexton status` — bridge/channel/session/wake-name/barge-in state, plus the
+  music lane when the music tools are enabled
 
 Text that is not addressed to us — including another bot's `!roll` — draws no
 reply.
@@ -104,10 +121,80 @@ reply.
 
 Tools are registered through the harness `tools` list, and calls come back on
 `onToolCall` → `submitToolResult` — the same path Discord uses for
-`openclaw_agent_consult`. Pass a `toolRegistration` to
-`TeamSpeakRealtimeSpeakerSession`. The tools themselves are **PHA-3176**; until
-then an unregistered call is answered with an error rather than left pending,
-because the provider blocks its turn until every outstanding call settles.
+`openclaw_agent_consult`. The voice runtime builds one registration and hands
+the same one to every speaker session; the tools execute here, in the plugin,
+against the bridge socket the runtime already owns. A call that throws, or names
+a tool that is not registered, still settles as `{ ok: false, error }`, because
+the provider blocks its turn until every outstanding call has a result.
+
+| tool | arguments | what it does |
+|---|---|---|
+| `play_music` | `query` or `url` | yt-dlp resolves a stream, ffmpeg decodes it, frames go to the bridge's `music_audio` lane. The bridge ducks it while anyone speaks. |
+| `stop_music` | — | Kills the decode. Reports whether anything was playing. |
+| `set_volume` | `volume` (0–1) | Sets the music lane gain (`music_gain`). A bare number over 1 is read as a percentage. |
+| `what_did_i_miss` | `minutes?` | Reads the Sexton logger's markdown log for the current channel back for the model to read aloud. |
+| `who_is_here` | — | The bridge's current roster, with muted/away flags. |
+| `poke` | `nickname`, `text` | Resolves the spoken nickname against the roster, then sends bridge `poke`. |
+
+Every call is logged with caller, arguments, outcome and duration:
+
+```
+teamspeak tool: play_music caller=brandon#11 args={"query":"smooth jazz"} ok=true 842ms
+```
+
+The tool descriptions ask for a short spoken confirmation. The Plant's contempt
+for what you asked it to play belongs in the agent's instructions, not here.
+
+### `play_music` and the music lane
+
+The pipeline is TS3AudioBot's (PHA-3099 finding 8), with the Opus encode left to
+the bridge:
+
+```
+yt-dlp -f bestaudio/best --no-playlist --print '%(title)s\t%(urls)s' 'ytsearch1:<query>'
+ffmpeg -i <url> -vn -ac 1 -ar 48000 -f s16le pipe:1
+-> 20 ms frames -> bridge music_audio (0x82)
+```
+
+Two things are deliberate:
+
+- **The plugin paces the stream, the bridge does not.** ts-bridge's music queue
+  is unbounded and has no clear path, so writing at decode speed would park a
+  whole track in the sidecar's memory and make `stop_music` a no-op for minutes.
+  Frames leave on a wall-clock schedule with a small prebuffer, and
+  `tools.music.prebufferMs` is therefore also the worst-case stop latency.
+- **No shell.** The spoken query reaches yt-dlp as a single argv element.
+
+Music stops on `stop_music`, `!vc leave`, `!vc mute on`, a bridge disconnect,
+and runtime shutdown.
+
+**Image requirements.** The gateway image needs `yt-dlp` and `ffmpeg` on PATH.
+Per the yt-dlp wiki, YouTube challenges datacenter IPs, so also install the
+[`bgutil-ytdlp-pot-provider`](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)
+plugin and keep yt-dlp itself current — it breaks against YouTube changes on the
+order of weeks, so pin nothing and update it on image rebuild:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3-pip \
+ && pip3 install --break-system-packages --no-cache-dir -U yt-dlp bgutil-ytdlp-pot-provider \
+ && rm -rf /var/lib/apt/lists/*
+```
+
+If a throwaway-account cookie file is mounted, point `tools.music.cookiesFile`
+at it; it is passed to yt-dlp as `--cookies`.
+
+### `what_did_i_miss` and the log
+
+The catch-up reads the Sexton logger's own files —
+`<tools.logDir>/<channel>/YYYY-MM-DD.md`, lines `HH:MM  nickname: message`,
+today's and yesterday's — rather than keeping a second history. That means what
+the Sexton reads aloud, what the channel description shows, and what a joiner
+gets by PM are the same text, and the logger's hard rule (user-authored messages
+only, no joins/mutes/system noise) holds here for free.
+
+Mount the logger's log volume into the gateway container read-only, or set
+`TEAMSPEAK_SEXTON_LOG_DIR`. With no log present the tool answers "nothing
+logged yet" rather than failing.
 
 ## Building it into the Gateway image
 
@@ -150,6 +237,13 @@ PHA-3175 are `test/speaker-sessions.test.ts` (sessions open/close on roster),
 `test/room-playback.test.ts` (barge-in clears the queue);
 `test/voice-runtime.test.ts` exercises all of it end-to-end through the frame
 codec.
+
+The PHA-3176 tools are covered by `test/music.test.ts` (yt-dlp arguments and the
+pacing/backpressure/stop behavior, with both binaries faked), `test/tools.test.ts`
+(definitions, argument handling, nickname resolution, the timing log),
+`test/catch-up.test.ts` (the logger's line grammar and file layout, including one
+real file on disk) and `test/voice-runtime-tools.test.ts` (a tool call in, bridge
+`poke` / `music_audio` / `music_gain` frames out).
 
 ### What the standalone suite does and does not prove
 

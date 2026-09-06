@@ -72,7 +72,7 @@ export type TeamSpeakRealtimeSessionParams = {
   bootstrapContextInstructions?: string;
   playback: RoomPlaybackQueue;
   humanParticipantCount: () => number;
-  /** Realtime tools registered on the provider session; PHA-3176 fills these in. */
+  /** Realtime tools registered on the provider session (built in src/tools). */
   toolRegistration?: TeamSpeakRealtimeToolRegistration;
   isProviderAvailable?: (providerId: string) => boolean;
   onTerminalError: (error: Error) => void;
@@ -324,9 +324,10 @@ export class TeamSpeakRealtimeSpeakerSession implements SpeakerSession {
   /**
    * Realtime tool calls take the same path Discord uses for
    * `openclaw_agent_consult`: run the handler, then hand the result back
-   * through the session's `submitToolResult`. The tools themselves land in
-   * PHA-3176; without a registration this reports the call as unsupported
-   * rather than leaving the provider waiting on a result that never arrives.
+   * through the session's `submitToolResult`. The tools themselves are built in
+   * src/tools (PHA-3176); without a registration this reports the call as
+   * unsupported rather than leaving the provider waiting on a result that
+   * never arrives.
    */
   private async handleToolCall(
     event: RealtimeVoiceToolCallEvent,
