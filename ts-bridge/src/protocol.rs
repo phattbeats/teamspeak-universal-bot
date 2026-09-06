@@ -111,6 +111,11 @@ pub struct StateHeader {
     pub channel_id: u64,
     #[serde(rename = "channelName")]
     pub channel_name: String,
+    /// Our own runtime `ClientId` in the channel, absent while disconnected.
+    /// The roster carries every client including us; this is how a consumer
+    /// tells itself apart from the humans.
+    #[serde(rename = "ownClientId", skip_serializing_if = "Option::is_none")]
+    pub own_client_id: Option<u16>,
 }
 
 // ---------------------------------------------------------------------------

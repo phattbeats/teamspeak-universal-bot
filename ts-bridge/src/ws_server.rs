@@ -210,9 +210,14 @@ fn encode_event(ev: &BridgeEvent) -> Vec<u8> {
             },
             &[],
         ),
-        BridgeEvent::State { connected, channel_id, channel_name } => encode_frame(
+        BridgeEvent::State { connected, channel_id, channel_name, own_client_id } => encode_frame(
             TYPE_STATE,
-            &StateHeader { connected: *connected, channel_id: *channel_id, channel_name: channel_name.clone() },
+            &StateHeader {
+                connected: *connected,
+                channel_id: *channel_id,
+                channel_name: channel_name.clone(),
+                own_client_id: *own_client_id,
+            },
             &[],
         ),
     }
@@ -231,12 +236,16 @@ mod tests {
             connected: true,
             channel_id: 7,
             channel_name: "General Shit".into(),
-            roster: vec![RosterEntry {
-                client_id: 42,
-                nickname: "brandon".into(),
-                muted: false,
-                away: false,
-            }],
+            own_client_id: Some(11),
+            roster: vec![
+                RosterEntry { client_id: 11, nickname: "Sexton".into(), muted: false, away: false },
+                RosterEntry {
+                    client_id: 42,
+                    nickname: "brandon".into(),
+                    muted: false,
+                    away: false,
+                },
+            ],
         };
 
         let frames: Vec<Vec<u8>> = snap.events().iter().map(encode_event).collect();
@@ -247,11 +256,15 @@ mod tests {
         assert_eq!(state.header["connected"], serde_json::json!(true));
         assert_eq!(state.header["channelId"], serde_json::json!(7));
         assert_eq!(state.header["channelName"], serde_json::json!("General Shit"));
+        // The roster carries the bot too; this is how the client tells which
+        // entry is us, so the state frame that precedes it must say.
+        assert_eq!(state.header["ownClientId"], serde_json::json!(11));
 
         let roster = protocol::decode_frame(&frames[1]).expect("roster frame decodes");
         assert_eq!(roster.msg_type, TYPE_ROSTER);
-        assert_eq!(roster.header[0]["clientId"], serde_json::json!(42));
-        assert_eq!(roster.header[0]["nickname"], serde_json::json!("brandon"));
+        assert_eq!(roster.header[0]["clientId"], serde_json::json!(11));
+        assert_eq!(roster.header[1]["clientId"], serde_json::json!(42));
+        assert_eq!(roster.header[1]["nickname"], serde_json::json!("brandon"));
     }
 
     /// Before the first successful connect there is nothing to report, but the
@@ -263,6 +276,9 @@ mod tests {
         let state = protocol::decode_frame(&frames[0]).expect("state frame decodes");
         assert_eq!(state.msg_type, TYPE_STATE);
         assert_eq!(state.header["connected"], serde_json::json!(false));
+        // No connection, no client id: the key is absent rather than 0, which
+        // is a valid-looking id a consumer would happily filter on.
+        assert!(state.header.get("ownClientId").is_none());
 
         let roster = protocol::decode_frame(&frames[1]).expect("roster frame decodes");
         assert_eq!(roster.msg_type, TYPE_ROSTER);

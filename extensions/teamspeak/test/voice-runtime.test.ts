@@ -186,6 +186,43 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
     ]);
   });
 
+  // The bridge's roster is the channel's, bot included. Counting ourselves as a
+  // participant is what turns the wake gate on with one human in the room and
+  // barge-in off with it, so the exclusion is load-bearing for the whole
+  // "Brandon alone can just talk" behavior, not bookkeeping.
+  it("excludes the bridge's own client from sessions and the human count", () => {
+    harness.bridge.replay([
+      {
+        type: "state",
+        state: { connected: true, channelId: 1, channelName: "General Shit", ownClientId: 9 },
+      },
+      { type: "roster", roster: [rosterEntry(9, "Sexton"), rosterEntry(11, "brandon")] },
+    ]);
+
+    expect(harness.runtime.snapshot().humanParticipants).toBe(1);
+    expect(harness.runtime.snapshot().speakerSessions).toBe(1);
+    expect(harness.sessions.has(9)).toBe(false);
+  });
+
+  it("retires a session opened on itself once the state names its own client", () => {
+    // Roster before state: the bridge normally sends state first, but a
+    // reconnect mid-roster can invert them, and the wake gate must not stay
+    // wedged on for the life of the process when it does.
+    harness.bridge.deliver({
+      type: "roster",
+      roster: [rosterEntry(9, "Sexton"), rosterEntry(11, "brandon")],
+    });
+    expect(harness.runtime.snapshot().humanParticipants).toBe(2);
+
+    harness.bridge.deliver({
+      type: "state",
+      state: { connected: true, channelId: 1, channelName: "General Shit", ownClientId: 9 },
+    });
+
+    expect(harness.runtime.snapshot().humanParticipants).toBe(1);
+    expect(harness.sessions.get(9)?.closedWith).toEqual(["left-channel"]);
+  });
+
   it("tears down every session when the bridge drops, and rebuilds from the next roster", () => {
     harness.bridge.deliver({ type: "roster", roster: [rosterEntry(11, "brandon")] });
     expect(harness.runtime.snapshot().speakerSessions).toBe(1);

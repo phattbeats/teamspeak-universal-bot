@@ -72,6 +72,8 @@ export type TeamSpeakVoiceRuntimeParams = {
    */
   deliverSilentEvent?: ((text: string) => void) | undefined;
   providerId?: (() => string | undefined) | undefined;
+  /** Bridge socket up/down, so the gateway's account status is not a guess. */
+  onConnectionChange?: ((connected: boolean) => void) | undefined;
   log?: ((message: string) => void) | undefined;
 };
 
@@ -112,12 +114,17 @@ export class TeamSpeakVoiceRuntime {
       log: params.log,
       events: {
         onConnected: () => {
+          this.params.onConnectionChange?.(true);
           const channel = this.params.config.channel;
           if (channel) {
             this.bridge.join(channel);
           }
         },
         onDisconnected: (reason) => {
+          this.params.onConnectionChange?.(false);
+          // The bridge hands out a fresh clientId per TeamSpeak session, so the
+          // one we were filtering on is stale the moment the socket drops.
+          this.selfClientId = undefined;
           // The bridge owns the TeamSpeak connection. When it drops, every
           // clientId we were keyed on is void; rebuild from the next roster.
           this.sessions.closeAll(`bridge-disconnected:${reason}`);
@@ -129,6 +136,7 @@ export class TeamSpeakVoiceRuntime {
         },
         onState: (state) => {
           this.state = state;
+          this.applySelfClientId(state.ownClientId);
         },
         onRoster: (roster) => this.sessions.applyRoster(roster),
         onSpeakerStart: (clientId) => this.handleSpeakerStart(clientId),
@@ -174,6 +182,25 @@ export class TeamSpeakVoiceRuntime {
     this.sessions.close("runtime-stop");
     this.playback.close();
     this.bridge.close();
+  }
+
+  /**
+   * Learn which roster entry is us.
+   *
+   * The bridge publishes this with the state that established the connection,
+   * because TeamSpeak issues a fresh clientId per session. State normally
+   * precedes the roster it describes, but a bridge that reconnects while we are
+   * mid-roster can deliver it the other way round, so a late or changed id
+   * re-runs the last roster: that closes a session we opened on ourselves and
+   * drops us back out of the human count, instead of leaving the wake gate
+   * wedged on for the life of the process.
+   */
+  private applySelfClientId(ownClientId: TeamSpeakClientId | undefined): void {
+    if (ownClientId === undefined || ownClientId === this.selfClientId) {
+      return;
+    }
+    this.selfClientId = ownClientId;
+    this.sessions.applyRoster(this.sessions.rosterEntries());
   }
 
   private createMusicController(): MusicController | undefined {

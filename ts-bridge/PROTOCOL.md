@@ -23,7 +23,7 @@ Message types the bridge sends (`out`):
 | 0x03 | `speaker_stop` | `{"clientId":u16}`                                              | —                  |
 | 0x04 | `roster`       | `[{"clientId":u16,"nickname":string,"muted":bool,"away":bool}]` | —                  |
 | 0x05 | `text_message` | `{"clientId":u16,"nickname":string,"text":string,"target":"channel"\|"server"\|"client"\|"poke"}` | — |
-| 0x06 | `state`        | `{"connected":bool,"channelId":u64,"channelName":string}`       | —                  |
+| 0x06 | `state`        | `{"connected":bool,"channelId":u64,"channelName":string,"ownClientId":u16?}` | —      |
 
 Message types the bridge accepts (`in`):
 
@@ -45,6 +45,14 @@ Both are also broadcast whenever they change, so a client that connects while
 the bridge is still dialling the server gets `{"connected":false}` and an empty
 roster first, then the real ones once the channel is joined. Unknown inbound
 message types are logged and ignored, not fatal to the connection.
+
+`roster` is the channel's roster, and the bot is in it like any other client.
+`state.ownClientId` is which entry is the bot: a consumer that opens a session
+per speaker, or counts the humans in the room, must exclude it. It is absent
+while `connected` is false, and it changes on every reconnect — TeamSpeak hands
+out a fresh runtime `clientId` per session — so it is published with the state
+that established it rather than configured anywhere. `state` always precedes the
+`roster` it describes, both in the connect snapshot and on a reconnect.
 
 ## Mixer / ducking
 

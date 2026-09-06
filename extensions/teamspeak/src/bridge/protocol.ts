@@ -75,6 +75,16 @@ export type BridgeStateHeader = {
   connected: boolean;
   channelId: number;
   channelName: string;
+  /**
+   * The bridge's own clientId in the channel, absent while disconnected.
+   *
+   * The `roster` frame is the channel's roster, bot included, so without this
+   * the Sexton counts itself as a participant: the wake gate would engage with
+   * one human present, and a speaker session would open on our own audio.
+   * TeamSpeak issues a fresh clientId per session, so it arrives with the state
+   * rather than being configured.
+   */
+  ownClientId?: TeamSpeakClientId;
 };
 
 export class BridgeFrameError extends Error {}
@@ -204,9 +214,11 @@ export function readStateHeader(header: unknown): BridgeStateHeader | undefined 
   if (!isRecord(header) || typeof header.connected !== "boolean") {
     return undefined;
   }
+  const ownClientId = readClientId(header.ownClientId);
   return {
     connected: header.connected,
     channelId: typeof header.channelId === "number" ? header.channelId : 0,
     channelName: typeof header.channelName === "string" ? header.channelName : "",
+    ...(ownClientId === undefined ? {} : { ownClientId }),
   };
 }

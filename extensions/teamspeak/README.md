@@ -31,6 +31,13 @@ Sessions are keyed by `clientId` rather than nickname on purpose: TeamSpeak
 nicknames change mid-session and are not unique, so keying by them would merge
 two people into one provider connection. A rename relabels a live session.
 
+The bridge's `roster` is the channel's roster, and the bot is in it like anyone
+else. `state.ownClientId` says which entry is us; the runtime excludes it, so
+the Sexton neither opens a session on its own audio nor counts itself toward
+`humanParticipants`. That count is what drives the wake gate, so this needs a
+bridge new enough to publish the field (`ts-bridge` PROTOCOL.md 0x06). Against
+an older bridge the gate would engage with one human in the channel.
+
 ### Wake names and barge-in
 
 Both come from the shared SDK policy, so behavior tracks Discord:
@@ -70,6 +77,8 @@ voice block can be copied across unchanged.
           "speakerVoice": "cedar",
           "requireWakeName": null,           // unset = automatic
           "wakeNames": ["sexton"],
+          // the routed agent's profile files, folded into the realtime
+          // instructions; [] disables. Unset means all three.
           "bootstrapContextFiles": ["IDENTITY.md", "USER.md", "SOUL.md"],
           "bargeIn": true,
           "minBargeInAudioEndMs": 250,
@@ -262,3 +271,11 @@ Not covered here, and needing a real gateway: the live provider connection, and
 `src/channel.ts` / `src/accounts.ts` / `src/bridge/ws-socket.ts`, which import
 SDK subpaths that are not stubbed and are excluded from the standalone
 typecheck.
+
+`src/channel.ts` is the one to read before a deploy, because it is both
+unverifiable here and the file that decides whether anything runs at all: its
+`gateway.startAccount` is the gateway's only lifecycle seam for a channel
+account. It resolves the agent route, reads the bootstrap context files, starts
+one voice runtime, and stays pending until the account is aborted. The first
+thing `OPENCLAW_EXTENSIONS=teamspeak docker compose build` proves is that this
+file compiles against the real SDK.

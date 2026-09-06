@@ -68,6 +68,7 @@ pub struct Snapshot {
     pub connected: bool,
     pub channel_id: u64,
     pub channel_name: String,
+    pub own_client_id: Option<u16>,
     pub roster: Vec<RosterEntry>,
 }
 
@@ -80,6 +81,7 @@ impl Snapshot {
                 connected: self.connected,
                 channel_id: self.channel_id,
                 channel_name: self.channel_name.clone(),
+                own_client_id: self.own_client_id,
             },
             BridgeEvent::Roster(self.roster.clone()),
         ]
@@ -89,6 +91,7 @@ impl Snapshot {
         self.connected = false;
         self.channel_id = 0;
         self.channel_name.clear();
+        self.own_client_id = None;
         self.roster.clear();
     }
 }
@@ -100,7 +103,12 @@ pub enum BridgeEvent {
     SpeakerStop { client_id: u16 },
     Roster(Vec<RosterEntry>),
     TextMessage { client_id: u16, nickname: String, text: String, target: &'static str },
-    State { connected: bool, channel_id: u64, channel_name: String },
+    /// `own_client_id` is the bot's own runtime `ClientId` on this connection.
+    /// The roster is the channel's, bot included — a consumer that opens a
+    /// per-speaker session, or counts humans in the room, needs to know which
+    /// entry is us. TS assigns a fresh id per session, so this travels with the
+    /// state that established it rather than being configured anywhere.
+    State { connected: bool, channel_id: u64, channel_name: String, own_client_id: Option<u16> },
 }
 
 /// Export an identity in the standard TS3 `"<counter>V<base64key>"` form so
@@ -594,7 +602,7 @@ pub async fn run(
                         // after the reconnect is told we are still down.
                         last_channel_id = None;
                         last_roster_sig = None;
-                        let _ = event_tx.send(BridgeEvent::State { connected: false, channel_id: 0, channel_name: String::new() });
+                        let _ = event_tx.send(BridgeEvent::State { connected: false, channel_id: 0, channel_name: String::new(), own_client_id: None });
                     }
                     Some(Ok(_)) => {}
                     Some(Err(e)) => log::warn!("event stream error: {e}"),
@@ -613,7 +621,7 @@ pub async fn run(
     snapshot.lock().unwrap().set_disconnected();
 
     let _ = con.disconnect(DisconnectOptions::new());
-    let _ = event_tx.send(BridgeEvent::State { connected: false, channel_id: 0, channel_name: String::new() });
+    let _ = event_tx.send(BridgeEvent::State { connected: false, channel_id: 0, channel_name: String::new(), own_client_id: None });
     Ok(())
 }
 
@@ -633,6 +641,7 @@ fn emit_state_and_roster(
         .map(|c| c.name.clone())
         .unwrap_or_default();
 
+    let own_client_id = own.id.0;
     let roster = build_roster(state, channel_id);
     let sig = roster_signature(&roster);
 
@@ -644,12 +653,18 @@ fn emit_state_and_roster(
         snap.connected = true;
         snap.channel_id = channel_id.0;
         snap.channel_name = channel_name.clone();
+        snap.own_client_id = Some(own_client_id);
         snap.roster = roster.clone();
     }
 
     if *last_channel_id != Some(channel_id.0) {
         *last_channel_id = Some(channel_id.0);
-        let _ = event_tx.send(BridgeEvent::State { connected: true, channel_id: channel_id.0, channel_name: channel_name.clone() });
+        let _ = event_tx.send(BridgeEvent::State {
+            connected: true,
+            channel_id: channel_id.0,
+            channel_name: channel_name.clone(),
+            own_client_id: Some(own_client_id),
+        });
     }
 
     if *last_roster_sig != Some(sig) {
