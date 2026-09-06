@@ -1,0 +1,16 @@
+{
+  "id": "teamspeak",
+  "name": "TeamSpeak",
+  "description": "OpenClaw TeamSpeak channel plugin: realtime voice in a TeamSpeak channel over the plnt-ts-bridge sidecar.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "teamspeak"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

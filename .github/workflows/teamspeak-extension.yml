@@ -1,0 +1,43 @@
+name: teamspeak-extension
+
+# PHA-3175. Runs the OpenClaw TeamSpeak plugin's standalone suite: the mock
+# bridge replays recorded frames, so no TeamSpeak server is needed. The live
+# provider path and the SDK-dependent files (src/channel.ts, src/accounts.ts,
+# src/bridge/ws-socket.ts) are excluded here and need a real gateway.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "extensions/teamspeak/**"
+      - ".github/workflows/teamspeak-extension.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "extensions/teamspeak/**"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: extensions/teamspeak
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install
+        run: npm install --include=dev --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

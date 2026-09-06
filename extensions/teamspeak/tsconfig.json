@@ -1,0 +1,30 @@
+{
+  "//": "Standalone config for this repo. When this directory is dropped into an OpenClaw checkout as extensions/teamspeak, replace this whole file with { \"extends\": \"../tsconfig.package-boundary.base.json\" } — see README.md, 'Using it in an OpenClaw checkout'.",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "openclaw/plugin-sdk/realtime-voice": ["./test/sdk-stubs/realtime-voice.ts"],
+      "openclaw/plugin-sdk/config-contracts": ["./test/sdk-stubs/config-contracts.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "*.ts"],
+  "exclude": [
+    "node_modules",
+    "index.ts",
+    "channel-plugin-api.ts",
+    "src/channel.ts",
+    "src/accounts.ts",
+    "src/bridge/ws-socket.ts"
+  ]
+}
