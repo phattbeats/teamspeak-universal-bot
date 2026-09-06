@@ -215,6 +215,11 @@ images with selected plugins"):
 OPENCLAW_EXTENSIONS=teamspeak docker compose build
 ```
 
+For PHATT-RAID specifically — where Unraid has no `docker compose`, the Gateway
+runs a prebuilt release image, and the container is owned by an Unraid template
+— see [`INSTALL-PHATT-RAID.md`](INSTALL-PHATT-RAID.md) and the build script in
+[`install/`](install/build-openclaw-teamspeak.sh).
+
 ### Using it in an OpenClaw checkout
 
 Two files are shaped for this standalone repo and should be adjusted on the way
