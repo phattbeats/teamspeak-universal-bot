@@ -68,6 +68,13 @@ impl Mixer {
         self.human_speaking = speaking;
     }
 
+    /// Queued voice samples, queued music samples, current duck envelope.
+    /// Telemetry only — the send tick logs this so a silent channel can be
+    /// diagnosed without a debugger (PHA-3216).
+    pub fn lanes(&self) -> (usize, usize, f32) {
+        (self.voice.len(), self.music.len(), self.duck_current)
+    }
+
     /// Pop one 20 ms frame, advance the duck envelope, and mix.
     pub fn next_frame(&mut self) -> MixedFrame {
         let voice_has_audio = !self.voice.is_empty();

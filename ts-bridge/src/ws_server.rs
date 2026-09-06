@@ -62,6 +62,7 @@ async fn handle_conn(
         }
     });
 
+    let mut audio_frames: u64 = 0;
     while let Some(msg) = source.next().await {
         let msg = msg?;
         let bytes = match msg {
@@ -76,6 +77,18 @@ async fn handle_conn(
                 continue;
             }
         };
+        // 1 Hz inbound telemetry, the counterpart to the send tick's: says
+        // whether audio is arriving from the client at all (PHA-3216).
+        if matches!(frame.msg_type, TYPE_VOICE_AUDIO | TYPE_MUSIC_AUDIO) {
+            audio_frames += 1;
+            if audio_frames % 50 == 0 {
+                log::debug!(
+                    "inbound audio: {audio_frames} frames so far, last type=0x{:02x} payload={} bytes",
+                    frame.msg_type,
+                    frame.payload.len()
+                );
+            }
+        }
         dispatch(frame, &mixer, &cmd_tx, &tts_webhook_url);
     }
 

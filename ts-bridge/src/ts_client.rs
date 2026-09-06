@@ -28,6 +28,22 @@ use crate::config::Config;
 use crate::mixer::{Mixer, FRAME_SAMPLES};
 use crate::protocol::RosterEntry;
 
+/// How long to wait for the server to answer our `channellist` request before
+/// giving up on resolving the configured channel and staying put.
+const CHANNEL_TREE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// tsclientlib decodes every incoming stream to interleaved **stereo**
+/// (`audio::CHANNEL_NUM`), and `AudioQueue::get_next_data`/`fill_buffer` take a
+/// length in interleaved values, not per-channel samples. So one 20 ms frame is
+/// `FRAME_SAMPLES * TS_DECODE_CHANNELS` values, which we downmix to the mono
+/// 48 kHz the WebSocket protocol promises.
+const TS_DECODE_CHANNELS: usize = 2;
+
+/// How many consecutive all-zero 20 ms frames we keep transmitting before
+/// emitting the stop-talking marker. 10 frames = 200 ms, enough to ride over
+/// the gaps between words without holding the channel open indefinitely.
+const SILENCE_HANGOVER_FRAMES: u32 = 10;
+
 pub enum BridgeCommand {
     Join { channel: String },
     Mute { muted: bool },
@@ -149,14 +165,27 @@ pub async fn run(
         state.server.set_subscribed(true).send(&mut con).map_err(|e| anyhow::anyhow!("channelsubscribeall: {e}"))?;
     }
 
-    // Give the server a moment to answer the channel list before we try to join.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Join the configured channel, if any.
+    // Join the configured channel, if any. Wait for the `channellist` answer
+    // by pumping the event stream, not by sleeping: tsclientlib only advances
+    // the connection — and applies book updates — while its event stream is
+    // polled, so a bare sleep leaves `state.channels` empty and the channel
+    // unresolvable no matter how long we wait (PHA-3216; same bug the bot hit
+    // in caa58c0).
     if !config.channel.is_empty() && config.channel != "0" {
-        let target = {
-            let state = con.get_state().map_err(|e| anyhow::anyhow!("get_state: {e}"))?;
-            resolve_channel_id(state, &config.channel)
+        let deadline = tokio::time::Instant::now() + CHANNEL_TREE_TIMEOUT;
+        let target = loop {
+            {
+                let state = con.get_state().map_err(|e| anyhow::anyhow!("get_state: {e}"))?;
+                if let Some(id) = resolve_channel_id(state, &config.channel) {
+                    break Some(id);
+                }
+            }
+            match tokio::time::timeout_at(deadline, con.events().next()).await {
+                Ok(Some(Ok(_))) => {}
+                Ok(Some(Err(e))) => anyhow::bail!("waiting for channel list: {e}"),
+                Ok(None) => anyhow::bail!("stream ended while waiting for channel list"),
+                Err(_) => break None,
+            }
         };
         match target {
             Some(channel_id) => {
@@ -172,7 +201,11 @@ pub async fn run(
                         .map_err(|e| anyhow::anyhow!("join channel: {e}"))?;
                 }
             }
-            None => log::warn!("configured channel '{}' not found in channel list", config.channel),
+            None => log::warn!(
+                "configured channel '{}' not found in channel list after {}s",
+                config.channel,
+                CHANNEL_TREE_TIMEOUT.as_secs()
+            ),
         }
     }
 
@@ -190,6 +223,21 @@ pub async fn run(
     let mut last_roster_sig: Option<u64> = None;
     let mut last_channel_id: Option<u64> = None;
     let mut muted = false;
+    let mut tick_count: u64 = 0;
+    // Whether we are mid-transmission, so we know when to emit the
+    // stop-talking marker. `last_codec` tags that marker with the codec the
+    // stream was actually using.
+    let mut sending = false;
+    let mut last_codec = CodecType::OpusVoice;
+    let mut silent_frames: u32 = 0;
+    // Receive-path telemetry, logged at 1 Hz next to the send tick.
+    let mut dropped_packets: u64 = 0;
+    let mut recv_frames: u64 = 0;
+    let mut recv_peak: u16 = 0;
+    // Scratch mix buffer for `fill_buffer_with_proc`: one 20 ms interleaved
+    // stereo frame. We only want the per-speaker tap, not the mix, but the call
+    // needs a correctly sized buffer to know how much to pull.
+    let mut mix = vec![0f32; FRAME_SAMPLES * TS_DECODE_CHANNELS];
 
     let mut tick = tokio::time::interval(Duration::from_millis(20));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -269,10 +317,155 @@ pub async fn run(
             }
 
             Wake::Tick => {
+                // --- receive: pull exactly one 20 ms frame per speaker -----
+                //
+                // `fill_buffer_with_proc` is the upstream-blessed per-speaker
+                // tap: it hands each queue's own samples to the closure before
+                // mixing them into `mix`, and returns the talkers that ended —
+                // either end-of-stream or too many consecutive packet losses,
+                // which is how a dead queue gets retired instead of emitting
+                // concealment silence forever.
+                mix.fill(0.0);
+                let mut drained: Vec<(u16, Vec<f32>)> = Vec::new();
+                let ended = audio.fill_buffer_with_proc(&mut mix, |id: &ClientId, samples: &[f32]| {
+                    if !samples.is_empty() {
+                        drained.push((id.0, samples.to_vec()));
+                    }
+                });
+
+                if !drained.is_empty() {
+                    // Name each queue from its own client: draining is
+                    // per-speaker, so tagging frames with whoever's packet
+                    // happened to wake us up would mislabel audio as soon as
+                    // two people talk at once.
+                    let nicknames: HashMap<u16, String> = {
+                        let state = con.get_state().ok();
+                        drained
+                            .iter()
+                            .map(|(cid, _)| {
+                                let name = state
+                                    .and_then(|s| s.clients.get(&ClientId(*cid)).map(|c| c.name.clone()))
+                                    .unwrap_or_else(|| format!("client-{cid}"));
+                                (*cid, name)
+                            })
+                            .collect()
+                    };
+
+                    for (cid, samples) in drained {
+                        let pcm: Vec<i16> = samples
+                            .chunks_exact(TS_DECODE_CHANNELS)
+                            .map(|f| {
+                                let mono = 0.5 * (f[0] + f[1]);
+                                (mono.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+                            })
+                            .collect();
+                        recv_peak = recv_peak.max(pcm.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0));
+                        recv_frames = recv_frames.wrapping_add(1);
+                        let seq = speaker_seq.entry(cid).or_insert(0);
+                        *seq += 1;
+                        let _ = event_tx.send(BridgeEvent::SpeakerAudio {
+                            client_id: cid,
+                            nickname: nicknames.get(&cid).cloned().unwrap_or_else(|| format!("client-{cid}")),
+                            seq: *seq,
+                            pcm,
+                        });
+                    }
+                }
+
+                for id in ended {
+                    if known_talkers.remove(&id.0) {
+                        let _ = event_tx.send(BridgeEvent::SpeakerStop { client_id: id.0 });
+                    }
+                }
+                if known_talkers.is_empty() {
+                    mixer.lock().unwrap().set_human_speaking(false);
+                }
+
+                // --- send ------------------------------------------------
                 if muted {
+                    // Going muted mid-utterance still owes the channel a
+                    // stop-talking marker, or we leave every listener holding
+                    // an open stream from us.
+                    if sending {
+                        let stop = OutAudio::new(&AudioData::C2S { id: 0, codec: last_codec, data: &[] });
+                        if let Err(e) = con.send_audio(stop) {
+                            log::warn!("send stop-talking failed: {e}");
+                        }
+                        sending = false;
+                    }
                     continue;
                 }
-                let frame = { mixer.lock().unwrap().next_frame() };
+                let (frame, lanes) = {
+                    let mut m = mixer.lock().unwrap();
+                    let frame = m.next_frame();
+                    (frame, m.lanes())
+                };
+                let peak = frame.samples.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+
+                // 1 Hz send-path telemetry: enough to tell "nothing is
+                // reaching the mixer" from "the mixer is full but the
+                // channel is silent" without attaching a debugger. Logged
+                // before the send decision so the tick keeps reporting while
+                // we are deliberately transmitting nothing.
+                tick_count = tick_count.wrapping_add(1);
+                if tick_count % 50 == 0 {
+                    log::debug!(
+                        "send tick: voice_queued={} music_queued={} duck={:.2} music_active={} peak={} sending={} | recv: talkers={} frames/s={} peak={} dropped={}",
+                        lanes.0,
+                        lanes.1,
+                        lanes.2,
+                        frame.music_active,
+                        peak,
+                        sending,
+                        known_talkers.len(),
+                        recv_frames,
+                        recv_peak,
+                        dropped_packets
+                    );
+                    recv_frames = 0;
+                    recv_peak = 0;
+                }
+
+                // Stop transmitting when we have nothing to say, instead of
+                // streaming Opus-encoded silence forever (PHA-3216).
+                //
+                // A bridge that never stops sending is "talking" as far as
+                // every other client is concerned. Between two bridges that is
+                // not just wasted bandwidth: each one's `known_talkers` never
+                // empties, so `human_speaking` is pinned true and the music
+                // lane sits at the duck floor permanently — the un-ducked
+                // window never comes back and the ducking is unmeasurable.
+                // A zero-length payload is the protocol's stop-talking marker.
+                //
+                // The hangover keeps the stream open across short gaps. Without
+                // it, the pauses between words in a TTS utterance — or a quiet
+                // passage in music — would each close and reopen the stream,
+                // spamming every listener with speaker_start/speaker_stop and
+                // making them re-open a jitter buffer mid-sentence.
+                if peak > 0 {
+                    silent_frames = 0;
+                } else {
+                    silent_frames = silent_frames.saturating_add(1);
+                    // The hangover only holds an *already open* stream open. If
+                    // we are not mid-utterance there is nothing to ride over, and
+                    // sending silence here would open a stream just to close it
+                    // 200 ms later — which is what made an idle bridge emit a
+                    // spurious speaker_start/speaker_stop pair on connect.
+                    if !sending {
+                        continue;
+                    }
+                }
+                if peak == 0 && silent_frames >= SILENCE_HANGOVER_FRAMES {
+                    if sending {
+                        let stop = OutAudio::new(&AudioData::C2S { id: 0, codec: last_codec, data: &[] });
+                        if let Err(e) = con.send_audio(stop) {
+                            log::warn!("send stop-talking failed: {e}");
+                        }
+                        sending = false;
+                    }
+                    continue;
+                }
+
                 let encoder = if frame.music_active { &mut music_encoder } else { &mut voice_encoder };
                 let codec = if frame.music_active { CodecType::OpusMusic } else { CodecType::OpusVoice };
                 let mut out_buf = [0u8; 1275];
@@ -282,6 +475,8 @@ pub async fn run(
                         if let Err(e) = con.send_audio(pkt) {
                             log::warn!("send_audio failed: {e}");
                         }
+                        sending = true;
+                        last_codec = codec;
                     }
                     Err(e) => log::warn!("opus encode failed: {e:?}"),
                 }
@@ -296,61 +491,33 @@ pub async fn run(
                         };
                         let from_id = ClientId(from_raw);
 
-                        if audio.handle_packet(from_id, audio_pkt).is_ok() && known_talkers.insert(from_raw) {
-                            let _ = event_tx.send(BridgeEvent::SpeakerStart { client_id: from_raw });
-                            { mixer.lock().unwrap().set_human_speaking(true); }
-                        }
-
-                        let queue_ids: Vec<u16> = audio.get_queues().keys().map(|k| k.0).collect();
-                        // Name each queue from its own client. Draining is
-                        // per-speaker, so tagging every frame with whoever's
-                        // packet happened to wake us up mislabels audio as
-                        // soon as two people talk at once.
-                        let nicknames: HashMap<u16, String> = {
-                            let state = con.get_state().ok();
-                            queue_ids
-                                .iter()
-                                .map(|cid| {
-                                    let name = state
-                                        .and_then(|s| s.clients.get(&ClientId(*cid)).map(|c| c.name.clone()))
-                                        .unwrap_or_else(|| format!("client-{cid}"));
-                                    (*cid, name)
-                                })
-                                .collect()
-                        };
-
-                        for cid in queue_ids {
-                            let id = ClientId(cid);
-                            let ended = {
-                                let q = audio.get_mut_queues().get_mut(&id).unwrap();
-                                match q.get_next_data(FRAME_SAMPLES) {
-                                    Ok((samples, is_end)) => {
-                                        if !samples.is_empty() {
-                                            let pcm: Vec<i16> = samples
-                                                .iter()
-                                                .map(|s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
-                                                .collect();
-                                            let seq = speaker_seq.entry(cid).or_insert(0);
-                                            *seq += 1;
-                                            let _ = event_tx.send(BridgeEvent::SpeakerAudio {
-                                                client_id: cid,
-                                                nickname: nicknames
-                                                    .get(&cid)
-                                                    .cloned()
-                                                    .unwrap_or_else(|| format!("client-{cid}")),
-                                                seq: *seq,
-                                                pcm,
-                                            });
-                                        }
-                                        is_end
-                                    }
-                                    Err(_) => continue,
+                        // Queue only. Draining happens on the 20 ms tick, not
+                        // here: tsclientlib's jitter buffer measures time by
+                        // how many samples it has handed out, so it has to be
+                        // pulled on a steady clock. Draining once per arriving
+                        // packet — and asking for FRAME_SAMPLES *interleaved*
+                        // values, which is 10 ms of stereo, not 20 ms of mono —
+                        // consumed half of what arrived, so the queue backed up
+                        // to `QueueFull`, rejected every later packet, and then
+                        // handed out packet-loss concealment forever. That is
+                        // the exact digital silence PHA-3216 measured while
+                        // Brandon could hear the tone in the channel.
+                        match audio.handle_packet(from_id, audio_pkt) {
+                            Ok(_) => {
+                                if known_talkers.insert(from_raw) {
+                                    let _ = event_tx.send(BridgeEvent::SpeakerStart { client_id: from_raw });
+                                    mixer.lock().unwrap().set_human_speaking(true);
                                 }
-                            };
-                            if ended && known_talkers.remove(&cid) {
-                                let _ = event_tx.send(BridgeEvent::SpeakerStop { client_id: cid });
-                                if known_talkers.is_empty() {
-                                    mixer.lock().unwrap().set_human_speaking(false);
+                            }
+                            Err(e) => {
+                                // Never silent: a queue that rejects packets is
+                                // indistinguishable, on the wire, from a silent
+                                // channel.
+                                dropped_packets = dropped_packets.wrapping_add(1);
+                                if dropped_packets % 50 == 1 {
+                                    log::warn!(
+                                        "dropped inbound audio from client {from_raw}: {e} ({dropped_packets} dropped so far)"
+                                    );
                                 }
                             }
                         }
