@@ -38,17 +38,28 @@ git -C "$SRC_ROOT/openclaw" fetch --filter=blob:none origin "$OPENCLAW_REF" \
   || git -C "$SRC_ROOT/openclaw" fetch origin
 git -C "$SRC_ROOT/openclaw" checkout --force "$OPENCLAW_REF"
 
-log "plnt-sexton @ ${SEXTON_REF}"
-if [ ! -d "$SRC_ROOT/plnt-sexton/.git" ]; then
-  git clone https://github.com/phattbeats/plnt-sexton.git "$SRC_ROOT/plnt-sexton"
+# plnt-sexton is a private repo and the RAID has no GitHub credential, so the
+# usual path is to stage the plugin directory onto the box first:
+#   tar -C plnt-sexton/extensions -cz teamspeak | ssh root@10.0.0.100 \
+#     'mkdir -p /mnt/cache/appdata/openclaw/src/staged && tar -C /mnt/cache/appdata/openclaw/src/staged -xz'
+#   PLUGIN_SRC=/mnt/cache/appdata/openclaw/src/staged/teamspeak ./build-openclaw-teamspeak.sh
+# Set PLUGIN_SRC to skip the clone. With a credential on the box, leave it unset.
+PLUGIN_SRC=${PLUGIN_SRC:-}
+if [ -z "$PLUGIN_SRC" ]; then
+  log "plnt-sexton @ ${SEXTON_REF}"
+  if [ ! -d "$SRC_ROOT/plnt-sexton/.git" ]; then
+    git clone https://github.com/phattbeats/plnt-sexton.git "$SRC_ROOT/plnt-sexton"
+  fi
+  git -C "$SRC_ROOT/plnt-sexton" fetch origin
+  git -C "$SRC_ROOT/plnt-sexton" checkout --force "origin/${SEXTON_REF}"
+  PLUGIN_SRC="$SRC_ROOT/plnt-sexton/extensions/teamspeak"
 fi
-git -C "$SRC_ROOT/plnt-sexton" fetch origin
-git -C "$SRC_ROOT/plnt-sexton" checkout --force "origin/${SEXTON_REF}"
+[ -f "$PLUGIN_SRC/openclaw.plugin.json" ] || { echo "no plugin at $PLUGIN_SRC" >&2; exit 1; }
 
-log "copy the plugin into the checkout"
+log "copy the plugin into the checkout (from $PLUGIN_SRC)"
 dest="$SRC_ROOT/openclaw/extensions/teamspeak"
 rm -rf "$dest"
-cp -a "$SRC_ROOT/plnt-sexton/extensions/teamspeak" "$dest"
+cp -a "$PLUGIN_SRC" "$dest"
 # Standalone-only scaffolding. Inside a checkout the real SDK resolves, the
 # repo's own vitest runs the tests, and node_modules/ would only bloat the
 # build context (README, "Using it in an OpenClaw checkout").

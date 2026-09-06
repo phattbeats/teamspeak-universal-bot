@@ -39,13 +39,22 @@ them.
 
 ## 1. Build the image (on the RAID)
 
+`plnt-sexton` is private and the RAID has no GitHub credential (OpenClaw's own
+repo is public and clones fine), so stage the plugin directory onto the box and
+point the script at it:
+
 ```bash
-ssh root@10.0.0.100
-bash <(curl -fsSL https://raw.githubusercontent.com/phattbeats/plnt-sexton/main/extensions/teamspeak/install/build-openclaw-teamspeak.sh)
+cd plnt-sexton/extensions
+tar -cz teamspeak | ssh root@10.0.0.100 \
+  'mkdir -p /mnt/cache/appdata/openclaw/src/staged && tar -C /mnt/cache/appdata/openclaw/src/staged -xz'
+scp teamspeak/install/build-openclaw-teamspeak.sh root@10.0.0.100:/root/
+ssh root@10.0.0.100 \
+  'PLUGIN_SRC=/mnt/cache/appdata/openclaw/src/staged/teamspeak bash /root/build-openclaw-teamspeak.sh'
 ```
 
-or clone and run `extensions/teamspeak/install/build-openclaw-teamspeak.sh`. It
-clones OpenClaw at the commit the plugin was written against, copies the plugin
+(With a GitHub credential on the box, drop `PLUGIN_SRC` and the script clones
+plnt-sexton itself.) It clones OpenClaw at the commit the plugin was written
+against, copies the plugin
 in with the two standalone-only adjustments the README lists, builds
 `phattbeats/openclaw-sexton:teamspeak`, and then checks
 `/app/dist/extensions/teamspeak` exists *in the built image* rather than trusting
