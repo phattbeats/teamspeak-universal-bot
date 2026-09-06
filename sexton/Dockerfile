@@ -19,7 +19,5 @@ COPY --from=builder /build/target/release/sexton /usr/local/bin/sexton
 COPY --from=builder /build/target/release/send-test /usr/local/bin/send-test
 COPY --from=builder /build/target/release/probe-channels /usr/local/bin/probe-channels
 COPY avatar/ /usr/local/share/sexton-avatar/
-COPY on-connected.sh /usr/local/bin/on-connected
-RUN chmod +x /usr/local/bin/on-connected
 ENV RUST_LOG=info
 ENTRYPOINT ["/usr/local/bin/sexton"]

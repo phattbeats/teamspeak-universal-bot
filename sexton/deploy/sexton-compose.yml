@@ -25,7 +25,6 @@ services:
       - RUST_LOG=info
     volumes:
       - /mnt/user/scratch/sexton/sexton-id.txt:/run/secrets/sexton-identity:ro
-      - /mnt/user/scratch/sexton/secrets/paperclip-bearer:/run/secrets/paperclip-bearer:ro
       - /mnt/user/appdata/sexton/logs:/var/sexton-logs
     # The image's ENTRYPOINT is the bot itself; override it so the identity can
     # be read out of the mounted secret at start.
@@ -37,9 +36,12 @@ services:
             -i "$$(cat /run/secrets/sexton-identity)"
             -A /usr/local/share/sexton-avatar/brandon.png
             -l /var/sexton-logs
-            --on-connected /usr/local/bin/on-connected
+    # The runtime image is debian-slim: it has no `pgrep` (and no procps), so
+    # the old `pgrep -f` check exited 127 every time and the container sat
+    # permanently unhealthy (PHA-3217). Read PID 1's argv instead — `-a` because
+    # /proc/1/cmdline is NUL-separated and grep otherwise calls it binary.
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "/usr/local/bin/sexton"]
+      test: ["CMD", "grep", "-qa", "/usr/local/bin/sexton", "/proc/1/cmdline"]
       interval: 30s
       timeout: 5s
       retries: 3

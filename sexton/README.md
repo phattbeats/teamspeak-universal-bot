@@ -13,6 +13,12 @@ fact in three places.
    `HH:MM  nickname: message`, with the header `— last messages, kept by the Sexton —` on top.
    The message window is chosen dynamically to fit a **7500-byte** budget (the server's hard cap
    for `TS3_MAX_SIZE_CHANNEL_DESCRIPTION` is 8192).
+   The message ring is in memory only, so on connect it is **rehydrated from the disk log below**
+   (yesterday's file then today's, newest lines that fit the same 7500-byte budget) before the
+   first `channeledit`. Without that a container restart overwrote a populated description with a
+   bare header. The disk format *is* the wire format, so this is a parse of
+   `HH:MM  nickname: message`, not a second serialisation. It is fail-open: a missing, unreadable
+   or malformed log is skipped and never stops the bot connecting.
 2. **Catch-up PM.** When a client arrives in the watched channel — either by connecting straight
    into it or by moving in from elsewhere — it gets a private message with the last 15 messages
    (or a "nothing logged yet" note). Rate-limited to one PM per client per 10 minutes so
@@ -110,4 +116,23 @@ sexton -a teamspeak6-server -p 9987 -n Sexton -c "General Shit" \
        -l /var/sexton-logs
 ```
 
-Tracking: PHA-3099 (epic), PHA-3173 (this version), PHA-3107 (verification recipe).
+PHATT-RAID has no `docker compose` plugin, so production runs the equivalent `docker run` in
+`deploy/deploy.sh` (copied to `/mnt/user/appdata/sexton/deploy.sh` on the box). Keep it and the
+compose file in step.
+
+## Liveness
+
+The container healthcheck greps PID 1's argv (`grep -qa /usr/local/bin/sexton /proc/1/cmdline`).
+The runtime image is `debian-slim` and ships no `pgrep`, so the previous `pgrep -f` check exited
+127 on every interval and the container reported `unhealthy` continuously (PHA-3217).
+
+There is no longer an `--on-connected` hook wired up in production. The flag still exists and runs
+any script you point it at, but the script that used to be baked into the image posted a "Sexton
+back online" comment to Paperclip with a bearer mounted from the host, and that token was revoked —
+it 403'd silently on every connect. A liveness signal that fails silently is worse than none, and
+re-minting the key needs board-level access the bot does not have, so the hook, the script and the
+mounted secret were all removed. Restart evidence is the healthcheck plus `docker logs sexton`
+(`connected; channel resolved`, `rehydrated description history from disk`).
+
+Tracking: PHA-3099 (epic), PHA-3173 (this version), PHA-3107 (verification recipe),
+PHA-3217 (description rehydration, hook removal).
