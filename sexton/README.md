@@ -13,9 +13,11 @@ fact in three places.
    `HH:MM  nickname: message`, with the header `— last messages, kept by the Sexton —` on top.
    The message window is chosen dynamically to fit a **7500-byte** budget (the server's hard cap
    for `TS3_MAX_SIZE_CHANNEL_DESCRIPTION` is 8192).
-2. **Catch-up PM.** When a client moves into the watched channel, it gets a private message with
-   the last 15 messages (or a "you are caught up" note). Rate-limited to one PM per client per
-   10 minutes so channel-hopping does not spam.
+2. **Catch-up PM.** When a client arrives in the watched channel — either by connecting straight
+   into it or by moving in from elsewhere — it gets a private message with the last 15 messages
+   (or a "nothing logged yet" note). Rate-limited to one PM per client per 10 minutes so
+   channel-hopping does not spam, and suppressed for the first five seconds after the bot itself
+   connects so a restart does not PM everyone already in the room.
 3. **Full log on disk.** Every message is appended to `<log-dir>/<channel-name>/YYYY-MM-DD.md`
    as markdown, one line per message, same format.
 
@@ -59,13 +61,38 @@ subscribe to channels unprompted, so the bot explicitly sends `channellist`
 the first book-events batch. Without those the channel tree stays empty and no text or move
 events arrive.
 
+**`tsclientlib` only advances the connection while its event stream is being polled.** Sending a
+request and then `sleep`ing for the reply does not work — nothing is received, nothing is applied
+to the book, and the reply never arrives no matter how long you wait. Every wait in this crate is
+a poll loop against a deadline (`pump`, `wait_for_channel`) for that reason. This is what made the
+bot report `channel "General Shit" not found in channel tree` while the channel plainly existed.
+
+The client-side book's `Channel` has no `description` field; the description arrives in
+`optional_data` only after an explicit `channelgetdescription`
+(`OutChannelDescriptionRequestMessage`). `send-test` uses that to read back what the server
+actually stored.
+
 ## Binaries
 
 | binary | purpose |
 | --- | --- |
 | `sexton` | the bot itself |
 | `probe-channels` | connect, dump the channel tree, exit — used to confirm reachability and channel names |
-| `send-test` | connect as a second identity, join a channel, send N messages — used for the verification recipe |
+| `send-test` | connect as another identity and run a scripted sequence against a channel — used for the verification recipe |
+
+`send-test` takes `--script`, a comma-separated list of steps, so a run is deterministic:
+
+| step | effect |
+| --- | --- |
+| `say:<text>` | send `<text>` to the watched channel |
+| `mute` / `unmute` | set/clear `client_input_muted` |
+| `hop` | create (if needed) and join a temporary side channel |
+| `back` | move back into the watched channel |
+| `wait:<ms>` | pump the connection for `<ms>` milliseconds |
+
+It prints every private message it receives and, at the end, the channel description as the
+server returns it. `-i` reuses an identity so an account can reconnect as itself. The PHA-3107
+recipe is two concurrent invocations — see `deploy/verify.sh`.
 
 ## Running
 

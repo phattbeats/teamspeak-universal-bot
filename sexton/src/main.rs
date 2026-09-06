@@ -29,7 +29,7 @@ use tsclientlib::messages::c2s::{
 };
 use tsclientlib::{
     events::{Event, PropertyId},
-    ChannelId, ClientId, Connection, Identity, MessageTarget, StreamItem,
+    ChannelId, ClientId, Connection, Identity, MessageHandle, MessageTarget, StreamItem,
 };
 
 /// Channel description hard cap is 8192 bytes (`TS3_MAX_SIZE_CHANNEL_DESCRIPTION`).
@@ -130,6 +130,11 @@ struct ChannelState {
     preexisting: HashSet<ClientId>,
     /// Catch-up PMs are suppressed until this instant (see STARTUP_GRACE).
     quiet_until: tokio::time::Instant,
+    /// Commands we have sent and not yet seen the server's verdict on, keyed
+    /// by return code. `send()` only queues a command — it says nothing about
+    /// whether the server accepted it — so every command that matters is sent
+    /// with a return code and reconciled here.
+    pending_cmds: HashMap<u16, String>,
 }
 
 impl ChannelState {
@@ -147,6 +152,7 @@ impl ChannelState {
             log_dir,
             preexisting,
             quiet_until: tokio::time::Instant::now() + STARTUP_GRACE,
+            pending_cmds: HashMap::new(),
         }
     }
 
@@ -406,8 +412,11 @@ async fn run_once(args: &Args, address: &str, first_connect: bool) -> Result<()>
     if first_connect || true {
         // Always push an initial (possibly empty) description on connect so
         // the channel reflects the Sexton's format immediately.
-        if let Err(e) = set_description(&mut con, channel_id, &state.render_description()) {
-            warn!(error = %e, "initial description push failed");
+        match set_description(&mut con, channel_id, &state.render_description()) {
+            Ok(handle) => {
+                state.pending_cmds.insert(handle.0, "initial channeledit description".to_string());
+            }
+            Err(e) => warn!(error = %e, "initial description push failed"),
         }
     }
 
@@ -441,12 +450,34 @@ async fn run_once(args: &Args, address: &str, first_connect: bool) -> Result<()>
                             hasher.update(&bytes);
                             let hash = hex_lower(&hasher.finalize());
                             match set_avatar_hash(&mut con, &hash) {
-                                Ok(()) => info!(hash = %hash, "avatar hash set"),
+                                Ok(handle) => {
+                                    info!(hash = %hash, "avatar hash sent");
+                                    state
+                                        .pending_cmds
+                                        .insert(handle.0, format!("clientupdate avatar hash {hash}"));
+                                }
                                 Err(e) => error!(error = %e, "set_avatar_hash failed"),
                             }
                         }
                     } else {
                         pending_avatar = Some((pending_handle, bytes));
+                    }
+                }
+            }
+            // The server's verdict on a command we sent with a return code.
+            // Without this a rejected channeledit looks exactly like an
+            // accepted one — which is how a missing permission stayed
+            // invisible while the bot logged "description updated".
+            StreamItem::MessageResult(handle, res) => {
+                if let Some(what) = state.pending_cmds.remove(&handle.0) {
+                    match res {
+                        Ok(()) => info!(command = %what, "server accepted"),
+                        Err(e) => error!(
+                            command = %what,
+                            error = %e.error,
+                            missing_permission = ?e.missing_permission,
+                            "SERVER REJECTED"
+                        ),
                     }
                 }
             }
@@ -488,12 +519,18 @@ fn handle_event(
             }
             let desc = state.render_description();
             match set_description(con, state.channel_id, &desc) {
-                Ok(()) => info!(
-                    from = %entry.nickname,
-                    kept = state.history.len(),
-                    desc_bytes = desc.len(),
-                    "logged message; description updated"
-                ),
+                Ok(handle) => {
+                    info!(
+                        from = %entry.nickname,
+                        kept = state.history.len(),
+                        desc_bytes = desc.len(),
+                        "logged message; description edit sent"
+                    );
+                    state.pending_cmds.insert(
+                        handle.0,
+                        format!("channeledit description ({} bytes)", desc.len()),
+                    );
+                }
                 Err(e) => warn!(error = %e, "description update failed"),
             }
         }
@@ -549,12 +586,19 @@ fn maybe_send_catchup(
     state.last_pm.insert(client_id, now);
     let text = state.catchup_text();
     match send_pm(con, client_id, &text) {
-        Ok(()) => info!(?client_id, "catch-up PM sent"),
+        Ok(handle) => {
+            info!(?client_id, "catch-up PM sent");
+            state.pending_cmds.insert(handle.0, format!("catch-up PM to {client_id:?}"));
+        }
         Err(e) => warn!(error = %e, ?client_id, "catch-up PM failed"),
     }
 }
 
-fn set_description(con: &mut Connection, channel_id: ChannelId, description: &str) -> Result<()> {
+fn set_description(
+    con: &mut Connection,
+    channel_id: ChannelId,
+    description: &str,
+) -> Result<MessageHandle> {
     let cmd = {
         let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
         let channel = state
@@ -563,18 +607,19 @@ fn set_description(con: &mut Connection, channel_id: ChannelId, description: &st
             .ok_or_else(|| anyhow!("channel {:?} disappeared from tree", channel_id))?;
         channel.edit().set_description(description)
     };
-    cmd.send(con).map_err(|e| anyhow!("channeledit: {e}"))
+    cmd.send_with_result(con).map_err(|e| anyhow!("channeledit: {e}"))
 }
 
-fn set_avatar_hash(con: &mut Connection, hash: &str) -> Result<()> {
+fn set_avatar_hash(con: &mut Connection, hash: &str) -> Result<MessageHandle> {
     let cmd = {
         let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
         state.client_update().set_avatar_hash(hash)
     };
-    cmd.send(con).map_err(|e| anyhow!("clientupdate avatar hash: {e}"))
+    cmd.send_with_result(con)
+        .map_err(|e| anyhow!("clientupdate avatar hash: {e}"))
 }
 
-fn send_pm(con: &mut Connection, client_id: ClientId, text: &str) -> Result<()> {
+fn send_pm(con: &mut Connection, client_id: ClientId, text: &str) -> Result<MessageHandle> {
     let cmd = {
         let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
         let client = state
@@ -583,7 +628,8 @@ fn send_pm(con: &mut Connection, client_id: ClientId, text: &str) -> Result<()> 
             .ok_or_else(|| anyhow!("client {:?} not found", client_id))?;
         client.send_textmessage(text)
     };
-    cmd.send(con).map_err(|e| anyhow!("send_textmessage: {e}"))
+    cmd.send_with_result(con)
+        .map_err(|e| anyhow!("send_textmessage: {e}"))
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
