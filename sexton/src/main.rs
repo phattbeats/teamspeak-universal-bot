@@ -12,7 +12,7 @@
 //! pokes, channel edits, server messages and the bot's own messages are never
 //! logged and never touch the description.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -48,6 +48,9 @@ const HISTORY_CAP: usize = 200;
 const BACKOFF_INITIAL: Duration = Duration::from_secs(60);
 const BACKOFF_FACTOR: u32 = 4;
 const BACKOFF_MAX: Duration = Duration::from_secs(3600);
+/// How long to wait for the server to answer our `channellist` request before
+/// giving up on resolving the watched channel.
+const CHANNEL_TREE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "sexton", about = "The Sexton — persistent TeamSpeak channel chat logger")]
@@ -116,16 +119,25 @@ struct ChannelState {
     history: VecDeque<LoggedMessage>,
     last_pm: HashMap<ClientId, tokio::time::Instant>,
     log_dir: PathBuf,
+    /// Clients that were already connected when the bot came up — never PM'd
+    /// on account of our own connect.
+    preexisting: HashSet<ClientId>,
 }
 
 impl ChannelState {
-    fn new(channel_id: ChannelId, channel_name: String, log_dir: PathBuf) -> Self {
+    fn new(
+        channel_id: ChannelId,
+        channel_name: String,
+        log_dir: PathBuf,
+        preexisting: HashSet<ClientId>,
+    ) -> Self {
         Self {
             channel_id,
             channel_name,
             history: VecDeque::with_capacity(HISTORY_CAP),
             last_pm: HashMap::new(),
             log_dir,
+            preexisting,
         }
     }
 
@@ -308,22 +320,45 @@ async fn run_once(args: &Args, address: &str, first_connect: bool) -> Result<()>
             .send(&mut con)
             .map_err(|e| anyhow!("channelsubscribeall: {e}"))?;
     }
-    // Give the server a moment to answer the channel list before resolving it.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    let (own_client_id, channel_id) = {
-        let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
-        let own_client_id = state.own_client;
-        let channel_id = state
-            .channels
-            .iter()
-            .find(|(_, ch)| ch.name == args.channel)
-            .map(|(id, _)| *id)
-            .ok_or_else(|| anyhow!("channel {:?} not found in channel tree", args.channel))?;
-        (own_client_id, channel_id)
+    // Wait for the `channellist` answer, pumping the event stream while we do.
+    // tsclientlib only advances the connection — and applies book updates —
+    // while its event stream is polled, so a bare sleep here leaves
+    // `state.channels` empty and the channel unresolvable no matter how long
+    // we wait.
+    let deadline = tokio::time::Instant::now() + CHANNEL_TREE_TIMEOUT;
+    let (own_client_id, channel_id) = loop {
+        {
+            let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
+            if let Some((id, _)) = state.channels.iter().find(|(_, ch)| ch.name == args.channel) {
+                break (state.own_client, *id);
+            }
+        }
+        match tokio::time::timeout_at(deadline, con.events().next()).await {
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(e))) => return Err(anyhow!("waiting for channel list: {e}")),
+            Ok(None) => return Err(anyhow!("stream ended while waiting for channel list")),
+            Err(_) => {
+                return Err(anyhow!(
+                    "channel {:?} not found in channel tree after {}s",
+                    args.channel,
+                    CHANNEL_TREE_TIMEOUT.as_secs()
+                ))
+            }
+        }
     };
 
-    info!(?channel_id, own = ?own_client_id, "connected; channel resolved");
+    // Everyone already on the server when we came up. They did not join
+    // anything — our own connect is not their arrival — so they must not be
+    // PM'd by the catch-up path.
+    let preexisting: HashSet<ClientId> = con
+        .get_state()
+        .map_err(|e| anyhow!("get_state: {e}"))?
+        .clients
+        .keys()
+        .copied()
+        .collect();
+
+    info!(?channel_id, own = ?own_client_id, clients_present = preexisting.len(), "connected; channel resolved");
 
     // Move into the watched channel.
     let password = if args.channel_password.is_empty() {
@@ -339,7 +374,8 @@ async fn run_once(args: &Args, address: &str, first_connect: bool) -> Result<()>
     .send(&mut con)
     .map_err(|e| anyhow!("joining channel: {e}"))?;
 
-    let mut state = ChannelState::new(channel_id, args.channel.clone(), args.log_dir.clone());
+    let mut state =
+        ChannelState::new(channel_id, args.channel.clone(), args.log_dir.clone(), preexisting);
 
     // Kick off the avatar upload (if configured). We track the handle and
     // finish the two-step process (upload, then set_avatar_hash) once the
@@ -441,41 +477,66 @@ fn handle_event(
             if let Err(e) = state.append_disk_log(&entry) {
                 error!(error = %e, "disk log append failed");
             }
-            if let Err(e) = set_description(con, state.channel_id, &state.render_description()) {
-                warn!(error = %e, "description update failed");
+            let desc = state.render_description();
+            match set_description(con, state.channel_id, &desc) {
+                Ok(()) => info!(
+                    from = %entry.nickname,
+                    kept = state.history.len(),
+                    desc_bytes = desc.len(),
+                    "logged message; description updated"
+                ),
+                Err(e) => warn!(error = %e, "description update failed"),
             }
+        }
+        // A client connected to the server and landed in a channel. If that
+        // channel is the watched one, they are a joiner: catch them up.
+        Event::PropertyAdded { id: PropertyId::Client(client_id), .. } => {
+            maybe_send_catchup(con, state, own_client_id, client_id);
         }
         // A client moved. If they moved INTO the watched channel (and it's
         // not us), send the rate-limited catch-up PM. This is a plain move
         // event, never a join/leave/mute/away — those don't touch this path.
         Event::PropertyChanged { id: PropertyId::ClientChannel(client_id), .. } => {
-            if client_id == own_client_id {
-                return Ok(());
-            }
-            let now_in_channel = con
-                .get_state()
-                .ok()
-                .and_then(|s| s.clients.get(&client_id).map(|c| c.channel));
-            if now_in_channel != Some(state.channel_id) {
-                return Ok(());
-            }
-            let now = tokio::time::Instant::now();
-            let should_send = match state.last_pm.get(&client_id) {
-                Some(last) => now.duration_since(*last) >= PM_RATE_LIMIT,
-                None => true,
-            };
-            if !should_send {
-                return Ok(());
-            }
-            state.last_pm.insert(client_id, now);
-            let text = state.catchup_text();
-            if let Err(e) = send_pm(con, client_id, &text) {
-                warn!(error = %e, ?client_id, "catch-up PM failed");
-            }
+            maybe_send_catchup(con, state, own_client_id, client_id);
         }
         _ => {}
     }
     Ok(())
+}
+
+/// Send the catch-up PM to `client_id` if they are now sitting in the watched
+/// channel, are not us, were not already here when we connected, and have not
+/// been PM'd inside the rate-limit window.
+fn maybe_send_catchup(
+    con: &mut Connection,
+    state: &mut ChannelState,
+    own_client_id: ClientId,
+    client_id: ClientId,
+) {
+    if client_id == own_client_id || state.preexisting.contains(&client_id) {
+        return;
+    }
+    let now_in_channel = con
+        .get_state()
+        .ok()
+        .and_then(|s| s.clients.get(&client_id).map(|c| c.channel));
+    if now_in_channel != Some(state.channel_id) {
+        return;
+    }
+    let now = tokio::time::Instant::now();
+    let should_send = match state.last_pm.get(&client_id) {
+        Some(last) => now.duration_since(*last) >= PM_RATE_LIMIT,
+        None => true,
+    };
+    if !should_send {
+        return;
+    }
+    state.last_pm.insert(client_id, now);
+    let text = state.catchup_text();
+    match send_pm(con, client_id, &text) {
+        Ok(()) => info!(?client_id, "catch-up PM sent"),
+        Err(e) => warn!(error = %e, ?client_id, "catch-up PM failed"),
+    }
 }
 
 fn set_description(con: &mut Connection, channel_id: ChannelId, description: &str) -> Result<()> {
