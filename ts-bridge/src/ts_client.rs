@@ -146,7 +146,7 @@ pub async fn run(
         .map_err(|e| anyhow::anyhow!("channellist request: {e}"))?;
     {
         let state = con.get_state().map_err(|e| anyhow::anyhow!("get_state: {e}"))?;
-        state.set_subscribed(true).send(&mut con).map_err(|e| anyhow::anyhow!("channelsubscribeall: {e}"))?;
+        state.server.set_subscribed(true).send(&mut con).map_err(|e| anyhow::anyhow!("channelsubscribeall: {e}"))?;
     }
 
     // Give the server a moment to answer the channel list before we try to join.

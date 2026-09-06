@@ -5,7 +5,9 @@
 # TS_IDENTITY is generated on first boot if unset (see the container logs
 # for the exported identity string) — capture it once and pin it here so the
 # bridge keeps the same TS identity across restarts, then have Brandon
-# assign the Sexton server group to it (PHA-3172).
+# assign the Sexton server group to it in the TS6 client (server-group
+# assignment for this bot's identity is tracked as part of PHA-3173's
+# closing checklist, not PHA-3172, which is already closed).
 
 services:
   ts-bridge:
