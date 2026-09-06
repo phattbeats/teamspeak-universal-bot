@@ -1,0 +1,77 @@
+name: ts-bridge
+
+# PHA-3174 verification pipeline. The dev sandbox that writes this code has
+# no C toolchain (no cc/gcc), so it cannot compile audiopus_sys locally —
+# this workflow, on a real Ubuntu runner, is the actual compile + test
+# check for the audio sidecar.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ts-bridge/**"
+      - ".github/workflows/ts-bridge.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "ts-bridge/**"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ts-bridge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ts-bridge/target
+          key: ${{ runner.os }}-ts-bridge-cargo-${{ hashFiles('ts-bridge/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ts-bridge-cargo-
+
+      - name: Install libopus + alsa headers (audiopus_sys native build)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -yq --no-install-recommends pkg-config libopus-dev libasound2-dev
+
+      - name: cargo build
+        run: cargo build --release --locked
+
+      - name: cargo test
+        run: cargo test --release --locked
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-bridge-binaries
+          path: |
+            ts-bridge/target/release/ts-bridge
+            ts-bridge/target/release/bridge-test
+          if-no-files-found: error
+          retention-days: 14
+
+  docker:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ts-bridge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build image (no push — no registry credentials wired yet)
+        run: docker build -t phattbeats/ts-bridge:ci .

@@ -1,0 +1,43 @@
+[package]
+name = "ts-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "PHA-3174: audio sidecar for the Sexton — per-speaker PCM out, mixed PCM in, music lane with ducking, over a local WebSocket"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/phattbeats/plnt-sexton"
+publish = false
+
+[[bin]]
+name = "ts-bridge"
+path = "src/main.rs"
+
+[[bin]]
+name = "bridge-test"
+path = "src/bin/bridge-test.rs"
+
+[dependencies]
+# tsclientlib pinned to the exact commit plnt-android already proved against the
+# live server (PHA-3073), so the audio path (AudioHandler, OutAudio, book events)
+# is the same code Ledger's voicespike build used.
+# ee3bc6f45a7137db7793ba5593a321df400d53e5 ("Fix pulling partial packets from AudioQueue")
+# Upstream: https://github.com/ReSpeak/tsclientlib
+tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5" }
+tsproto-packets = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5" }
+
+audiopus = "0.3.0-rc.0"
+base64 = "0.22"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+tokio-stream = "0.1"
+tokio-tungstenite = "0.21"
+futures = "0.3"
+futures-util = "0.3"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+log = "0.4"
+env_logger = "0.11"
+thiserror = "1"
+anyhow = "1"
+rand = "0.8"

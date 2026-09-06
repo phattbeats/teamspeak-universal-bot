@@ -52,5 +52,8 @@ told the Sexton listens.
 
 ## Status
 
-Planning and server-prerequisite work in progress. See the PHA-3099 epic and
-its children in Paperclip for current status and decisions.
+`ts-bridge/` (PHA-3174, audio sidecar) has a working Rust implementation —
+see `ts-bridge/README.md` for how to run it and what's not yet verified
+against the live server. v1 chat memory (PHA-3173) and the rest of the epic
+are still planning/blocked. See the PHA-3099 epic and its children in
+Paperclip for current status and decisions.

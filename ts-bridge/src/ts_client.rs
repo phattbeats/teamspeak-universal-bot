@@ -1,0 +1,386 @@
+//! The TS6 connection: joins the configured channel, decodes per-speaker
+//! Opus into the outbound event stream, and encodes the mixer's output back
+//! out as Opus on a 20 ms tick.
+//!
+//! Carries the TS6 patches noted in the PHA-3099 epic findings: tsclientlib's
+//! own connect handshake does not request the channel list or subscribe to
+//! all channels against TS6 the way it did against TS3 (finding #6), so both
+//! are sent explicitly right after connect; PM/poke targets always use the
+//! live, just-observed `ClientId` from state rather than any cached/db id.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use audiopus::coder::Encoder;
+use audiopus::{Application, Bitrate, Channels, SampleRate};
+use base64::prelude::*;
+use futures::prelude::*;
+use tokio::sync::{broadcast, mpsc};
+
+use tsclientlib::messages::c2s::{
+    OutChannelListRequestMessage, OutClientMoveMessage, OutClientMovePart,
+};
+use tsclientlib::{ChannelId, ClientId, Connection, DisconnectOptions, Identity, MessageTarget, OutCommandExt, StreamItem};
+use tsproto_packets::packets::{AudioData, CodecType, OutAudio};
+
+use crate::config::Config;
+use crate::mixer::{Mixer, FRAME_SAMPLES};
+use crate::protocol::RosterEntry;
+
+pub enum BridgeCommand {
+    Join { channel: String },
+    Mute { muted: bool },
+    Poke { client_id: u16, text: String },
+    SendText { target: SendTarget, text: String },
+}
+
+pub enum SendTarget {
+    Channel,
+    Server,
+    Client(u16),
+}
+
+#[derive(Clone)]
+pub enum BridgeEvent {
+    SpeakerAudio { client_id: u16, nickname: String, seq: u32, pcm: Vec<i16> },
+    SpeakerStart { client_id: u16 },
+    SpeakerStop { client_id: u16 },
+    Roster(Vec<RosterEntry>),
+    TextMessage { client_id: u16, nickname: String, text: String, target: &'static str },
+    State { connected: bool, channel_id: u64, channel_name: String },
+}
+
+/// Export an identity in the standard TS3 `"<counter>V<base64key>"` form so
+/// a human can paste it straight into Paperclip secrets or a TS client.
+pub fn export_identity(id: &Identity) -> String {
+    format!("{}V{}", id.counter(), BASE64_STANDARD.encode(id.key().to_short()))
+}
+
+fn resolve_channel_id(state: &tsclientlib::data::Connection, spec: &str) -> Option<ChannelId> {
+    if let Ok(n) = spec.parse::<u64>() {
+        if state.channels.contains_key(&ChannelId(n)) {
+            return Some(ChannelId(n));
+        }
+    }
+    state
+        .channels
+        .iter()
+        .find(|(_, ch)| ch.name.eq_ignore_ascii_case(spec))
+        .map(|(id, _)| *id)
+}
+
+fn build_roster(state: &tsclientlib::data::Connection, channel: ChannelId) -> Vec<RosterEntry> {
+    state
+        .clients
+        .values()
+        .filter(|c| c.channel == channel)
+        .map(|c| RosterEntry {
+            client_id: c.id.0,
+            nickname: c.name.clone(),
+            muted: c.input_muted || c.output_muted,
+            away: c.away_message.is_some(),
+        })
+        .collect()
+}
+
+fn roster_signature(roster: &[RosterEntry]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut sorted: Vec<&RosterEntry> = roster.iter().collect();
+    sorted.sort_by_key(|r| r.client_id);
+    for r in sorted {
+        r.client_id.hash(&mut hasher);
+        r.nickname.hash(&mut hasher);
+        r.muted.hash(&mut hasher);
+        r.away.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+pub async fn run(
+    config: &Config,
+    mixer: Arc<Mutex<Mixer>>,
+    cmd_rx: &mut mpsc::UnboundedReceiver<BridgeCommand>,
+    event_tx: broadcast::Sender<BridgeEvent>,
+) -> anyhow::Result<()> {
+    let identity = match &config.identity {
+        Some(s) => Identity::new_from_str(s).map_err(|e| anyhow::anyhow!("bad TS_IDENTITY: {e:?}"))?,
+        None => {
+            let id = Identity::create();
+            log::warn!(
+                "TS_IDENTITY not set; generated a fresh identity for this run. Persist it or the \
+                 bridge reconnects as a new bot every restart: {}",
+                export_identity(&id)
+            );
+            id
+        }
+    };
+
+    let mut builder = Connection::build(config.server_address.clone())
+        .identity(identity)
+        .name(config.nickname.clone());
+    if let Some(pwd) = &config.password {
+        builder = builder.password(pwd.clone());
+    }
+    let mut con = builder.connect().map_err(|e| anyhow::anyhow!("connect: {e}"))?;
+
+    // Wait for the first book-events batch (server accepted us).
+    let first_book = con
+        .events()
+        .try_filter(|e| future::ready(matches!(e, StreamItem::BookEvents(_))))
+        .next()
+        .await;
+    match first_book {
+        Some(Ok(_)) => {}
+        Some(Err(e)) => anyhow::bail!("first book events failed: {e}"),
+        None => anyhow::bail!("stream ended before first book events"),
+    }
+
+    // --- TS6 patches: explicit channel list + subscribe-all -----------------
+    // Against TS3 the initial handshake pushes the whole channel list and
+    // audio for the client's channel unprompted; TS6 does not, so both are
+    // requested explicitly here (PHA-3099 finding #6).
+    OutChannelListRequestMessage::new()
+        .send(&mut con)
+        .map_err(|e| anyhow::anyhow!("channellist request: {e}"))?;
+    {
+        let state = con.get_state().map_err(|e| anyhow::anyhow!("get_state: {e}"))?;
+        state.set_subscribed(true).send(&mut con).map_err(|e| anyhow::anyhow!("channelsubscribeall: {e}"))?;
+    }
+
+    // Give the server a moment to answer the channel list before we try to join.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Join the configured channel, if any.
+    if !config.channel.is_empty() && config.channel != "0" {
+        let target = {
+            let state = con.get_state().map_err(|e| anyhow::anyhow!("get_state: {e}"))?;
+            resolve_channel_id(state, &config.channel)
+        };
+        match target {
+            Some(channel_id) => {
+                let own_client = con.get_state().ok().map(|s| s.own_client);
+                if let Some(own) = own_client {
+                    let mut parts = std::iter::once(OutClientMovePart {
+                        client_id: own,
+                        channel_id,
+                        channel_password: None,
+                    });
+                    OutClientMoveMessage::new(&mut parts)
+                        .send(&mut con)
+                        .map_err(|e| anyhow::anyhow!("join channel: {e}"))?;
+                }
+            }
+            None => log::warn!("configured channel '{}' not found in channel list", config.channel),
+        }
+    }
+
+    let mut voice_encoder = Encoder::new(SampleRate::Hz48000, Channels::Mono, Application::Voip)
+        .map_err(|e| anyhow::anyhow!("voice opus encoder: {e:?}"))?;
+    let mut music_encoder = Encoder::new(SampleRate::Hz48000, Channels::Mono, Application::Audio)
+        .map_err(|e| anyhow::anyhow!("music opus encoder: {e:?}"))?;
+    music_encoder
+        .set_bitrate(Bitrate::BitsPerSecond(64_000))
+        .map_err(|e| anyhow::anyhow!("music opus bitrate: {e:?}"))?;
+
+    let mut audio = tsclientlib::audio::AudioHandler::default();
+    let mut known_talkers: HashSet<u16> = HashSet::new();
+    let mut speaker_seq: HashMap<u16, u32> = HashMap::new();
+    let mut last_roster_sig: Option<u64> = None;
+    let mut last_channel_id: Option<u64> = None;
+    let mut muted = false;
+
+    let mut tick = tokio::time::interval(Duration::from_millis(20));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    // Announce initial state once we know our channel.
+    emit_state_and_roster(&mut con, &event_tx, &mut last_roster_sig, &mut last_channel_id);
+
+    loop {
+        tokio::select! {
+            biased;
+
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(BridgeCommand::Join { channel }) => {
+                        let target = con.get_state().ok().and_then(|s| resolve_channel_id(s, &channel));
+                        if let Some(channel_id) = target {
+                            let own_client = con.get_state().ok().map(|s| s.own_client);
+                            if let Some(own) = own_client {
+                                let mut parts = std::iter::once(OutClientMovePart {
+                                    client_id: own,
+                                    channel_id,
+                                    channel_password: None,
+                                });
+                                if let Err(e) = OutClientMoveMessage::new(&mut parts).send(&mut con) {
+                                    log::warn!("join failed: {e}");
+                                }
+                            }
+                        } else {
+                            log::warn!("join: channel '{channel}' not found");
+                        }
+                    }
+                    Some(BridgeCommand::Mute { muted: m }) => {
+                        muted = m;
+                    }
+                    Some(BridgeCommand::Poke { client_id, text }) => {
+                        if let Ok(state) = con.get_state() {
+                            let cmd = state.send_message(MessageTarget::Poke(ClientId(client_id)), &text);
+                            if let Err(e) = cmd.send(&mut con) {
+                                log::warn!("poke failed: {e}");
+                            }
+                        }
+                    }
+                    Some(BridgeCommand::SendText { target, text }) => {
+                        if let Ok(state) = con.get_state() {
+                            let msg_target = match target {
+                                SendTarget::Channel => MessageTarget::Channel,
+                                SendTarget::Server => MessageTarget::Server,
+                                SendTarget::Client(id) => MessageTarget::Client(ClientId(id)),
+                            };
+                            let cmd = state.send_message(msg_target, &text);
+                            if let Err(e) = cmd.send(&mut con) {
+                                log::warn!("send_text failed: {e}");
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+
+            _ = tick.tick() => {
+                if muted {
+                    continue;
+                }
+                let frame = { mixer.lock().unwrap().next_frame() };
+                let encoder = if frame.music_active { &mut music_encoder } else { &mut voice_encoder };
+                let codec = if frame.music_active { CodecType::OpusMusic } else { CodecType::OpusVoice };
+                let mut out_buf = [0u8; 1275];
+                match encoder.encode(&frame.samples, &mut out_buf) {
+                    Ok(len) => {
+                        let pkt = OutAudio::new(&AudioData::C2S { id: 0, codec, data: &out_buf[..len] });
+                        if let Err(e) = con.send_audio(pkt) {
+                            log::warn!("send_audio failed: {e}");
+                        }
+                    }
+                    Err(e) => log::warn!("opus encode failed: {e:?}"),
+                }
+            }
+
+            ev = con.events().next() => {
+                match ev {
+                    Some(Ok(StreamItem::Audio(audio_pkt))) => {
+                        let from_raw: u16 = match audio_pkt.data().data() {
+                            AudioData::S2C { from, .. } => *from,
+                            _ => continue,
+                        };
+                        let from_id = ClientId(from_raw);
+                        let nickname = con
+                            .get_state()
+                            .ok()
+                            .and_then(|s| s.clients.get(&from_id).map(|c| c.name.clone()))
+                            .unwrap_or_else(|| format!("client-{from_raw}"));
+
+                        if audio.handle_packet(from_id, audio_pkt).is_ok() && known_talkers.insert(from_raw) {
+                            let _ = event_tx.send(BridgeEvent::SpeakerStart { client_id: from_raw });
+                            { mixer.lock().unwrap().set_human_speaking(true); }
+                        }
+
+                        let queue_ids: Vec<u16> = audio.get_queues().keys().map(|k| k.0).collect();
+                        for cid in queue_ids {
+                            let id = ClientId(cid);
+                            let ended = {
+                                let q = audio.get_mut_queues().get_mut(&id).unwrap();
+                                match q.get_next_data(FRAME_SAMPLES) {
+                                    Ok((samples, is_end)) => {
+                                        if !samples.is_empty() {
+                                            let pcm: Vec<i16> = samples
+                                                .iter()
+                                                .map(|s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                                                .collect();
+                                            let seq = speaker_seq.entry(cid).or_insert(0);
+                                            *seq += 1;
+                                            let _ = event_tx.send(BridgeEvent::SpeakerAudio {
+                                                client_id: cid,
+                                                nickname: nickname.clone(),
+                                                seq: *seq,
+                                                pcm,
+                                            });
+                                        }
+                                        is_end
+                                    }
+                                    Err(_) => continue,
+                                }
+                            };
+                            if ended && known_talkers.remove(&cid) {
+                                let _ = event_tx.send(BridgeEvent::SpeakerStop { client_id: cid });
+                                if known_talkers.is_empty() {
+                                    mixer.lock().unwrap().set_human_speaking(false);
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(StreamItem::BookEvents(events))) => {
+                        for ev in &events {
+                            if let tsclientlib::events::Event::Message { target, invoker, message } = ev {
+                                let target_str = match target {
+                                    MessageTarget::Channel => "channel",
+                                    MessageTarget::Server => "server",
+                                    MessageTarget::Client(_) => "client",
+                                    MessageTarget::Poke(_) => "poke",
+                                };
+                                let _ = event_tx.send(BridgeEvent::TextMessage {
+                                    client_id: invoker.id.0,
+                                    nickname: invoker.name.clone(),
+                                    text: message.clone(),
+                                    target: target_str,
+                                });
+                            }
+                        }
+                        emit_state_and_roster(&mut con, &event_tx, &mut last_roster_sig, &mut last_channel_id);
+                    }
+                    Some(Ok(StreamItem::DisconnectedTemporarily(reason))) => {
+                        log::warn!("temporary disconnect: {reason:?}");
+                        let _ = event_tx.send(BridgeEvent::State { connected: false, channel_id: 0, channel_name: String::new() });
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => log::warn!("event stream error: {e}"),
+                    None => break,
+                }
+            }
+        }
+    }
+
+    let _ = con.disconnect(DisconnectOptions::new());
+    let _ = event_tx.send(BridgeEvent::State { connected: false, channel_id: 0, channel_name: String::new() });
+    Ok(())
+}
+
+fn emit_state_and_roster(
+    con: &mut Connection,
+    event_tx: &broadcast::Sender<BridgeEvent>,
+    last_roster_sig: &mut Option<u64>,
+    last_channel_id: &mut Option<u64>,
+) {
+    let Ok(state) = con.get_state() else { return };
+    let Some(own) = state.clients.get(&state.own_client) else { return };
+    let channel_id = own.channel;
+    let channel_name = state
+        .channels
+        .get(&channel_id)
+        .map(|c| c.name.clone())
+        .unwrap_or_default();
+
+    if *last_channel_id != Some(channel_id.0) {
+        *last_channel_id = Some(channel_id.0);
+        let _ = event_tx.send(BridgeEvent::State { connected: true, channel_id: channel_id.0, channel_name: channel_name.clone() });
+    }
+
+    let roster = build_roster(state, channel_id);
+    let sig = roster_signature(&roster);
+    if *last_roster_sig != Some(sig) {
+        *last_roster_sig = Some(sig);
+        let _ = event_tx.send(BridgeEvent::Roster(roster));
+    }
+}

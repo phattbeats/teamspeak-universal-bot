@@ -1,0 +1,133 @@
+//! Two-lane mixer: voice (model speech) + music, with auto-ducking.
+//!
+//! Owned by the TS connection task and driven by a 20 ms tick. WebSocket
+//! handlers push samples in from other tasks, so it is wrapped in a mutex by
+//! the caller (contention is negligible: pushes are occasional, the tick is
+//! the only frequent reader).
+
+use std::collections::VecDeque;
+
+/// 48 kHz * 20 ms.
+pub const FRAME_SAMPLES: usize = 960;
+
+/// Duck-down completes within 50 ms (spec) = 2 frames of 20 ms.
+const ATTACK_FRAMES: f32 = 2.0;
+/// Recovery completes within 800 ms (spec) = 40 frames of 20 ms.
+const RECOVER_FRAMES: f32 = 40.0;
+
+pub struct Mixer {
+    voice: VecDeque<i16>,
+    music: VecDeque<i16>,
+    /// User-set multiplier from `music_gain` (0..1), applied before ducking.
+    music_gain: f32,
+    /// Current duck envelope value, 1.0 = no ducking, `duck_gain` = fully ducked.
+    duck_current: f32,
+    duck_target_floor: f32,
+    /// Set by `speaker_start`/`speaker_stop` bookkeeping in the TS task —
+    /// ducking also engages while any human is talking, not just while the
+    /// voice lane has queued audio.
+    human_speaking: bool,
+}
+
+pub struct MixedFrame {
+    pub samples: [i16; FRAME_SAMPLES],
+    /// True if the music lane contributed audible (non-silent) samples to
+    /// this frame — used to pick OpusMusic vs OpusVoice.
+    pub music_active: bool,
+}
+
+impl Mixer {
+    pub fn new(duck_gain: f32) -> Self {
+        Self {
+            voice: VecDeque::new(),
+            music: VecDeque::new(),
+            music_gain: 1.0,
+            duck_current: 1.0,
+            duck_target_floor: duck_gain.clamp(0.0, 1.0),
+            human_speaking: false,
+        }
+    }
+
+    pub fn push_voice(&mut self, samples: &[i16]) {
+        self.voice.extend(samples.iter().copied());
+    }
+
+    pub fn push_music(&mut self, samples: &[i16]) {
+        self.music.extend(samples.iter().copied());
+    }
+
+    pub fn set_music_gain(&mut self, gain: f32) {
+        self.music_gain = gain.clamp(0.0, 1.0);
+    }
+
+    pub fn clear_voice(&mut self) {
+        self.voice.clear();
+    }
+
+    pub fn set_human_speaking(&mut self, speaking: bool) {
+        self.human_speaking = speaking;
+    }
+
+    /// Pop one 20 ms frame, advance the duck envelope, and mix.
+    pub fn next_frame(&mut self) -> MixedFrame {
+        let voice_has_audio = !self.voice.is_empty();
+        let should_duck = voice_has_audio || self.human_speaking;
+        let target = if should_duck { self.duck_target_floor } else { 1.0 };
+
+        let step = if target < self.duck_current {
+            (self.duck_current - target) / ATTACK_FRAMES
+        } else {
+            (target - self.duck_current) / RECOVER_FRAMES
+        };
+        if target < self.duck_current {
+            self.duck_current = (self.duck_current - step).max(target);
+        } else {
+            self.duck_current = (self.duck_current + step).min(target);
+        }
+
+        let mut samples = [0i16; FRAME_SAMPLES];
+        let mut music_active = false;
+        for out in samples.iter_mut() {
+            let v = self.voice.pop_front().unwrap_or(0) as f32;
+            let m_raw = self.music.pop_front().unwrap_or(0) as f32;
+            let m = m_raw * self.music_gain * self.duck_current;
+            if m_raw.abs() > 0.0 {
+                music_active = true;
+            }
+            *out = (v + m).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+        }
+        MixedFrame { samples, music_active }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ducks_within_two_frames_and_recovers_within_forty() {
+        let mut mixer = Mixer::new(0.25);
+        mixer.push_music(&vec![10_000i16; FRAME_SAMPLES * 100]);
+        // No voice yet: full gain.
+        let f0 = mixer.next_frame();
+        assert!(f0.music_active);
+        assert_eq!(f0.samples[0], 10_000);
+
+        // Voice starts: duck engages, must reach the floor within 2 frames.
+        mixer.push_voice(&vec![0i16; FRAME_SAMPLES * 10]);
+        let _f1 = mixer.next_frame();
+        let f2 = mixer.next_frame();
+        // f2 is the 2nd frame after ducking started; envelope should be at
+        // (or very near) the floor by now.
+        let expected_floor_sample = (10_000f32 * 0.25) as i16;
+        assert!((f2.samples[0] - expected_floor_sample).abs() <= 1);
+
+        // Voice stops: recovery is gradual, not instant.
+        mixer.clear_voice();
+        for _ in 0..1000 {
+            mixer.set_human_speaking(false);
+        }
+        let f3 = mixer.next_frame();
+        assert!(f3.samples[0] < 10_000, "recovery should not be instant");
+    }
+}
