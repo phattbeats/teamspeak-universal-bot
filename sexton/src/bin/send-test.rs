@@ -26,7 +26,8 @@ use tsclientlib::messages::c2s::{
     OutClientMoveMessage, OutClientMovePart,
 };
 use tsclientlib::{
-    ChannelId, ClientId, Connection, DisconnectOptions, Identity, MessageTarget, StreamItem,
+    events::Event, ChannelId, ClientId, Connection, DisconnectOptions, Identity, MessageTarget,
+    StreamItem,
 };
 
 /// How long to wait for the server to answer our `channellist` request.
@@ -246,10 +247,22 @@ fn move_to(con: &mut Connection, client_id: ClientId, channel_id: ChannelId) -> 
 
 /// Drive the connection for `dur` — tsclientlib does nothing (no sends, no
 /// keepalives, no book updates) unless its event stream is being polled.
+///
+/// Every private message we receive while pumping is printed, so a test run
+/// can show the Sexton's catch-up PM from the *receiving* side.
 async fn pump(con: &mut Connection, dur: StdDuration) -> Result<()> {
     let deadline = tokio::time::Instant::now() + dur;
     loop {
         match tokio::time::timeout_at(deadline, con.events().next()).await {
+            Ok(Some(Ok(StreamItem::BookEvents(events)))) => {
+                for ev in events {
+                    if let Event::Message { target: MessageTarget::Client(_), invoker, message } =
+                        ev
+                    {
+                        println!("<<< PM from {}:\n{}", invoker.name, message);
+                    }
+                }
+            }
             Ok(Some(Ok(_))) => {}
             Ok(Some(Err(e))) => return Err(anyhow!("event stream error: {e}")),
             Ok(None) => return Err(anyhow!("event stream ended")),
