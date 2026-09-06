@@ -48,9 +48,16 @@ database id — TS6 assigns a fresh `ClientId` per session like TS3 does.
   timing (2 frames / 40 ms attack within the 50 ms budget, 40 frames / 800 ms
   recovery) without needing a server.
 - `bridge-test` (`cargo run --bin bridge-test -- ws://<host>:9099 30`) drives
-  the WebSocket side of the acceptance test: connects, plays a 440 Hz tone
-  into `voice_audio` and a 220 Hz tone into `music_audio`, and logs every
-  frame it receives back.
+  the WebSocket side of the acceptance test: connects, plays a continuous
+  220 Hz tone into `music_audio` and 2 s bursts of a 440 Hz tone into
+  `voice_audio` every 4 s, and logs every frame it receives back.
+
+  The voice tone is deliberately *bursty* rather than continuous. Criterion
+  (b) is a comparison, so the capture needs both a voice-off window (220 Hz at
+  full gain) and a voice-on window (220 Hz ducked) to measure the drop
+  between; a continuous voice tone would duck the music for the whole capture
+  and leave no baseline. `bridge-test` logs each transition with a timestamp
+  so the two windows can be lined up against the listener's recording.
 
 **What's not verified from this sandbox:** this code was written in an
 environment with no C toolchain (no `cc`) and no network path to the

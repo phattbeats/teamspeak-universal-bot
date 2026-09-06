@@ -74,15 +74,15 @@ impl Mixer {
         let should_duck = voice_has_audio || self.human_speaking;
         let target = if should_duck { self.duck_target_floor } else { 1.0 };
 
-        let step = if target < self.duck_current {
-            (self.duck_current - target) / ATTACK_FRAMES
-        } else {
-            (target - self.duck_current) / RECOVER_FRAMES
-        };
+        // Linear ramp over the full 1.0..floor span. Deriving the step from the
+        // *remaining* distance instead would make this an exponential approach
+        // that only ever halves the gap, so it would never actually reach the
+        // floor in 50 ms or full gain in 800 ms the way the spec requires.
+        let span = 1.0 - self.duck_target_floor;
         if target < self.duck_current {
-            self.duck_current = (self.duck_current - step).max(target);
+            self.duck_current = (self.duck_current - span / ATTACK_FRAMES).max(target);
         } else {
-            self.duck_current = (self.duck_current + step).min(target);
+            self.duck_current = (self.duck_current + span / RECOVER_FRAMES).min(target);
         }
 
         let mut samples = [0i16; FRAME_SAMPLES];
@@ -122,12 +122,41 @@ mod tests {
         let expected_floor_sample = (10_000f32 * 0.25) as i16;
         assert!((f2.samples[0] - expected_floor_sample).abs() <= 1);
 
-        // Voice stops: recovery is gradual, not instant.
+        // Voice stops: recovery is gradual, not instant...
         mixer.clear_voice();
-        for _ in 0..1000 {
-            mixer.set_human_speaking(false);
-        }
+        mixer.set_human_speaking(false);
         let f3 = mixer.next_frame();
         assert!(f3.samples[0] < 10_000, "recovery should not be instant");
+
+        // ...and completes within the 800 ms / 40-frame window. f3 above was
+        // the 1st recovery frame, so 39 more get us back to full gain.
+        for _ in 0..38 {
+            mixer.next_frame();
+        }
+        // Tolerance is for f32 accumulation across 40 steps, not for slack in
+        // the timing: 9_990/10_000 is within 0.1% of full gain.
+        let recovered = mixer.next_frame().samples[0];
+        assert!(
+            recovered >= 9_990,
+            "should be back to full gain 40 frames (800 ms) after voice stops, got {recovered}"
+        );
+    }
+
+    #[test]
+    fn human_speaking_ducks_music_without_any_queued_voice() {
+        let mut mixer = Mixer::new(0.25);
+        mixer.push_music(&vec![10_000i16; FRAME_SAMPLES * 10]);
+        mixer.set_human_speaking(true);
+        mixer.next_frame();
+        let f = mixer.next_frame();
+        assert!((f.samples[0] - 2_500).abs() <= 1, "got {}", f.samples[0]);
+    }
+
+    #[test]
+    fn clear_voice_drops_queued_voice_for_barge_in() {
+        let mut mixer = Mixer::new(0.25);
+        mixer.push_voice(&vec![5_000i16; FRAME_SAMPLES * 10]);
+        mixer.clear_voice();
+        assert_eq!(mixer.next_frame().samples[0], 0);
     }
 }

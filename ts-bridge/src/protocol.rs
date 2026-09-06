@@ -166,3 +166,57 @@ pub fn samples_to_pcm16(samples: &[i16]) -> Vec<u8> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speaker_audio_frame_round_trips() {
+        let pcm: Vec<i16> = (0..960).map(|i| (i as i16).wrapping_mul(37)).collect();
+        let header = SpeakerAudioHeader {
+            client_id: 42,
+            nickname: "someone".to_string(),
+            seq: 7,
+        };
+        let bytes = encode_frame(TYPE_SPEAKER_AUDIO, &header, &samples_to_pcm16(&pcm));
+
+        let decoded = decode_frame(&bytes).expect("decode");
+        assert_eq!(decoded.msg_type, TYPE_SPEAKER_AUDIO);
+        assert_eq!(decoded.header["clientId"], 42);
+        assert_eq!(decoded.header["nickname"], "someone");
+        assert_eq!(decoded.header["seq"], 7);
+        assert_eq!(pcm16_to_samples(&decoded.payload), pcm);
+    }
+
+    #[test]
+    fn empty_payload_and_empty_header_are_both_legal() {
+        let bytes = encode_frame(TYPE_CLEAR_VOICE, &serde_json::json!({}), &[]);
+        let decoded = decode_frame(&bytes).expect("decode");
+        assert_eq!(decoded.msg_type, TYPE_CLEAR_VOICE);
+        assert!(decoded.payload.is_empty());
+
+        // A header length of 0 means "no header", not "invalid JSON".
+        let mut raw = vec![TYPE_CLEAR_VOICE];
+        raw.extend_from_slice(&0u32.to_le_bytes());
+        let decoded = decode_frame(&raw).expect("decode zero-length header");
+        assert_eq!(decoded.header, serde_json::json!({}));
+    }
+
+    #[test]
+    fn truncated_and_overrunning_frames_are_rejected_not_panics() {
+        assert!(matches!(decode_frame(&[0x01, 0x00]), Err(FrameError::TooShort)));
+
+        // Header claims more bytes than the frame actually carries. This is the
+        // one that would index out of bounds if the bound check were missing.
+        let mut raw = vec![TYPE_VOICE_AUDIO];
+        raw.extend_from_slice(&9_000u32.to_le_bytes());
+        raw.extend_from_slice(b"{}");
+        assert!(matches!(decode_frame(&raw), Err(FrameError::HeaderOverrun(9_000))));
+    }
+
+    #[test]
+    fn odd_length_pcm_payload_drops_the_trailing_byte_instead_of_panicking() {
+        assert_eq!(pcm16_to_samples(&[0x01, 0x00, 0x7f]), vec![1i16]);
+    }
+}

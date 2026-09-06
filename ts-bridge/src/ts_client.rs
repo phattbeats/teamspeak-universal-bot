@@ -197,11 +197,30 @@ pub async fn run(
     // Announce initial state once we know our channel.
     emit_state_and_roster(&mut con, &event_tx, &mut last_roster_sig, &mut last_channel_id);
 
-    loop {
-        tokio::select! {
-            biased;
+    // `Connection::events()` hands out a stream that mutably borrows the
+    // connection for as long as it lives, and `select!` keeps every branch
+    // future alive for the whole statement. So the select only *waits*: it
+    // pulls the owned wakeup out, drops the event stream, and the handlers
+    // below get `con` back to themselves.
+    enum Wake {
+        Cmd(Option<BridgeCommand>),
+        Tick,
+        Event(Option<Result<StreamItem, tsclientlib::Error>>),
+    }
 
-            cmd = cmd_rx.recv() => {
+    loop {
+        let wake = {
+            let mut events = con.events();
+            tokio::select! {
+                biased;
+                cmd = cmd_rx.recv() => Wake::Cmd(cmd),
+                _ = tick.tick() => Wake::Tick,
+                ev = events.next() => Wake::Event(ev),
+            }
+        };
+
+        match wake {
+            Wake::Cmd(cmd) => {
                 match cmd {
                     Some(BridgeCommand::Join { channel }) => {
                         let target = con.get_state().ok().and_then(|s| resolve_channel_id(s, &channel));
@@ -249,7 +268,7 @@ pub async fn run(
                 }
             }
 
-            _ = tick.tick() => {
+            Wake::Tick => {
                 if muted {
                     continue;
                 }
@@ -268,7 +287,7 @@ pub async fn run(
                 }
             }
 
-            ev = con.events().next() => {
+            Wake::Event(ev) => {
                 match ev {
                     Some(Ok(StreamItem::Audio(audio_pkt))) => {
                         let from_raw: u16 = match audio_pkt.data().data() {
@@ -276,11 +295,6 @@ pub async fn run(
                             _ => continue,
                         };
                         let from_id = ClientId(from_raw);
-                        let nickname = con
-                            .get_state()
-                            .ok()
-                            .and_then(|s| s.clients.get(&from_id).map(|c| c.name.clone()))
-                            .unwrap_or_else(|| format!("client-{from_raw}"));
 
                         if audio.handle_packet(from_id, audio_pkt).is_ok() && known_talkers.insert(from_raw) {
                             let _ = event_tx.send(BridgeEvent::SpeakerStart { client_id: from_raw });
@@ -288,6 +302,23 @@ pub async fn run(
                         }
 
                         let queue_ids: Vec<u16> = audio.get_queues().keys().map(|k| k.0).collect();
+                        // Name each queue from its own client. Draining is
+                        // per-speaker, so tagging every frame with whoever's
+                        // packet happened to wake us up mislabels audio as
+                        // soon as two people talk at once.
+                        let nicknames: HashMap<u16, String> = {
+                            let state = con.get_state().ok();
+                            queue_ids
+                                .iter()
+                                .map(|cid| {
+                                    let name = state
+                                        .and_then(|s| s.clients.get(&ClientId(*cid)).map(|c| c.name.clone()))
+                                        .unwrap_or_else(|| format!("client-{cid}"));
+                                    (*cid, name)
+                                })
+                                .collect()
+                        };
+
                         for cid in queue_ids {
                             let id = ClientId(cid);
                             let ended = {
@@ -303,7 +334,10 @@ pub async fn run(
                                             *seq += 1;
                                             let _ = event_tx.send(BridgeEvent::SpeakerAudio {
                                                 client_id: cid,
-                                                nickname: nickname.clone(),
+                                                nickname: nicknames
+                                                    .get(&cid)
+                                                    .cloned()
+                                                    .unwrap_or_else(|| format!("client-{cid}")),
                                                 seq: *seq,
                                                 pcm,
                                             });
