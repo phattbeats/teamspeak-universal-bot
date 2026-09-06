@@ -1,0 +1,33 @@
+[package]
+name = "sexton"
+version = "0.2.0"
+edition = "2021"
+description = "The Sexton — persistent TeamSpeak channel chat logger (PHA-3099)"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "sexton"
+path = "src/main.rs"
+
+[[bin]]
+name = "send-test"
+path = "src/bin/send-test.rs"
+
+[[bin]]
+name = "probe-channels"
+path = "src/bin/probe-channels.rs"
+
+[dependencies]
+# tsclientlib pinned by exact commit — same rev already proven against this
+# server by PHA-3073 (voicespike) and vendored in plnt-android/core.
+tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5", default-features = false }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
+futures = "0.3"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+md-5 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+anyhow = "1"

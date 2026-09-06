@@ -1,0 +1,71 @@
+name: sexton
+
+# PHA-3173 verification pipeline. The dev sandbox that writes this code has
+# no C toolchain (no cc/gcc), so it cannot compile tsclientlib locally —
+# this workflow, on a real Ubuntu runner, is the actual compile check for
+# the chat-memory bot. (The runtime image itself was built and deployed via
+# a direct docker build on PHATT-RAID — see PHA-3173 for that transcript.)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sexton/**"
+      - ".github/workflows/sexton.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sexton/**"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: sexton
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sexton/target
+          key: ${{ runner.os }}-sexton-cargo-${{ hashFiles('sexton/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-sexton-cargo-
+
+      - name: cargo build
+        run: cargo build --release
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: sexton-binaries
+          path: |
+            sexton/target/release/sexton
+            sexton/target/release/send-test
+            sexton/target/release/probe-channels
+          if-no-files-found: error
+          retention-days: 14
+
+  docker:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: sexton
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build image (no push — no registry credentials wired yet)
+        run: docker build -t phattbeats/sexton:ci .
