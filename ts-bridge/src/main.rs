@@ -29,8 +29,13 @@ async fn main() -> anyhow::Result<()> {
     let tts_url = config.tts_webhook_url.clone();
     let ws_mixer = mixer.clone();
     let ws_event_tx = event_tx.clone();
+    // Shared with the TS loop so a WebSocket client that connects between two
+    // roster changes still gets the current state and roster (PROTOCOL.md).
+    // Outlives each connection attempt, like the mixer does.
+    let snapshot = Arc::new(Mutex::new(ts_client::Snapshot::default()));
+    let ws_snapshot = snapshot.clone();
     tokio::spawn(async move {
-        if let Err(e) = ws_server::run(ws_bind, ws_mixer, cmd_tx, ws_event_tx, tts_url).await {
+        if let Err(e) = ws_server::run(ws_bind, ws_mixer, cmd_tx, ws_event_tx, tts_url, ws_snapshot).await {
             log::error!("websocket server exited: {e}");
         }
     });
@@ -42,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
     const MAX_BACKOFF: Duration = Duration::from_secs(60);
     loop {
         log::info!("connecting to {}...", config.server_address);
-        match ts_client::run(&config, mixer.clone(), &mut cmd_rx, event_tx.clone()).await {
+        match ts_client::run(&config, mixer.clone(), &mut cmd_rx, event_tx.clone(), snapshot.clone()).await {
             Ok(()) => log::warn!("ts connection loop ended cleanly; reconnecting"),
             Err(e) => log::error!("ts connection loop failed: {e}; reconnecting in {backoff:?}"),
         }

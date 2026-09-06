@@ -40,8 +40,11 @@ Message types the bridge accepts (`in`):
 | 0x89 | `send_text`   | `{"target":"channel"\|"server"\|u16,"text":string}` (numeric string/number targets a client PM) | — |
 
 No handshake beyond the WebSocket upgrade: on connect the bridge immediately
-sends the current `state` and `roster`. Unknown inbound message types are
-logged and ignored, not fatal to the connection.
+sends the current `state` and `roster`, in that order, before any live events.
+Both are also broadcast whenever they change, so a client that connects while
+the bridge is still dialling the server gets `{"connected":false}` and an empty
+roster first, then the real ones once the channel is joined. Unknown inbound
+message types are logged and ignored, not fatal to the connection.
 
 ## Mixer / ducking
 

@@ -57,6 +57,42 @@ pub enum SendTarget {
     Client(u16),
 }
 
+/// The last `state`/`roster` the bridge published.
+///
+/// Both events are broadcast only when they *change*, so a WebSocket client
+/// that connects to a settled bridge would otherwise sit blind until somebody
+/// joins, leaves, or the bot changes channel — on a quiet server, never.
+/// PROTOCOL.md promises a snapshot on connect; this is what serves it.
+#[derive(Default)]
+pub struct Snapshot {
+    pub connected: bool,
+    pub channel_id: u64,
+    pub channel_name: String,
+    pub roster: Vec<RosterEntry>,
+}
+
+impl Snapshot {
+    /// The frames a freshly connected client is owed, in the order the live
+    /// stream would have delivered them: state first, then roster.
+    pub fn events(&self) -> Vec<BridgeEvent> {
+        vec![
+            BridgeEvent::State {
+                connected: self.connected,
+                channel_id: self.channel_id,
+                channel_name: self.channel_name.clone(),
+            },
+            BridgeEvent::Roster(self.roster.clone()),
+        ]
+    }
+
+    fn set_disconnected(&mut self) {
+        self.connected = false;
+        self.channel_id = 0;
+        self.channel_name.clear();
+        self.roster.clear();
+    }
+}
+
 #[derive(Clone)]
 pub enum BridgeEvent {
     SpeakerAudio { client_id: u16, nickname: String, seq: u32, pcm: Vec<i16> },
@@ -119,6 +155,7 @@ pub async fn run(
     mixer: Arc<Mutex<Mixer>>,
     cmd_rx: &mut mpsc::UnboundedReceiver<BridgeCommand>,
     event_tx: broadcast::Sender<BridgeEvent>,
+    snapshot: Arc<Mutex<Snapshot>>,
 ) -> anyhow::Result<()> {
     let identity = match &config.identity {
         Some(s) => Identity::new_from_str(s).map_err(|e| anyhow::anyhow!("bad TS_IDENTITY: {e:?}"))?,
@@ -243,7 +280,7 @@ pub async fn run(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     // Announce initial state once we know our channel.
-    emit_state_and_roster(&mut con, &event_tx, &mut last_roster_sig, &mut last_channel_id);
+    emit_state_and_roster(&mut con, &event_tx, &snapshot, &mut last_roster_sig, &mut last_channel_id);
 
     // `Connection::events()` hands out a stream that mutably borrows the
     // connection for as long as it lives, and `select!` keeps every branch
@@ -539,7 +576,7 @@ pub async fn run(
                                 });
                             }
                         }
-                        emit_state_and_roster(&mut con, &event_tx, &mut last_roster_sig, &mut last_channel_id);
+                        emit_state_and_roster(&mut con, &event_tx, &snapshot, &mut last_roster_sig, &mut last_channel_id);
                     }
                     Some(Ok(StreamItem::DisconnectedTemporarily(reason))) => {
                         log::warn!("temporary disconnect: {reason:?}");
@@ -551,6 +588,12 @@ pub async fn run(
                             let _ = event_tx.send(BridgeEvent::SpeakerStop { client_id: cid });
                         }
                         mixer.lock().unwrap().set_human_speaking(false);
+                        snapshot.lock().unwrap().set_disconnected();
+                        // The next `emit_state_and_roster` has to be able to
+                        // re-announce the same channel, or a client connecting
+                        // after the reconnect is told we are still down.
+                        last_channel_id = None;
+                        last_roster_sig = None;
                         let _ = event_tx.send(BridgeEvent::State { connected: false, channel_id: 0, channel_name: String::new() });
                     }
                     Some(Ok(_)) => {}
@@ -567,6 +610,7 @@ pub async fn run(
         let _ = event_tx.send(BridgeEvent::SpeakerStop { client_id: cid });
     }
     mixer.lock().unwrap().set_human_speaking(false);
+    snapshot.lock().unwrap().set_disconnected();
 
     let _ = con.disconnect(DisconnectOptions::new());
     let _ = event_tx.send(BridgeEvent::State { connected: false, channel_id: 0, channel_name: String::new() });
@@ -576,6 +620,7 @@ pub async fn run(
 fn emit_state_and_roster(
     con: &mut Connection,
     event_tx: &broadcast::Sender<BridgeEvent>,
+    snapshot: &Arc<Mutex<Snapshot>>,
     last_roster_sig: &mut Option<u64>,
     last_channel_id: &mut Option<u64>,
 ) {
@@ -588,13 +633,25 @@ fn emit_state_and_roster(
         .map(|c| c.name.clone())
         .unwrap_or_default();
 
+    let roster = build_roster(state, channel_id);
+    let sig = roster_signature(&roster);
+
+    // Update the snapshot unconditionally, broadcast only on change: the
+    // stream stays quiet, but a client connecting between two changes still
+    // gets the current picture.
+    {
+        let mut snap = snapshot.lock().unwrap();
+        snap.connected = true;
+        snap.channel_id = channel_id.0;
+        snap.channel_name = channel_name.clone();
+        snap.roster = roster.clone();
+    }
+
     if *last_channel_id != Some(channel_id.0) {
         *last_channel_id = Some(channel_id.0);
         let _ = event_tx.send(BridgeEvent::State { connected: true, channel_id: channel_id.0, channel_name: channel_name.clone() });
     }
 
-    let roster = build_roster(state, channel_id);
-    let sig = roster_signature(&roster);
     if *last_roster_sig != Some(sig) {
         *last_roster_sig = Some(sig);
         let _ = event_tx.send(BridgeEvent::Roster(roster));

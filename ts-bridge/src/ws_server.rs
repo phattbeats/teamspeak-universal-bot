@@ -12,7 +12,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::mixer::Mixer;
 use crate::protocol::{self, *};
-use crate::ts_client::{BridgeCommand, BridgeEvent, SendTarget};
+use crate::ts_client::{BridgeCommand, BridgeEvent, SendTarget, Snapshot};
 
 pub async fn run(
     bind: SocketAddr,
@@ -20,6 +20,7 @@ pub async fn run(
     cmd_tx: mpsc::UnboundedSender<BridgeCommand>,
     event_tx: broadcast::Sender<BridgeEvent>,
     tts_webhook_url: Option<String>,
+    snapshot: Arc<Mutex<Snapshot>>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(bind).await?;
     log::info!("ts-bridge websocket listening on {bind}");
@@ -28,10 +29,14 @@ pub async fn run(
         let (stream, peer) = listener.accept().await?;
         let mixer = mixer.clone();
         let cmd_tx = cmd_tx.clone();
+        // Subscribe *before* reading the snapshot below: a change landing in
+        // between then costs the client a duplicate frame, whereas the other
+        // order would lose the update entirely.
         let event_rx = event_tx.subscribe();
         let tts = tts_webhook_url.clone();
+        let snapshot = snapshot.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, mixer, cmd_tx, event_rx, tts).await {
+            if let Err(e) = handle_conn(stream, mixer, cmd_tx, event_rx, tts, snapshot).await {
                 log::info!("ws client {peer} disconnected: {e}");
             }
         });
@@ -44,11 +49,22 @@ async fn handle_conn(
     cmd_tx: mpsc::UnboundedSender<BridgeCommand>,
     mut event_rx: broadcast::Receiver<BridgeEvent>,
     tts_webhook_url: Option<String>,
+    snapshot: Arc<Mutex<Snapshot>>,
 ) -> anyhow::Result<()> {
     let ws = tokio_tungstenite::accept_async(stream).await?;
     let (mut sink, mut source) = ws.split();
 
+    // PROTOCOL.md: a client gets the current `state` and `roster` on connect.
+    // Both are broadcast only on change, so without this a client joining a
+    // settled bridge learns nothing until the next join/leave.
+    let initial = snapshot.lock().unwrap().events();
+
     let writer = tokio::spawn(async move {
+        for ev in initial {
+            if sink.send(Message::Binary(encode_event(&ev))).await.is_err() {
+                return;
+            }
+        }
         loop {
             let ev = match event_rx.recv().await {
                 Ok(ev) => ev,
@@ -199,5 +215,57 @@ fn encode_event(ev: &BridgeEvent) -> Vec<u8> {
             &StateHeader { connected: *connected, channel_id: *channel_id, channel_name: channel_name.clone() },
             &[],
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::RosterEntry;
+
+    /// A client connecting to a settled bridge is owed the current state and
+    /// roster, not silence until the next join/leave.
+    #[test]
+    fn snapshot_yields_state_then_roster() {
+        let snap = Snapshot {
+            connected: true,
+            channel_id: 7,
+            channel_name: "General Shit".into(),
+            roster: vec![RosterEntry {
+                client_id: 42,
+                nickname: "brandon".into(),
+                muted: false,
+                away: false,
+            }],
+        };
+
+        let frames: Vec<Vec<u8>> = snap.events().iter().map(encode_event).collect();
+        assert_eq!(frames.len(), 2);
+
+        let state = protocol::decode_frame(&frames[0]).expect("state frame decodes");
+        assert_eq!(state.msg_type, TYPE_STATE);
+        assert_eq!(state.header["connected"], serde_json::json!(true));
+        assert_eq!(state.header["channelId"], serde_json::json!(7));
+        assert_eq!(state.header["channelName"], serde_json::json!("General Shit"));
+
+        let roster = protocol::decode_frame(&frames[1]).expect("roster frame decodes");
+        assert_eq!(roster.msg_type, TYPE_ROSTER);
+        assert_eq!(roster.header[0]["clientId"], serde_json::json!(42));
+        assert_eq!(roster.header[0]["nickname"], serde_json::json!("brandon"));
+    }
+
+    /// Before the first successful connect there is nothing to report, but the
+    /// client still gets a frame saying so rather than an open socket that
+    /// never speaks.
+    #[test]
+    fn default_snapshot_reports_disconnected() {
+        let frames: Vec<Vec<u8>> = Snapshot::default().events().iter().map(encode_event).collect();
+        let state = protocol::decode_frame(&frames[0]).expect("state frame decodes");
+        assert_eq!(state.msg_type, TYPE_STATE);
+        assert_eq!(state.header["connected"], serde_json::json!(false));
+
+        let roster = protocol::decode_frame(&frames[1]).expect("roster frame decodes");
+        assert_eq!(roster.msg_type, TYPE_ROSTER);
+        assert_eq!(roster.header, serde_json::json!([]));
     }
 }
