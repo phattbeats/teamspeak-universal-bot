@@ -1,0 +1,46 @@
+# The local STT sidecar for voice.mode=stt-tts (PHA-3228).
+#
+# Append this service to the TS6 host's compose file — the same file and the
+# same `phattvip` network as `teamspeak6-server` and `ts-bridge`. The container
+# name is load-bearing: the plugin's default transcription URL is
+# `http://whisper:8080/inference`, resolved by Docker DNS on that network.
+#
+# Do NOT publish 8080 to the host. Nothing outside the network has any business
+# reaching this, and the whole point of the sidecar is that the audio does not
+# leave the box.
+#
+# PHATT-RAID has no compose plugin; whisper/deploy.sh is the `docker run` form
+# of this file. Keep the two in step.
+
+services:
+  whisper:
+    image: ghcr.io/ggml-org/whisper.cpp:main
+    container_name: whisper
+    restart: unless-stopped
+    networks:
+      - phattvip
+    volumes:
+      # Fetch the model once on the host (see deploy.sh); the image ships the
+      # binaries, not the weights.
+      - /mnt/user/appdata/whisper/models:/models:ro
+    # The image's entrypoint is `bash -c`, with /app/build/bin on PATH.
+    command: >-
+      whisper-server
+      --model /models/ggml-base.en.bin
+      --host 0.0.0.0
+      --port 8080
+      --threads 4
+      --language en
+      --no-timestamps
+      --convert
+    healthcheck:
+      # `/` is the server's own index; a 200 means the model finished loading.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+networks:
+  phattvip:
+    external: true

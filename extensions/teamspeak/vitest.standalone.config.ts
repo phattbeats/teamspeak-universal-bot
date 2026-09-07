@@ -19,6 +19,7 @@ export default defineConfig({
     alias: [
       { find: "openclaw/plugin-sdk/realtime-voice", replacement: stub("realtime-voice") },
       { find: "openclaw/plugin-sdk/config-contracts", replacement: stub("config-contracts") },
+      { find: "openclaw/plugin-sdk/runtime-env", replacement: stub("runtime-env") },
     ],
   },
   // tsconfig.json here is the upstream one, which extends a base that only
