@@ -16,9 +16,10 @@ and is the platform the later voice/tool work builds on.
 - **Audio bridge** (PHA-3174, `plnt-ts-bridge`): sidecar exposing per-speaker
   PCM out, mixed PCM in, and a music lane with ducking over a local
   WebSocket.
-- **Realtime voice channel plugin** (PHA-3175): OpenClaw `extensions/teamspeak`
-  channel plugin putting a realtime voice runtime in the channel, with
-  Discord config parity.
+- **Realtime voice channel plugin** (PHA-3175): OpenClaw channel plugin
+  putting a realtime voice runtime in the channel, with Discord config
+  parity. Split out of this repo into its own (PHA-3220):
+  [phattbeats/openclaw-teamspeak-plugin](https://github.com/phattbeats/openclaw-teamspeak-plugin).
 - **Voice tools v1** (PHA-3176): `play_music` (ducked lane), `stop`,
   `what_did_i_miss`, `who_is_here`, `poke`.
 

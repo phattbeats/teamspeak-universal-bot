@@ -15,7 +15,8 @@ PHA-3177, expressed as a container:
 
 The plugin enforces this: `voice.streaming.transcription.provider` must be a
 local id, and the account refuses to start otherwise
-(`extensions/teamspeak/src/config.ts`, `LOCAL_TRANSCRIPTION_PROVIDERS`).
+(`src/config.ts`, `LOCAL_TRANSCRIPTION_PROVIDERS`, in
+[phattbeats/openclaw-teamspeak-plugin](https://github.com/phattbeats/openclaw-teamspeak-plugin)).
 
 ## What runs
 
@@ -23,7 +24,7 @@ local id, and the account refuses to start otherwise
 `ghcr.io/ggml-org/whisper.cpp:main`. It answers `POST /inference` with
 multipart form-data (`file`, `response_format=json`, `language`, `temperature`)
 and returns `{"text": "..."}` — which is exactly what
-`extensions/teamspeak/src/voice/whisper-local.ts` speaks.
+`src/voice/whisper-local.ts` speaks (same repo as above).
 
 CPU only. There is no GPU on PHATT-RAID, and `base.en` on CPU transcribes a few
 seconds of speech in a few hundred milliseconds, which fits the lane's 1.5-3s
