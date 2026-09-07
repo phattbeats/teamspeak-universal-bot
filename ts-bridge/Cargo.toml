@@ -1,11 +1,11 @@
 [package]
 name = "ts-bridge"
 version = "0.1.0"
-edition = "2021"
-description = "PHA-3174: audio sidecar for the Sexton — per-speaker PCM out, mixed PCM in, music lane with ducking, over a local WebSocket"
-license = "MIT OR Apache-2.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
 repository = "https://github.com/phattbeats/plnt-sexton"
-publish = false
+description = "PHA-3341: audio sidecar for the Sexton — per-speaker PCM out, mixed PCM in, music lane with ducking. No longer owns its own tsclientlib connection (the Sexton does); consumes the shared connection over a Unix-domain socket on a Docker-shared volume."
 
 [[bin]]
 name = "ts-bridge"
@@ -16,13 +16,13 @@ name = "bridge-test"
 path = "src/bin/bridge-test.rs"
 
 [dependencies]
-# tsclientlib pinned to the exact commit plnt-android already proved against the
-# live server (PHA-3073), so the audio path (AudioHandler, OutAudio, book events)
-# is the same code Ledger's voicespike build used.
-# ee3bc6f45a7137db7793ba5593a321df400d53e5 ("Fix pulling partial packets from AudioQueue")
-# Upstream: https://github.com/ReSpeak/tsclientlib
-tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5" }
-tsproto-packets = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5" }
+# PHA-3341: the bridge no longer talks tsclientlib directly — that crate is
+# gone from this dependency list. The Sexton owns the Connection; the bridge
+# receives `BridgeEvent`s and sends `BridgeCommand`s through
+# `bridge-proto::BridgeClient`. What the bridge still does need from the
+# codec side is the audio opacities (`samples_to_pcm16`, opus encoders), so
+# `audiopus` stays.
+bridge-proto = { path = "../bridge-proto" }
 
 audiopus = "0.3.0-rc.0"
 base64 = "0.22"
