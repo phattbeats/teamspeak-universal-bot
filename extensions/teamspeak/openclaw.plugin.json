@@ -8,6 +8,33 @@
   "channels": [
     "teamspeak"
   ],
+  "channelConfigs": {
+    "teamspeak": {
+      "label": "TeamSpeak",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bridgeUrl": { "type": "string" },
+          "channel": { "type": "string" },
+          "commandPrefix": { "type": "string" },
+          "commandAllowFrom": { "type": "array", "items": { "type": "number" } },
+          "voice": { "type": "object", "additionalProperties": true },
+          "tools": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "uiHints": {
+        "bridgeUrl": {
+          "label": "Bridge URL",
+          "placeholder": "ws://ts-bridge:9099"
+        },
+        "channel": {
+          "label": "Channel",
+          "placeholder": "General"
+        }
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
