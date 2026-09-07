@@ -46,7 +46,12 @@ describe("parseLogLine", () => {
   });
 
   it("skips anything not in that exact shape, the way the Rust parser does", () => {
-    expect(parseLogLine("— last messages, kept by the Sexton —")).toBeUndefined();
+    // The description header the Sexton writes above the rolling log.
+    expect(
+      parseLogLine(
+        "— the Sexton keeps this hall: the last lines stay here, the whole log is kept below. Ask him and he'll fetch the rest. —",
+      ),
+    ).toBeUndefined();
     expect(parseLogLine("")).toBeUndefined();
     expect(parseLogLine("8:04  Brandon: short hour")).toBeUndefined();
     expect(parseLogLine("18:04 Brandon: single space")).toBeUndefined();
