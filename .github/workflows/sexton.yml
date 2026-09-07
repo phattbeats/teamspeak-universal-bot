@@ -46,6 +46,11 @@ jobs:
       - name: cargo build
         run: cargo build --release
 
+      # The unit tests are the only thing that ever checks the notice text and
+      # the welcomed-list round trip (PHA-3305), and they never ran here.
+      - name: cargo test
+        run: cargo test --release
+
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
