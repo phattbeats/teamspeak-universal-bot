@@ -18,7 +18,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::tungstenite::Message;
 
 use bridge_proto::{
-    events::{BridgeCommand, BridgeEvent, SendTarget, Snapshot},
+    events::{BridgeCommand, BridgeEvent, RosterEntry, SendTarget, Snapshot},
     StateSnapshot,
 };
 
