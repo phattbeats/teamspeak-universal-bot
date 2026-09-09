@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Push tones into a running ts-bridge's WebSocket — the `bridge-test` send
-side, in stdlib Python, so the bridge can be exercised from outside the
-compose network (over an ssh -L tunnel) without a Rust toolchain.
+"""Push tones into a running Sexton's audio bridge WebSocket (PHA-3342: this
+moved from a standalone ts-bridge container into the Sexton binary, same
+port) — the `bridge-test` send side, in stdlib Python, so the bridge can be
+exercised from outside the compose network (over an ssh -L tunnel) without a
+Rust toolchain.
 
     ./ws-tone.py ws://127.0.0.1:19098 20 [music_hz] [voice_hz]
 

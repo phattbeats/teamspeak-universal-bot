@@ -1,13 +1,19 @@
 [workspace]
-# PHA-3341: workspace root so the Sexton and ts-bridge can share the bridge
-# protocol (BridgeEvent, BridgeCommand, frame codec) without one re-exporting
-# from the other. Both crates already compiled in isolation — this just gives
-# them a place to live side by side and a shared `--target-dir` so the
-# single `cargo build` exercises the dependency graph.
+# PHA-3341 gave the Sexton and ts-bridge a shared bridge-proto crate
+# (BridgeEvent, BridgeCommand, frame codec) so the two processes wouldn't
+# re-export types from each other. PHA-3342 finishes the container
+# consolidation Brandon asked for ("one docker container / one bot
+# account"): ts-bridge's audio sidecar — the mixer, the opus codec, the
+# public WebSocket server — moved into the Sexton binary itself, so the
+# ts-bridge crate is gone. bridge-proto stays: its `BridgeEvent`/
+# `BridgeCommand`/`Snapshot` vocabulary is still exactly the right shape for
+# the in-process channel between the Sexton's tsclientlib event loop and its
+# own WS server, it's already unit-tested, and keeping it means a future
+# split back into two processes (if one is ever needed again) has a
+# contract to dial straight back into instead of inventing one from scratch.
 resolver = "2"
 members = [
     "sexton",
-    "ts-bridge",
     "bridge-proto",
 ]
 

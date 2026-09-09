@@ -1,17 +1,23 @@
-//! WebSocket wire protocol for ts-bridge clients.
+//! WebSocket wire protocol for the Sexton's audio/voice bridge clients.
 //!
-//! **PHA-3341 split.** The *internal* bridge IPC (`BridgeEvent`,
-//! `BridgeCommand`, `Snapshot`, the roster/state shapes) moved to the
-//! `bridge-proto` crate so the Sexton (which now owns the
-//! `tsclientlib::Connection`) and the bridge can share types without one
-//! depending on the other. What stayed here is the WebSocket frame
-//! envelope: type byte, length-prefixed JSON header, opaque payload — and
-//! the inbound header shapes the WS server decodes from client commands.
+//! **PHA-3341** moved the *internal* bridge IPC (`BridgeEvent`,
+//! `BridgeCommand`, `Snapshot`, the roster/state shapes) into the
+//! `bridge-proto` crate so the Sexton (tsclientlib owner) and the then
+//! separate `ts-bridge` process could share types without one depending on
+//! the other. **PHA-3342** removed the second process — the WS server and
+//! the mixer that used to live in `ts-bridge` now run inside this binary,
+//! wired directly to the Sexton's own connection event loop (see
+//! `audio.rs`) — but the WebSocket frame envelope here is byte-for-byte
+//! unchanged: type byte, length-prefixed JSON header, opaque payload. Any
+//! external consumer (the realtime-voice runtime, `bridge-test`) dials the
+//! same port with the same frames as before; only the container it's
+//! talking to changed.
 //!
-//! `PROTOCOL.md` (the public contract for channel-plugin and voice-tool
-//! consumers) is unchanged. The frame types line up 1:1 with the bridge
-//! events so the WS server does not need to re-encode: `0x01 SpeakerAudio`
-//! is the same `0x01 SpeakerAudio` on both sides of the Unix socket.
+//! `PROTOCOL.md` (the public contract for those consumers) moved from
+//! `ts-bridge/PROTOCOL.md` to `sexton/PROTOCOL.md` unchanged. The frame
+//! types line up 1:1 with `bridge_proto::events::BridgeEvent` so `ws_server`
+//! does not need to re-encode: `0x01 SpeakerAudio` is the same `0x01
+//! SpeakerAudio` bridge-proto and the wire protocol both use.
 
 use serde::{Deserialize, Serialize};
 
@@ -32,9 +38,9 @@ pub const TYPE_MUTE: u8 = 0x87;
 pub const TYPE_POKE: u8 = 0x88;
 pub const TYPE_SEND_TEXT: u8 = 0x89;
 
-/// A decoded inbound frame, header-parsed but payload left raw. Same
-/// shape as `bridge_proto::RawFrame` — kept separate so the public WS
-/// protocol can evolve without touching the internal IPC.
+/// A decoded inbound frame, header-parsed but payload left raw. Same shape
+/// as `bridge_proto::RawFrame` — kept separate so the public WS protocol
+/// can evolve without touching the internal event/command vocabulary.
 pub struct RawFrame {
     pub msg_type: u8,
     pub header: serde_json::Value,
@@ -129,8 +135,8 @@ pub struct StateHeader {
 }
 
 // ---------------------------------------------------------------------------
-// Inbound headers (commands from WS clients to the bridge, forwarded on
-// to the Sexton over the Unix socket).
+// Inbound headers (commands from WS clients, applied directly to the
+// in-process Mixer / tsclientlib Connection — see `audio.rs`).
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]

@@ -6,6 +6,14 @@
 # network_mode host + teamspeak.phatt.vip (hairpins, gets flood-scored --
 # PHA-3099 finding #5).
 #
+# PHA-3342: "one docker container / one bot account" — this used to be the
+# text-only Sexton with a separate `ts-bridge` container (and its own
+# `deploy.sh`-equivalent) for audio. That container is gone; `--ws-bind` /
+# `--duck-gain` below are its former `WS_BIND`/`DUCK_GAIN` env vars, now
+# flags on this one binary. `--network phattvip` alone (no `-p`/`--expose`)
+# already makes :9099 reachable to sibling containers on that network —
+# same as before, just one container fewer to reach it through.
+#
 # Lives on the box at /mnt/user/appdata/sexton/deploy.sh.
 set -eu
 IMG=${IMG:-phattbeats/sexton:latest}
@@ -26,4 +34,6 @@ docker run -d --name sexton --network phattvip --restart unless-stopped \
   -c "General Shit" \
   -i "$(cat /mnt/user/scratch/sexton/sexton-id.txt)" \
   -A /usr/local/share/sexton-avatar/brandon.png \
-  -l /var/sexton-logs
+  -l /var/sexton-logs \
+  --ws-bind 0.0.0.0:9099 \
+  --duck-gain 0.25

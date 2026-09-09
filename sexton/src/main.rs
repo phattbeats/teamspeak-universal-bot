@@ -1,4 +1,5 @@
-//! The Sexton — persistent TeamSpeak channel chat logger (PHA-3099 / PHA-3173).
+//! The Sexton — persistent TeamSpeak channel chat logger (PHA-3099 / PHA-3173),
+//! and — as of PHA-3342 — the audio/voice bridge too.
 //!
 //! Behaviour (see PHA-3099 for the full spec):
 //! 1. Rolling log of the last messages in the channel description (newest at the
@@ -12,9 +13,32 @@
 //! are logged or displayed. Joins, leaves, moves, mutes, aways, kicks, bans,
 //! pokes, channel edits, server messages and the bot's own messages are never
 //! logged and never touch the description.
+//!
+//! ## PHA-3342: one container, one bot account
+//!
+//! Brandon flagged two bot slots in the channel roster (`Sexton` for text,
+//! `Sexton-Bridge` for audio) and asked for "everything running off of one
+//! docker container / one bot account". PHA-3341 already collapsed the two
+//! `tsclientlib::Connection`s into one, fronted by a Unix-socket IPC
+//! (`bridge-proto`) to a still-separate `ts-bridge` container. This change
+//! removes that second container: the audio sidecar's mixer, Opus codec,
+//! and public WebSocket server (formerly `ts-bridge/src/{mixer,protocol,
+//! ws_server,ts_client}.rs`) now run inside this binary, driven by the same
+//! `Connection` and the same `con.events()` stream the text lane already
+//! owned — see `audio.rs` for the ported per-tick logic and `mod audio`'s
+//! doc comment for the fuller history.
+//!
+//! `bridge-proto`'s `BridgeEvent`/`BridgeCommand`/`Snapshot` types are
+//! reused here as the in-process vocabulary between this file's event loop
+//! and `ws_server`'s WebSocket clients (a `tokio::sync::broadcast` /
+//! `mpsc` pair, not the Unix socket bridge-proto also defines — see the PR
+//! description for why a self-dial loopback socket inside one process
+//! wasn't worth adding).
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -22,6 +46,7 @@ use clap::Parser;
 use chrono::Local;
 use futures::prelude::*;
 use md5::{Digest, Md5};
+use tokio::sync::{broadcast, mpsc, Mutex as TokioMutex};
 use tracing::{error, info, warn};
 
 use tsclientlib::prelude::*;
@@ -32,6 +57,14 @@ use tsclientlib::{
     events::{Event, PropertyId},
     ChannelId, ClientId, Connection, Identity, MessageHandle, MessageTarget, StreamItem,
 };
+
+mod audio;
+mod mixer;
+mod protocol;
+mod ws_server;
+
+use audio::AudioState;
+use mixer::Mixer;
 
 /// Channel description hard cap is 8192 bytes (`TS3_MAX_SIZE_CHANNEL_DESCRIPTION`).
 /// Stay well under it — PHA-3173 asks for ~7500.
@@ -132,6 +165,28 @@ struct Args {
     /// otherwise ignored.
     #[arg(long, default_value = "")]
     on_connected: String,
+
+    /// PHA-3342: bind address for the audio/voice bridge's WebSocket server
+    /// (`PROTOCOL.md`) — the realtime voice runtime and `bridge-test` are
+    /// its only consumers. Formerly `ts-bridge`'s `WS_BIND` env var, now a
+    /// flag on the one binary that owns both lanes. Never expose this
+    /// outside the compose network.
+    #[arg(long, default_value = "0.0.0.0:9099")]
+    ws_bind: String,
+
+    /// PHA-3342: duck-envelope floor (0..1) applied to the music lane
+    /// while the voice lane has queued samples or any human is talking.
+    /// Formerly `ts-bridge`'s `DUCK_GAIN` env var. Spec: reach the floor
+    /// within 50 ms, recover to full gain within 800 ms (see `mixer.rs`).
+    #[arg(long, default_value_t = 0.25)]
+    duck_gain: f32,
+
+    /// PHA-3342: optional webhook URL for the `say_text` fallback TTS hook
+    /// (PHA-3228). Formerly `ts-bridge`'s `TTS_WEBHOOK_URL` env var. Not
+    /// wired up yet — a `say_text` frame is logged and otherwise ignored
+    /// either way; push `voice_audio` directly in the meantime.
+    #[arg(long, default_value = "")]
+    tts_webhook_url: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -463,10 +518,55 @@ async fn main() -> Result<()> {
 
     info!(address = %address, port = args.port, channel = %args.channel, log_dir = %args.log_dir.display(), "sexton starting");
 
+    let ws_bind: SocketAddr = args
+        .ws_bind
+        .parse()
+        .with_context(|| format!("parsing --ws-bind {:?}", args.ws_bind))?;
+    let tts_webhook_url = if args.tts_webhook_url.is_empty() {
+        None
+    } else {
+        Some(args.tts_webhook_url.clone())
+    };
+
+    // PHA-3342: the Mixer, the bridge event/command channels, and the WS
+    // snapshot all outlive every TS reconnect attempt — same lesson
+    // ts-bridge's PHA-3216 taught (a mixer tied to the connection attempt
+    // loses its queued audio and its duck envelope on every reconnect).
+    // `run_once` gets them by reference/clone on each attempt and rebuilds
+    // only the per-connection `AudioState` (opus encoders, jitter buffers)
+    // that a stale TS session can't meaningfully resume anyway.
+    let mixer = Arc::new(TokioMutex::new(Mixer::new(args.duck_gain)));
+    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<bridge_proto::BridgeCommand>();
+    let (event_tx, _) = broadcast::channel::<bridge_proto::BridgeEvent>(256);
+    let snapshot = Arc::new(TokioMutex::new(bridge_proto::Snapshot::default()));
+
+    {
+        let mixer = mixer.clone();
+        let cmd_tx = cmd_tx.clone();
+        let event_tx = event_tx.clone();
+        let snapshot = snapshot.clone();
+        let tts_webhook_url = tts_webhook_url.clone();
+        tokio::spawn(async move {
+            if let Err(e) = ws_server::run(ws_bind, mixer, cmd_tx, event_tx, tts_webhook_url, snapshot).await {
+                error!(error = %e, "audio bridge websocket server exited");
+            }
+        });
+    }
+
     let mut backoff = BACKOFF_INITIAL;
     let mut first_connect = true;
     loop {
-        match run_once(&args, &address, first_connect).await {
+        match run_once(
+            &args,
+            &address,
+            first_connect,
+            &mixer,
+            &mut cmd_rx,
+            &event_tx,
+            &snapshot,
+        )
+        .await
+        {
             Ok(()) => {
                 // Clean disconnect (shouldn't normally happen) — reset backoff.
                 backoff = BACKOFF_INITIAL;
@@ -483,7 +583,15 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run_once(args: &Args, address: &str, first_connect: bool) -> Result<()> {
+async fn run_once(
+    args: &Args,
+    address: &str,
+    first_connect: bool,
+    mixer: &Arc<TokioMutex<Mixer>>,
+    cmd_rx: &mut mpsc::UnboundedReceiver<bridge_proto::BridgeCommand>,
+    event_tx: &broadcast::Sender<bridge_proto::BridgeEvent>,
+    snapshot: &Arc<TokioMutex<bridge_proto::Snapshot>>,
+) -> Result<()> {
     let identity = if args.identity.is_empty() {
         let id = Identity::create();
         warn!("no identity supplied; generated a new one — pin this in Paperclip secrets");
@@ -625,72 +733,177 @@ async fn run_once(args: &Args, address: &str, first_connect: bool) -> Result<()>
         run_on_connected_hook(&args.on_connected);
     }
 
+    // PHA-3342: the audio lane's per-connection state (opus encoders,
+    // per-speaker jitter buffers) — fresh every `run_once` attempt, same as
+    // `state` above. See `audio.rs` for why this can't meaningfully survive
+    // a reconnect.
+    let mut audio_state = AudioState::new()?;
+    let mut last_roster_sig: Option<u64> = None;
+    let mut last_channel_id: Option<u64> = None;
+    audio::emit_state_and_roster(&mut con, event_tx, snapshot, &mut last_roster_sig, &mut last_channel_id).await;
+
+    let mut tick = tokio::time::interval(Duration::from_millis(20));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    // The text lane used to just `.await` `con.events().next()` in a bare
+    // loop. PHA-3342 adds two more wakeups against the same connection: the
+    // 20 ms audio tick and inbound `BridgeCommand`s from the WS bridge
+    // clients. `Connection::events()` hands out a stream that mutably
+    // borrows `con` for as long as it lives, and `select!` keeps every
+    // branch's future alive for the whole statement — so the select only
+    // *waits*: it pulls the owned wakeup out, drops the event stream, and
+    // the handlers below get `con` back to themselves (same pattern the old
+    // `ts_client.rs` used for its own three-way select).
+    enum Wake {
+        Cmd(Option<bridge_proto::BridgeCommand>),
+        Tick,
+        Event(Option<std::result::Result<StreamItem, tsclientlib::Error>>),
+    }
+
     loop {
-        let item = match con.events().next().await {
-            Some(Ok(item)) => item,
-            Some(Err(e)) => return Err(anyhow!("event stream error: {e}")),
-            None => return Err(anyhow!("event stream ended")),
+        let wake = {
+            let mut events = con.events();
+            tokio::select! {
+                biased;
+                cmd = cmd_rx.recv() => Wake::Cmd(cmd),
+                _ = tick.tick() => Wake::Tick,
+                ev = events.next() => Wake::Event(ev),
+            }
         };
 
-        match item {
-            StreamItem::BookEvents(events) => {
-                for ev in events {
-                    handle_event(&mut con, &mut state, own_client_id, ev)?;
+        match wake {
+            Wake::Cmd(cmd) => {
+                if let Some(cmd) = cmd {
+                    handle_bridge_command(&mut con, own_client_id, mixer, &mut audio_state, cmd).await;
                 }
+                // `None` means every `cmd_tx` clone (the WS server's) is
+                // gone, which only happens if the WS server task itself
+                // panicked — not fatal to the TS connection, so keep going.
             }
-            StreamItem::FileUpload(handle, mut result) => {
-                if let Some((pending_handle, bytes)) = pending_avatar.take() {
-                    if handle == pending_handle {
-                        use tokio::io::AsyncWriteExt;
-                        if let Err(e) = result.stream.write_all(&bytes).await {
-                            error!(error = %e, "avatar upload write failed");
-                        } else {
-                            let _ = result.stream.shutdown().await;
-                            info!("avatar upload complete");
-                            let mut hasher = Md5::new();
-                            hasher.update(&bytes);
-                            let hash = hex_lower(&hasher.finalize());
-                            match set_avatar_hash(&mut con, &hash) {
-                                Ok(handle) => {
-                                    info!(hash = %hash, "avatar hash sent");
-                                    state
-                                        .pending_cmds
-                                        .insert(handle.0, format!("clientupdate avatar hash {hash}"));
-                                }
-                                Err(e) => error!(error = %e, "set_avatar_hash failed"),
-                            }
+            Wake::Tick => {
+                audio_state.on_tick(&mut con, mixer, event_tx).await;
+            }
+            Wake::Event(ev) => match ev {
+                Some(Ok(StreamItem::Audio(audio_pkt))) => {
+                    audio_state.on_audio_packet(mixer, event_tx, audio_pkt).await;
+                }
+                Some(Ok(StreamItem::BookEvents(events))) => {
+                    // PHA-3342: forward text messages to bridge subscribers
+                    // exactly as the old ts_client.rs did, before the
+                    // existing text-lane handler below (which logs/PMs the
+                    // same events) runs. Two passes over the same `&events`
+                    // slice rather than draining it once, since
+                    // `handle_event` still wants to consume `Event` by
+                    // value and `Event` isn't `Copy`.
+                    for ev in &events {
+                        if let Event::Message { target, invoker, message } = ev {
+                            let target_str = match target {
+                                MessageTarget::Channel => "channel",
+                                MessageTarget::Server => "server",
+                                MessageTarget::Client(_) => "client",
+                                MessageTarget::Poke(_) => "poke",
+                            };
+                            let _ = event_tx.send(bridge_proto::BridgeEvent::TextMessage {
+                                client_id: invoker.id.0,
+                                nickname: invoker.name.clone(),
+                                text: message.clone(),
+                                target: target_str,
+                            });
                         }
-                    } else {
-                        pending_avatar = Some((pending_handle, bytes));
                     }
-                }
-            }
-            // The server's verdict on a command we sent with a return code.
-            // Without this a rejected channeledit looks exactly like an
-            // accepted one — which is how a missing permission stayed
-            // invisible while the bot logged "description updated".
-            StreamItem::MessageResult(handle, res) => {
-                if let Some(what) = state.pending_cmds.remove(&handle.0) {
-                    match res {
-                        Ok(()) => info!(command = %what, "server accepted"),
-                        Err(e) => error!(
-                            command = %what,
-                            error = %e.error,
-                            missing_permission = ?e.missing_permission,
-                            "SERVER REJECTED"
-                        ),
+                    for ev in events {
+                        handle_event(&mut con, &mut state, own_client_id, ev)?;
                     }
+                    audio::emit_state_and_roster(&mut con, event_tx, snapshot, &mut last_roster_sig, &mut last_channel_id).await;
                 }
-            }
-            StreamItem::FiletransferFailed(_, e) => {
-                error!(error = %e, "file transfer failed");
-            }
-            StreamItem::DisconnectedTemporarily(reason) => {
-                return Err(anyhow!("temporary disconnect: {reason:?}"));
-            }
-            _ => {}
+                Some(Ok(StreamItem::DisconnectedTemporarily(reason))) => {
+                    warn!(?reason, "temporary disconnect");
+                    // Nobody can be mid-sentence across a disconnect, and
+                    // their real `SpeakerStop` is never coming — same
+                    // reasoning as the `Some(Err(e))`/`None` arms below.
+                    audio_state.on_disconnect(mixer, event_tx).await;
+                    audio::mark_disconnected(event_tx, snapshot, &mut last_roster_sig, &mut last_channel_id).await;
+                    return Err(anyhow!("temporary disconnect: {reason:?}"));
+                }
+                Some(Ok(other)) => {
+                    handle_stream_item(&mut con, &mut state, &mut pending_avatar, other).await?;
+                }
+                Some(Err(e)) => {
+                    audio_state.on_disconnect(mixer, event_tx).await;
+                    audio::mark_disconnected(event_tx, snapshot, &mut last_roster_sig, &mut last_channel_id).await;
+                    return Err(anyhow!("event stream error: {e}"));
+                }
+                None => {
+                    audio_state.on_disconnect(mixer, event_tx).await;
+                    audio::mark_disconnected(event_tx, snapshot, &mut last_roster_sig, &mut last_channel_id).await;
+                    return Err(anyhow!("event stream ended"));
+                }
+            },
         }
     }
+}
+
+/// The non-`BookEvents`, non-`Audio` `StreamItem`s — file transfer
+/// bookkeeping, command results, and the temporary-disconnect signal.
+/// Split out of the main `select!` match arm so that arm reads as "one
+/// wakeup source per arm", matching the other three.
+async fn handle_stream_item(
+    con: &mut Connection,
+    state: &mut ChannelState,
+    pending_avatar: &mut Option<(tsclientlib::FiletransferHandle, Vec<u8>)>,
+    item: StreamItem,
+) -> Result<()> {
+    match item {
+        StreamItem::FileUpload(handle, mut result) => {
+            if let Some((pending_handle, bytes)) = pending_avatar.take() {
+                if handle == pending_handle {
+                    use tokio::io::AsyncWriteExt;
+                    if let Err(e) = result.stream.write_all(&bytes).await {
+                        error!(error = %e, "avatar upload write failed");
+                    } else {
+                        let _ = result.stream.shutdown().await;
+                        info!("avatar upload complete");
+                        let mut hasher = Md5::new();
+                        hasher.update(&bytes);
+                        let hash = hex_lower(&hasher.finalize());
+                        match set_avatar_hash(con, &hash) {
+                            Ok(handle) => {
+                                info!(hash = %hash, "avatar hash sent");
+                                state
+                                    .pending_cmds
+                                    .insert(handle.0, format!("clientupdate avatar hash {hash}"));
+                            }
+                            Err(e) => error!(error = %e, "set_avatar_hash failed"),
+                        }
+                    }
+                } else {
+                    *pending_avatar = Some((pending_handle, bytes));
+                }
+            }
+        }
+        // The server's verdict on a command we sent with a return code.
+        // Without this a rejected channeledit looks exactly like an
+        // accepted one — which is how a missing permission stayed
+        // invisible while the bot logged "description updated".
+        StreamItem::MessageResult(handle, res) => {
+            if let Some(what) = state.pending_cmds.remove(&handle.0) {
+                match res {
+                    Ok(()) => info!(command = %what, "server accepted"),
+                    Err(e) => error!(
+                        command = %what,
+                        error = %e.error,
+                        missing_permission = ?e.missing_permission,
+                        "SERVER REJECTED"
+                    ),
+                }
+            }
+        }
+        StreamItem::FiletransferFailed(_, e) => {
+            error!(error = %e, "file transfer failed");
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn handle_event(
@@ -868,6 +1081,88 @@ fn send_pm(con: &mut Connection, client_id: ClientId, text: &str) -> Result<Mess
     };
     cmd.send_with_result(con)
         .map_err(|e| anyhow!("send_textmessage: {e}"))
+}
+
+/// Apply one inbound `BridgeCommand` from a WS bridge client. Mirrors the
+/// command handling the old `ts-bridge/src/ts_client.rs` did against its
+/// own connection — PHA-3342 just moved it onto the Sexton's shared one.
+///
+/// `Join`/`Poke`/`SendText` did not already have sexton-side equivalents:
+/// the text lane's `send_pm` is PM-only (`client.send_textmessage`, no
+/// `MessageTarget::Channel`/`Server`/`Poke` support) and the text lane
+/// never dynamically re-joins a channel after startup, so there is no
+/// existing code path these would duplicate.
+async fn handle_bridge_command(
+    con: &mut Connection,
+    own_client_id: ClientId,
+    mixer: &Arc<TokioMutex<Mixer>>,
+    audio_state: &mut AudioState,
+    cmd: bridge_proto::BridgeCommand,
+) {
+    use bridge_proto::BridgeCommand;
+    match cmd {
+        BridgeCommand::VoiceAudio { samples } => mixer.lock().await.push_voice(&samples),
+        BridgeCommand::MusicAudio { samples } => mixer.lock().await.push_music(&samples),
+        BridgeCommand::MusicGain { gain } => mixer.lock().await.set_music_gain(gain),
+        BridgeCommand::ClearVoice => mixer.lock().await.clear_voice(),
+        // `ws_server`'s `dispatch` already handles `say_text` as a
+        // log-only stub before it would ever become a `BridgeCommand` —
+        // this arm exists so the match stays exhaustive if that changes
+        // (e.g. once PHA-3228's TTS webhook is actually wired up).
+        BridgeCommand::SayText { text } => {
+            warn!(%text, "say_text received but the TTS webhook client isn't wired up yet — push voice_audio directly for now");
+        }
+        BridgeCommand::Join { channel } => {
+            let target = con.get_state().ok().and_then(|s| audio::resolve_channel_id(s, &channel));
+            match target {
+                Some(channel_id) => {
+                    let mut parts = std::iter::once(OutClientMovePart {
+                        client_id: own_client_id,
+                        channel_id,
+                        channel_password: None,
+                    });
+                    if let Err(e) = OutClientMoveMessage::new(&mut parts).send(con) {
+                        warn!(error = %e, "bridge join failed");
+                    }
+                }
+                None => warn!(%channel, "bridge join: channel not found"),
+            }
+        }
+        BridgeCommand::Mute { muted } => audio_state.set_muted(muted),
+        BridgeCommand::Poke { client_id, text } => {
+            let cmd = {
+                match con.get_state() {
+                    Ok(state) => state.send_message(MessageTarget::Poke(ClientId(client_id)), &text),
+                    Err(e) => {
+                        warn!(error = %e, "bridge poke: get_state failed");
+                        return;
+                    }
+                }
+            };
+            if let Err(e) = cmd.send(con) {
+                warn!(error = %e, "bridge poke failed");
+            }
+        }
+        BridgeCommand::SendText { target, text } => {
+            let msg_target = match target {
+                bridge_proto::SendTarget::Channel => MessageTarget::Channel,
+                bridge_proto::SendTarget::Server => MessageTarget::Server,
+                bridge_proto::SendTarget::Client { id } => MessageTarget::Client(ClientId(id)),
+            };
+            let cmd = {
+                match con.get_state() {
+                    Ok(state) => state.send_message(msg_target, &text),
+                    Err(e) => {
+                        warn!(error = %e, "bridge send_text: get_state failed");
+                        return;
+                    }
+                }
+            };
+            if let Err(e) = cmd.send(con) {
+                warn!(error = %e, "bridge send_text failed");
+            }
+        }
+    }
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
