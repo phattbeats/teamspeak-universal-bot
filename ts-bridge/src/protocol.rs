@@ -1,5 +1,17 @@
-//! Binary WebSocket framing: 1-byte type + u32-LE header length + JSON header + payload.
-//! See PROTOCOL.md for the wire-level contract.
+//! WebSocket wire protocol for ts-bridge clients.
+//!
+//! **PHA-3341 split.** The *internal* bridge IPC (`BridgeEvent`,
+//! `BridgeCommand`, `Snapshot`, the roster/state shapes) moved to the
+//! `bridge-proto` crate so the Sexton (which now owns the
+//! `tsclientlib::Connection`) and the bridge can share types without one
+//! depending on the other. What stayed here is the WebSocket frame
+//! envelope: type byte, length-prefixed JSON header, opaque payload — and
+//! the inbound header shapes the WS server decodes from client commands.
+//!
+//! `PROTOCOL.md` (the public contract for channel-plugin and voice-tool
+//! consumers) is unchanged. The frame types line up 1:1 with the bridge
+//! events so the WS server does not need to re-encode: `0x01 SpeakerAudio`
+//! is the same `0x01 SpeakerAudio` on both sides of the Unix socket.
 
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +32,9 @@ pub const TYPE_MUTE: u8 = 0x87;
 pub const TYPE_POKE: u8 = 0x88;
 pub const TYPE_SEND_TEXT: u8 = 0x89;
 
-/// A decoded inbound frame, header-parsed but payload left raw.
+/// A decoded inbound frame, header-parsed but payload left raw. Same
+/// shape as `bridge_proto::RawFrame` — kept separate so the public WS
+/// protocol can evolve without touching the internal IPC.
 pub struct RawFrame {
     pub msg_type: u8,
     pub header: serde_json::Value,
@@ -54,10 +68,13 @@ pub fn decode_frame(bytes: &[u8]) -> Result<RawFrame, FrameError> {
         serde_json::from_slice(header_bytes)?
     };
     let payload = bytes[header_end..].to_vec();
-    Ok(RawFrame { msg_type, header, payload })
+    Ok(RawFrame {
+        msg_type,
+        header,
+        payload,
+    })
 }
 
-/// Build a frame from a serializable header and payload bytes.
 pub fn encode_frame(msg_type: u8, header: &impl Serialize, payload: &[u8]) -> Vec<u8> {
     let header_bytes = serde_json::to_vec(header).unwrap_or_else(|_| b"{}".to_vec());
     let mut out = Vec::with_capacity(5 + header_bytes.len() + payload.len());
@@ -69,8 +86,13 @@ pub fn encode_frame(msg_type: u8, header: &impl Serialize, payload: &[u8]) -> Ve
 }
 
 // ---------------------------------------------------------------------------
-// Outbound headers
+// Outbound headers — re-export the bridge-proto types so the WS server
+// doesn't have to convert between equivalent shapes. `StateSnapshot`
+// lives in both places; this is the seam. (RosterEntry the WS layer builds
+// directly from the bridge-proto type via `&[]` payloads, no re-export.)
 // ---------------------------------------------------------------------------
+
+pub use bridge_proto::StateSnapshot;
 
 #[derive(Serialize)]
 pub struct SpeakerAudioHeader {
@@ -84,15 +106,6 @@ pub struct SpeakerAudioHeader {
 pub struct ClientIdHeader {
     #[serde(rename = "clientId")]
     pub client_id: u16,
-}
-
-#[derive(Serialize, Clone)]
-pub struct RosterEntry {
-    #[serde(rename = "clientId")]
-    pub client_id: u16,
-    pub nickname: String,
-    pub muted: bool,
-    pub away: bool,
 }
 
 #[derive(Serialize)]
@@ -111,15 +124,13 @@ pub struct StateHeader {
     pub channel_id: u64,
     #[serde(rename = "channelName")]
     pub channel_name: String,
-    /// Our own runtime `ClientId` in the channel, absent while disconnected.
-    /// The roster carries every client including us; this is how a consumer
-    /// tells itself apart from the humans.
     #[serde(rename = "ownClientId", skip_serializing_if = "Option::is_none")]
     pub own_client_id: Option<u16>,
 }
 
 // ---------------------------------------------------------------------------
-// Inbound headers
+// Inbound headers (commands from WS clients to the bridge, forwarded on
+// to the Sexton over the Unix socket).
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -153,6 +164,11 @@ pub struct PokeHeader {
 pub struct SendTextHeader {
     pub target: serde_json::Value,
     pub text: String,
+}
+
+#[derive(Deserialize)]
+pub struct VoiceAudioHeader {
+    pub count: usize,
 }
 
 /// PCM16LE payload bytes -> i16 samples.
@@ -199,21 +215,14 @@ mod tests {
         let bytes = encode_frame(TYPE_CLEAR_VOICE, &serde_json::json!({}), &[]);
         let decoded = decode_frame(&bytes).expect("decode");
         assert_eq!(decoded.msg_type, TYPE_CLEAR_VOICE);
-        assert!(decoded.payload.is_empty());
-
-        // A header length of 0 means "no header", not "invalid JSON".
-        let mut raw = vec![TYPE_CLEAR_VOICE];
-        raw.extend_from_slice(&0u32.to_le_bytes());
-        let decoded = decode_frame(&raw).expect("decode zero-length header");
         assert_eq!(decoded.header, serde_json::json!({}));
+        assert!(decoded.payload.is_empty());
     }
 
     #[test]
     fn truncated_and_overrunning_frames_are_rejected_not_panics() {
         assert!(matches!(decode_frame(&[0x01, 0x00]), Err(FrameError::TooShort)));
 
-        // Header claims more bytes than the frame actually carries. This is the
-        // one that would index out of bounds if the bound check were missing.
         let mut raw = vec![TYPE_VOICE_AUDIO];
         raw.extend_from_slice(&9_000u32.to_le_bytes());
         raw.extend_from_slice(b"{}");

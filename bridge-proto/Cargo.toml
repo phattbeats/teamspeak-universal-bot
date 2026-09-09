@@ -1,0 +1,19 @@
+[package]
+name = "bridge-proto"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "PHA-3341: protocol shared between the Sexton (tsclientlib owner) and ts-bridge (audio sidecar). Carries BridgeEvent, BridgeCommand, Snapshot, and the inbound WS frame codec — so the bridge can consume the connection without owning one."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["sync", "io-util", "net", "macros", "rt-multi-thread", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures = "0.3"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }

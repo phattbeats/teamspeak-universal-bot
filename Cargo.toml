@@ -1,0 +1,17 @@
+[workspace]
+# PHA-3341: workspace root so the Sexton and ts-bridge can share the bridge
+# protocol (BridgeEvent, BridgeCommand, frame codec) without one re-exporting
+# from the other. Both crates already compiled in isolation — this just gives
+# them a place to live side by side and a shared `--target-dir` so the
+# single `cargo build` exercises the dependency graph.
+resolver = "2"
+members = [
+    "sexton",
+    "ts-bridge",
+    "bridge-proto",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false

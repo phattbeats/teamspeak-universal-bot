@@ -1,26 +1,37 @@
 //! Local WebSocket server. One or more clients (the realtime voice runtime,
 //! `bridge-test`, …) connect here — never expose this port outside the
 //! compose network.
+//!
+//! **PHA-3341 change.** The WS server still speaks the same protocol and
+//! has the same clients. What changed is where the events come from: not
+//! from an in-process `ts_client::run` that owns the `tsclientlib`
+//! connection, but from `bridge_client::run`, which dials the Sexton's
+//! Unix-domain socket and fans out `bridge_proto::BridgeEvent`s over a
+//! broadcast channel. The WS server forwards each event to the WS frame
+//! shape 1:1 — the type bytes line up — so `encode_event` is unchanged.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::tungstenite::Message;
 
+use bridge_proto::{
+    events::{BridgeCommand, BridgeEvent, RosterEntry, SendTarget, Snapshot},
+    StateSnapshot,
+};
+
 use crate::mixer::Mixer;
 use crate::protocol::{self, *};
-use crate::ts_client::{BridgeCommand, BridgeEvent, SendTarget, Snapshot};
 
 pub async fn run(
     bind: SocketAddr,
-    mixer: Arc<Mutex<Mixer>>,
+    mixer: std::sync::Arc<tokio::sync::Mutex<Mixer>>,
     cmd_tx: mpsc::UnboundedSender<BridgeCommand>,
     event_tx: broadcast::Sender<BridgeEvent>,
     tts_webhook_url: Option<String>,
-    snapshot: Arc<Mutex<Snapshot>>,
+    snapshot: std::sync::Arc<tokio::sync::Mutex<Snapshot>>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(bind).await?;
     log::info!("ts-bridge websocket listening on {bind}");
@@ -45,11 +56,11 @@ pub async fn run(
 
 async fn handle_conn(
     stream: tokio::net::TcpStream,
-    mixer: Arc<Mutex<Mixer>>,
+    mixer: std::sync::Arc<tokio::sync::Mutex<Mixer>>,
     cmd_tx: mpsc::UnboundedSender<BridgeCommand>,
     mut event_rx: broadcast::Receiver<BridgeEvent>,
     tts_webhook_url: Option<String>,
-    snapshot: Arc<Mutex<Snapshot>>,
+    snapshot: std::sync::Arc<tokio::sync::Mutex<Snapshot>>,
 ) -> anyhow::Result<()> {
     let ws = tokio_tungstenite::accept_async(stream).await?;
     let (mut sink, mut source) = ws.split();
@@ -57,7 +68,7 @@ async fn handle_conn(
     // PROTOCOL.md: a client gets the current `state` and `roster` on connect.
     // Both are broadcast only on change, so without this a client joining a
     // settled bridge learns nothing until the next join/leave.
-    let initial = snapshot.lock().unwrap().events();
+    let initial = snapshot.lock().await.events();
 
     let writer = tokio::spawn(async move {
         for ev in initial {
@@ -105,35 +116,35 @@ async fn handle_conn(
                 );
             }
         }
-        dispatch(frame, &mixer, &cmd_tx, &tts_webhook_url);
+        dispatch(frame, &mixer, &cmd_tx, &tts_webhook_url).await;
     }
 
     writer.abort();
     Ok(())
 }
 
-fn dispatch(
+async fn dispatch(
     frame: RawFrame,
-    mixer: &Arc<Mutex<Mixer>>,
+    mixer: &std::sync::Arc<tokio::sync::Mutex<Mixer>>,
     cmd_tx: &mpsc::UnboundedSender<BridgeCommand>,
     tts_webhook_url: &Option<String>,
 ) {
     match frame.msg_type {
         TYPE_VOICE_AUDIO => {
             let samples = pcm16_to_samples(&frame.payload);
-            mixer.lock().unwrap().push_voice(&samples);
+            mixer.lock().await.push_voice(&samples);
         }
         TYPE_MUSIC_AUDIO => {
             let samples = pcm16_to_samples(&frame.payload);
-            mixer.lock().unwrap().push_music(&samples);
+            mixer.lock().await.push_music(&samples);
         }
         TYPE_MUSIC_GAIN => {
             if let Ok(h) = serde_json::from_value::<MusicGainHeader>(frame.header) {
-                mixer.lock().unwrap().set_music_gain(h.gain);
+                mixer.lock().await.set_music_gain(h.gain);
             }
         }
         TYPE_CLEAR_VOICE => {
-            mixer.lock().unwrap().clear_voice();
+            mixer.lock().await.clear_voice();
         }
         TYPE_SAY_TEXT => {
             if let Ok(h) = serde_json::from_value::<SayTextHeader>(frame.header) {
@@ -171,8 +182,8 @@ fn dispatch(
                 let target = match &h.target {
                     serde_json::Value::String(s) if s == "channel" => Some(SendTarget::Channel),
                     serde_json::Value::String(s) if s == "server" => Some(SendTarget::Server),
-                    serde_json::Value::String(s) => s.parse::<u16>().ok().map(SendTarget::Client),
-                    serde_json::Value::Number(n) => n.as_u64().map(|v| SendTarget::Client(v as u16)),
+                    serde_json::Value::String(s) => s.parse::<u16>().ok().map(|id| SendTarget::Client { id }),
+                    serde_json::Value::Number(n) => n.as_u64().map(|v| SendTarget::Client { id: v as u16 }),
                     _ => None,
                 };
                 if let Some(target) = target {
@@ -210,28 +221,29 @@ fn encode_event(ev: &BridgeEvent) -> Vec<u8> {
             },
             &[],
         ),
-        BridgeEvent::State { connected, channel_id, channel_name, own_client_id } => encode_frame(
-            TYPE_STATE,
-            &StateHeader {
-                connected: *connected,
-                channel_id: *channel_id,
-                channel_name: channel_name.clone(),
-                own_client_id: *own_client_id,
-            },
-            &[],
-        ),
+        BridgeEvent::State(StateSnapshot { connected, channel_id, channel_name, own_client_id }) => {
+            encode_frame(
+                TYPE_STATE,
+                &StateHeader {
+                    connected: *connected,
+                    channel_id: *channel_id,
+                    channel_name: channel_name.clone(),
+                    own_client_id: *own_client_id,
+                },
+                &[],
+            )
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::RosterEntry;
 
     /// A client connecting to a settled bridge is owed the current state and
     /// roster, not silence until the next join/leave.
-    #[test]
-    fn snapshot_yields_state_then_roster() {
+    #[tokio::test]
+    async fn snapshot_yields_state_then_roster() {
         let snap = Snapshot {
             connected: true,
             channel_id: 7,
@@ -256,8 +268,6 @@ mod tests {
         assert_eq!(state.header["connected"], serde_json::json!(true));
         assert_eq!(state.header["channelId"], serde_json::json!(7));
         assert_eq!(state.header["channelName"], serde_json::json!("General Shit"));
-        // The roster carries the bot too; this is how the client tells which
-        // entry is us, so the state frame that precedes it must say.
         assert_eq!(state.header["ownClientId"], serde_json::json!(11));
 
         let roster = protocol::decode_frame(&frames[1]).expect("roster frame decodes");
@@ -270,14 +280,12 @@ mod tests {
     /// Before the first successful connect there is nothing to report, but the
     /// client still gets a frame saying so rather than an open socket that
     /// never speaks.
-    #[test]
-    fn default_snapshot_reports_disconnected() {
+    #[tokio::test]
+    async fn default_snapshot_reports_disconnected() {
         let frames: Vec<Vec<u8>> = Snapshot::default().events().iter().map(encode_event).collect();
         let state = protocol::decode_frame(&frames[0]).expect("state frame decodes");
         assert_eq!(state.msg_type, TYPE_STATE);
         assert_eq!(state.header["connected"], serde_json::json!(false));
-        // No connection, no client id: the key is absent rather than 0, which
-        // is a valid-looking id a consumer would happily filter on.
         assert!(state.header.get("ownClientId").is_none());
 
         let roster = protocol::decode_frame(&frames[1]).expect("roster frame decodes");
