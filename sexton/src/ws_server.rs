@@ -2,13 +2,29 @@
 //! `bridge-test`, …) connect here — never expose this port outside the
 //! compose network.
 //!
-//! **PHA-3341 change.** The WS server still speaks the same protocol and
-//! has the same clients. What changed is where the events come from: not
-//! from an in-process `ts_client::run` that owns the `tsclientlib`
-//! connection, but from `bridge_client::run`, which dials the Sexton's
-//! Unix-domain socket and fans out `bridge_proto::BridgeEvent`s over a
-//! broadcast channel. The WS server forwards each event to the WS frame
-//! shape 1:1 — the type bytes line up — so `encode_event` is unchanged.
+//! **PHA-3341** moved this file's events off an in-process `ts_client::run`
+//! and onto a Unix-socket IPC client (`bridge_client.rs`) dialing a
+//! separate `ts-bridge` container, because two processes each held their
+//! own `tsclientlib::Connection` under two different bot identities and
+//! Brandon flagged the double roster entry.
+//!
+//! **PHA-3342** removes the second process entirely — "one docker
+//! container / one bot account" (Brandon, PHA-3342) — so this server now
+//! runs inside the Sexton binary and gets its events straight from the
+//! Sexton's own connection event loop (`audio.rs`) over the same
+//! `broadcast`/`mpsc` channel shapes `bridge_client.rs` used to bridge
+//! across the socket. The WS server itself, and the wire protocol it
+//! speaks to external clients, are unchanged: `encode_event` still maps
+//! `bridge_proto::BridgeEvent` to the exact same frame bytes.
+//!
+//! Not implemented: the Unix-socket IPC layer bridge-proto's `codec`/
+//! `handshake` modules describe. With no second process left to dial it,
+//! adding a self-dial loopback socket inside one binary would be an extra
+//! moving part (accept loop, framing, reconnect/backoff) that buys nothing
+//! — the broadcast/mpsc channels below already are the in-process version
+//! of the exact same fan-out. See the PR description for the fuller
+//! reasoning; `bridge-proto`'s `codec.rs`/`handshake.rs` stay in the
+//! workspace, tested, in case a future split needs them again.
 
 use std::net::SocketAddr;
 
@@ -16,6 +32,7 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::tungstenite::Message;
+use tracing::{debug, info, warn};
 
 use bridge_proto::{
     events::{BridgeCommand, BridgeEvent, RosterEntry, SendTarget, Snapshot},
@@ -34,7 +51,7 @@ pub async fn run(
     snapshot: std::sync::Arc<tokio::sync::Mutex<Snapshot>>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(bind).await?;
-    log::info!("ts-bridge websocket listening on {bind}");
+    info!("sexton audio bridge websocket listening on {bind}");
 
     loop {
         let (stream, peer) = listener.accept().await?;
@@ -48,7 +65,7 @@ pub async fn run(
         let snapshot = snapshot.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_conn(stream, mixer, cmd_tx, event_rx, tts, snapshot).await {
-                log::info!("ws client {peer} disconnected: {e}");
+                info!("ws client {peer} disconnected: {e}");
             }
         });
     }
@@ -100,7 +117,7 @@ async fn handle_conn(
         let frame = match protocol::decode_frame(&bytes) {
             Ok(f) => f,
             Err(e) => {
-                log::warn!("bad frame from client: {e}");
+                warn!("bad frame from client: {e}");
                 continue;
             }
         };
@@ -109,7 +126,7 @@ async fn handle_conn(
         if matches!(frame.msg_type, TYPE_VOICE_AUDIO | TYPE_MUSIC_AUDIO) {
             audio_frames += 1;
             if audio_frames % 50 == 0 {
-                log::debug!(
+                debug!(
                     "inbound audio: {audio_frames} frames so far, last type=0x{:02x} payload={} bytes",
                     frame.msg_type,
                     frame.payload.len()
@@ -149,13 +166,13 @@ async fn dispatch(
         TYPE_SAY_TEXT => {
             if let Ok(h) = serde_json::from_value::<SayTextHeader>(frame.header) {
                 match tts_webhook_url {
-                    Some(url) => log::warn!(
+                    Some(url) => warn!(
                         "say_text received (\"{}\") but the TTS webhook client isn't wired up yet \
                          (configured URL: {url}) — push voice_audio directly for now",
                         h.text
                     ),
-                    None => log::warn!(
-                        "say_text received (\"{}\") but TTS_WEBHOOK_URL is not configured — \
+                    None => warn!(
+                        "say_text received (\"{}\") but --tts-webhook-url is not configured — \
                          push voice_audio directly for now",
                         h.text
                     ),
@@ -189,11 +206,11 @@ async fn dispatch(
                 if let Some(target) = target {
                     let _ = cmd_tx.send(BridgeCommand::SendText { target, text: h.text });
                 } else {
-                    log::warn!("send_text: unrecognized target {:?}", h.target);
+                    warn!("send_text: unrecognized target {:?}", h.target);
                 }
             }
         }
-        other => log::debug!("unknown inbound frame type 0x{other:02x}, ignoring"),
+        other => debug!("unknown inbound frame type 0x{other:02x}, ignoring"),
     }
 }
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """PHA-3216 acceptance capture: record what the channel actually hears.
 
-Connects to a *listener* ts-bridge's WebSocket (a second bridge instance
-sitting in the same TS6 channel as the bridge under test), records every
+Connects to a *listener* Sexton's audio bridge WebSocket (a second Sexton
+instance sitting in the same TS6 channel as the bridge under test), records every
 `speaker_audio` frame it emits, and measures the 220 Hz music lane and the
 440 Hz voice lane out of the decoded PCM.
 

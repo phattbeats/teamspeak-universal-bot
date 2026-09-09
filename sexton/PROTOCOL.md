@@ -1,4 +1,11 @@
-# ts-bridge WebSocket protocol
+# Sexton audio/voice bridge WebSocket protocol
+
+**PHA-3342**: this used to be `ts-bridge/PROTOCOL.md`, served by a separate
+`plnt-ts-bridge` container. That container is gone — Brandon's ask was one
+docker container, one bot account (PHA-3341/PHA-3342) — and this WebSocket
+server now runs inside the Sexton binary itself, on the same port. Nothing
+below changed for an external consumer: same frames, same port, same
+behaviour. Only the host process did.
 
 One WebSocket, binary frames only (no text frames). Every frame is:
 
@@ -33,7 +40,7 @@ Message types the bridge accepts (`in`):
 | 0x82 | `music_audio` | `{}`                                              | pcm16 (music lane)   |
 | 0x83 | `music_gain`  | `{"gain":f32}` (0..1, multiplies the music lane before ducking) | — |
 | 0x84 | `clear_voice` | `{}` (barge-in: drop all queued voice samples)   | —                    |
-| 0x85 | `say_text`    | `{"text":string}` (fallback TTS hook; only does anything if `TTS_WEBHOOK_URL` is configured, see README) | — |
+| 0x85 | `say_text`    | `{"text":string}` (fallback TTS hook; only does anything if `--tts-webhook-url` is configured, see README) | — |
 | 0x86 | `join`        | `{"channel":string}` (name or numeric id as a string) | —               |
 | 0x87 | `mute`        | `{"muted":bool}` (stops/resumes outbound audio; does not touch the TS mute flag) | — |
 | 0x88 | `poke`        | `{"clientId":u16,"text":string}`                  | —                    |
@@ -63,9 +70,9 @@ Two lanes feed one Opus stream sent to the channel:
   (default 1.0), then by the duck envelope.
 
 Duck envelope: target gain is `duckGain` (default `0.25`, override via
-`DUCK_GAIN` env var) whenever the voice lane has queued samples *or* any
-human `speaker_start` is currently active in the channel; otherwise target
-is `1.0`. The envelope ramps linearly toward the target, reaching it within
+`--duck-gain`) whenever the voice lane has queued samples *or* any human
+`speaker_start` is currently active in the channel; otherwise target is
+`1.0`. The envelope ramps linearly toward the target, reaching it within
 50 ms on the way down (2 × 20 ms frames) and within 800 ms on the way back up
 (40 × 20 ms frames), per the spec.
 

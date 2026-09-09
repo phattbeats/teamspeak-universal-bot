@@ -1,11 +1,10 @@
 //! Manual verification client for PHA-3174's acceptance test.
 //!
-//! Connects to a running `ts-bridge`, plays a continuous 220 Hz tone into
+//! Connects to a running Sexton, plays a continuous 220 Hz tone into
 //! `music_audio` and 2 s bursts of a 440 Hz tone into `voice_audio` every
-//! 4 s, and logs every frame it receives
-//! back (`speaker_audio`, `roster`, `state`, `text_message`) so a human (or
-//! a second voicespike-based listener sitting in the same TS channel) can
-//! confirm:
+//! 4 s, and logs every frame it receives back (`speaker_audio`, `roster`,
+//! `state`, `text_message`) so a human (or a second voicespike-based
+//! listener sitting in the same TS channel) can confirm:
 //!   (a) both tones are audible in the channel,
 //!   (b) the 220 Hz tone drops by ~12 dB while the 440 Hz tone plays,
 //!   (c) per-speaker frames from a real talker arrive tagged with its
@@ -13,8 +12,13 @@
 //!
 //! This tool only drives the WebSocket side — (a) and (b) require an actual
 //! TS6 server and a second client actually listening in-channel, which this
-//! sandbox has no network path to. Run it against a live `ts-bridge`
-//! deployment (e.g. `ws://ts-bridge:9099`).
+//! sandbox has no network path to.
+//!
+//! PHA-3342: this used to dial a standalone `ts-bridge` container; the WS
+//! server it drives now lives inside the Sexton binary, same port, same
+//! wire format (`ts-bridge/PROTOCOL.md` moved to `sexton/PROTOCOL.md`
+//! unchanged). Nothing about this tool's own protocol handling needed to
+//! change — it only ever spoke WebSocket, never tsclientlib directly.
 //!
 //!     cargo run --bin bridge-test -- ws://127.0.0.1:9099 30
 
@@ -61,13 +65,11 @@ fn pcm16(samples: &[i16]) -> Vec<u8> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
     let mut args = std::env::args().skip(1);
     let url = args.next().unwrap_or_else(|| "ws://127.0.0.1:9099".to_string());
     let seconds: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(30);
 
-    log::info!("connecting to {url}");
+    println!("connecting to {url}");
     let (ws, _) = tokio_tungstenite::connect_async(&url).await?;
     let (mut sink, mut source) = ws.split();
 
@@ -82,19 +84,19 @@ async fn main() -> anyhow::Result<()> {
             let header: serde_json::Value =
                 serde_json::from_slice(&bytes[5..header_end]).unwrap_or_default();
             match msg_type {
-                0x01 => log::info!(
+                0x01 => println!(
                     "speaker_audio clientId={} nickname={} seq={} bytes={}",
                     header["clientId"],
                     header["nickname"],
                     header["seq"],
                     bytes.len() - header_end
                 ),
-                0x02 => log::info!("speaker_start {header}"),
-                0x03 => log::info!("speaker_stop {header}"),
-                0x04 => log::info!("roster {header}"),
-                0x05 => log::info!("text_message {header}"),
-                0x06 => log::info!("state {header}"),
-                other => log::info!("unknown out frame type 0x{other:02x} header={header}"),
+                0x02 => println!("speaker_start {header}"),
+                0x03 => println!("speaker_stop {header}"),
+                0x04 => println!("roster {header}"),
+                0x05 => println!("text_message {header}"),
+                0x06 => println!("state {header}"),
+                other => println!("unknown out frame type 0x{other:02x} header={header}"),
             }
         }
     });
@@ -119,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
         let voice_on = (i % CYCLE_FRAMES) >= (CYCLE_FRAMES - VOICE_ON_FRAMES);
         if voice_on != voice_was_on {
             voice_was_on = voice_on;
-            log::info!(
+            println!(
                 "t={:.1}s voice 440 Hz {} — expect 220 Hz music {}",
                 i as f32 * 0.02,
                 if voice_on { "ON" } else { "OFF" },
@@ -138,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    log::info!("done sending tones; ctrl-c to stop listening");
+    println!("done sending tones; ctrl-c to stop listening");
     let _ = reader.await;
     Ok(())
 }

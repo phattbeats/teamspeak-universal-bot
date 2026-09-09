@@ -66,11 +66,14 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: sexton
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      # PHA-3342: sexton now has a workspace path dependency on
+      # `bridge-proto` (`../bridge-proto`), whose Cargo.toml inherits
+      # `edition`/`license`/`publish` from the repo-root workspace
+      # Cargo.toml — both have to be inside the build context. Matches
+      # `sexton/deploy/sexton-compose.yml`'s `build:` context/dockerfile
+      # split.
       - name: Build image (no push — no registry credentials wired yet)
-        run: docker build -t phattbeats/sexton:ci .
+        run: docker build -t phattbeats/sexton:ci -f sexton/Dockerfile .

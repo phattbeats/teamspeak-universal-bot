@@ -101,6 +101,37 @@ The client-side book's `Channel` has no `description` field; the description arr
 (`OutChannelDescriptionRequestMessage`). `send-test` uses that to read back what the server
 actually stored.
 
+## Audio / voice bridge (PHA-3342)
+
+Brandon: "i want everything running off of one docker container / one bot
+account." Before this, the Sexton connected as `Sexton` for text and a
+separate `ts-bridge` container connected as `Sexton-Bridge` for audio — two
+client slots in the channel roster for one bot. PHA-3341 collapsed that to
+one `tsclientlib::Connection`, fronted by a Unix-socket IPC (`bridge-proto`)
+to a still-separate `ts-bridge` container. PHA-3342 removes that second
+container: the mixer, the Opus codec, and the public WebSocket server
+(`:9099`, wire format in [`PROTOCOL.md`](PROTOCOL.md)) now run inside this
+binary, wired directly to the Sexton's own `tsclientlib::Connection` and
+20 ms send/receive tick (`src/audio.rs`, `src/mixer.rs`, `src/ws_server.rs`,
+`src/protocol.rs` — ported from `ts-bridge/src/{ts_client,mixer,ws_server,
+protocol}.rs`).
+
+The bridge-proto crate's Unix-socket layer (`codec.rs`/`handshake.rs`) is
+**not** used here: with no second process left to dial it, a self-dial
+loopback socket inside one binary would be an extra moving part for no
+gain. `BridgeEvent`/`BridgeCommand`/`Snapshot` are reused as the in-process
+vocabulary between the connection's event loop and the WS server instead —
+see the PHA-3342 PR description for the fuller reasoning.
+
+Config, formerly `ts-bridge`'s env vars, is now flags on `sexton` (matching
+its existing CLI style):
+
+| flag | replaces | default |
+| --- | --- | --- |
+| `--ws-bind` | `WS_BIND` | `0.0.0.0:9099` |
+| `--duck-gain` | `DUCK_GAIN` | `0.25` |
+| `--tts-webhook-url` | `TTS_WEBHOOK_URL` | unset (say_text is a log-only stub either way) |
+
 ## Binaries
 
 | binary | purpose |
@@ -108,6 +139,7 @@ actually stored.
 | `sexton` | the bot itself |
 | `probe-channels` | connect, dump the channel tree, exit — used to confirm reachability and channel names |
 | `send-test` | connect as another identity and run a scripted sequence against a channel — used for the verification recipe |
+| `bridge-test` | drive the audio/voice bridge WebSocket from outside — plays test tones, logs every frame received back (PHA-3174 acceptance). Formerly `ts-bridge`'s binary of the same name; see `tools/*.py` for stdlib-Python equivalents that don't need a Rust toolchain. |
 
 `send-test` takes `--script`, a comma-separated list of steps, so a run is deterministic:
 
@@ -131,17 +163,24 @@ See `deploy/sexton-compose.yml`. The image is `phattbeats/sexton:latest`, built 
 - the pinned identity mounted read-only at `/run/secrets/sexton-identity`
 - the avatar baked into the image at `/usr/local/share/sexton-avatar/brandon.png`
 - logs persisted at `/mnt/user/appdata/sexton` (mounted at `/var/sexton-logs`)
+- the audio bridge's WebSocket exposed to sibling containers on `:9099` (PHA-3342)
 
 ```
 sexton -a teamspeak6-server -p 9987 -n Sexton -c "General Shit" \
        -i "$(cat /run/secrets/sexton-identity)" \
        -A /usr/local/share/sexton-avatar/brandon.png \
-       -l /var/sexton-logs
+       -l /var/sexton-logs \
+       --ws-bind 0.0.0.0:9099 \
+       --duck-gain 0.25
 ```
 
 PHATT-RAID has no `docker compose` plugin, so production runs the equivalent `docker run` in
 `deploy/deploy.sh` (copied to `/mnt/user/appdata/sexton/deploy.sh` on the box). Keep it and the
 compose file in step.
+
+PHA-3342: the build context moved from `sexton/` to the repo root (the Sexton now has a
+workspace path dependency on `bridge-proto`) — see `Dockerfile`'s header comment and
+`deploy/sexton-compose.yml`'s `build:` stanza.
 
 ## Liveness
 
@@ -158,4 +197,5 @@ mounted secret were all removed. Restart evidence is the healthcheck plus `docke
 (`connected; channel resolved`, `rehydrated description history from disk`).
 
 Tracking: PHA-3099 (epic), PHA-3173 (this version), PHA-3107 (verification recipe),
+PHA-3341/PHA-3342 (audio bridge consolidation),
 PHA-3217 (description rehydration, hook removal).
