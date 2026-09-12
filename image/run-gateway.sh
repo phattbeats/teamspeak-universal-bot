@@ -43,7 +43,30 @@ fi
 
 mkdir -p "$OPENCLAW_STATE_DIR"
 
+# The gateway token. The gateway refuses to bind without auth ("Refusing to
+# bind gateway to lan without auth"), and the CLI needs the same credential to
+# talk to it — including the `openclaw plugins install` below and the
+# `openclaw channels status` the deploy script polls. Generated once, kept in
+# the mounted state dir at 0600, and exported so every CLI call in this script
+# and every `docker exec … openclaw …` after it just works.
+TOKEN_FILE="${OPENCLAW_STATE_DIR}/gateway-token"
+if [ ! -s "$TOKEN_FILE" ]; then
+  node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("hex"))' > "$TOKEN_FILE"
+  chmod 0600 "$TOKEN_FILE"
+  echo "run-gateway: generated a new gateway token at $TOKEN_FILE"
+fi
+OPENCLAW_GATEWAY_TOKEN=$(cat "$TOKEN_FILE")
+export OPENCLAW_GATEWAY_TOKEN
+
 # --- 1. seed ---
+#
+# The teamspeak channel block is deliberately NOT written here. Config
+# validation rejects `channels.teamspeak` with "unknown channel id: teamspeak"
+# until the plugin that defines that channel is installed, and an invalid
+# config makes `openclaw plugins install` refuse to run — so seeding the
+# channel first deadlocks the very step that would make it valid. The block is
+# applied in step 3, after the link install. This is the whole reason the boot
+# sequence has the shape it does; do not fold the two back together.
 if [ ! -s "$OPENCLAW_CONFIG_PATH" ]; then
   echo "run-gateway: no config at $OPENCLAW_CONFIG_PATH — seeding from /opt/sexton-gateway/openclaw.seed.json"
   # envsubst is not installed and the substitutions are few, so: node, which is
@@ -54,19 +77,30 @@ if [ ! -s "$OPENCLAW_CONFIG_PATH" ]; then
     const fs = require("fs");
     const seed = JSON.parse(fs.readFileSync("/opt/sexton-gateway/openclaw.seed.json", "utf8"));
     const env = process.env;
-    seed.channels.teamspeak.channel = env.SEXTON_CHANNEL || seed.channels.teamspeak.channel;
-    seed.channels.teamspeak.bridgeUrl = `ws://127.0.0.1:${(env.SEXTON_WS_BIND || "0.0.0.0:9099").split(":").pop()}`;
-    seed.channels.teamspeak.voice.streaming.transcription.url =
-      `http://127.0.0.1:${env.WHISPER_PORT || 8080}/inference`;
-    seed.channels.teamspeak.tools.music.extraYtdlpArgs = [
-      "--extractor-args",
-      `youtubepot-bgutilhttp:base_url=http://127.0.0.1:${env.POT_PORT || 4416}`,
-    ];
+    delete seed.channels;                       // applied after the plugin install
     seed.gateway.port = Number(env.SEXTON_GATEWAY_PORT || 18789);
+    seed.gateway.bind = env.SEXTON_GATEWAY_BIND || seed.gateway.bind;
+    seed.gateway.auth = { mode: "token", token: env.OPENCLAW_GATEWAY_TOKEN };
     fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(seed, null, 2) + "\n");
   '
   chmod 0600 "$OPENCLAW_CONFIG_PATH"
 fi
+
+# Keep the auth block in step with the token file even on an existing config —
+# otherwise restoring a config backup without its token file leaves a gateway
+# that will not bind and a CLI that cannot ask it why.
+node -e '
+  const fs = require("fs");
+  const p = process.env.OPENCLAW_CONFIG_PATH;
+  const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+  cfg.gateway = cfg.gateway || {};
+  const want = { mode: "token", token: process.env.OPENCLAW_GATEWAY_TOKEN };
+  if (JSON.stringify(cfg.gateway.auth) !== JSON.stringify(want)) {
+    cfg.gateway.auth = want;
+    fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+    console.log("run-gateway: refreshed gateway.auth from " + process.env.OPENCLAW_STATE_DIR + "/gateway-token");
+  }
+'
 
 # --- 1b. consume a staged credentials import ---
 # image/deploy.sh drops credentials.import.json here rather than merging it
@@ -123,6 +157,45 @@ else
   echo "run-gateway: WARNING — no plugin at $SEXTON_PLUGIN_DIR." >&2
 fi
 
-# --- 3. the gateway ---
+# --- 3. the teamspeak channel block, now that the channel id exists ---
+#
+# Deferred from the seed: see the note in step 1. Only written if the config
+# has no teamspeak block yet, so hand-edits survive every restart — this is a
+# first-boot completion step, not a reconciler.
+if ! node -e '
+  const fs = require("fs");
+  const cfg = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
+  process.exit(cfg.channels && cfg.channels.teamspeak ? 0 : 1);
+'; then
+  echo "run-gateway: applying the teamspeak channel block (loopback)"
+  node -e '
+    const fs = require("fs");
+    const p = process.env.OPENCLAW_CONFIG_PATH;
+    const env = process.env;
+    const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+    const ts = JSON.parse(
+      fs.readFileSync("/opt/sexton-gateway/openclaw.seed.json", "utf8")
+    ).channels.teamspeak;
+    ts.channel = env.SEXTON_CHANNEL || ts.channel;
+    ts.bridgeUrl = `ws://127.0.0.1:${(env.SEXTON_WS_BIND || "0.0.0.0:9099").split(":").pop()}`;
+    ts.voice.streaming.transcription.url =
+      `http://127.0.0.1:${env.WHISPER_PORT || 8080}/inference`;
+    ts.tools.music.extraYtdlpArgs = [
+      "--extractor-args",
+      `youtubepot-bgutilhttp:base_url=http://127.0.0.1:${env.POT_PORT || 4416}`,
+    ];
+    cfg.channels = { ...(cfg.channels || {}), teamspeak: ts };
+    fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+  '
+  chmod 0600 "$OPENCLAW_CONFIG_PATH"
+fi
+
+# Last look before we hand over. If the config is invalid here, the gateway is
+# about to exit and supervisord is about to restart it forever; printing the
+# actual complaint once is the difference between a diagnosable loop and a wall
+# of identical stack traces.
+openclaw config validate || echo "run-gateway: WARNING — config validate failed (see above)." >&2
+
+# --- 4. the gateway ---
 echo "run-gateway: openclaw gateway --bind $SEXTON_GATEWAY_BIND --port $SEXTON_GATEWAY_PORT (state: $OPENCLAW_STATE_DIR)"
 exec openclaw gateway --bind "$SEXTON_GATEWAY_BIND" --port "$SEXTON_GATEWAY_PORT"

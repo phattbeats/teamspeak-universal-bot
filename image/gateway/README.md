@@ -25,6 +25,37 @@ If you ever put the container-name URLs back, you are rolling back to (b) and
 you also have to re-expose the ports. `SEXTON_GATEWAY_ENABLED=0` is the
 supported way to do that rollback without rebuilding.
 
+## The boot sequence is ordered, and the order is load-bearing
+
+`run-gateway.sh` does five things, and three of them are in the order they are
+because the first live boot proved the other orders do not work:
+
+1. **Gateway token.** The gateway refuses to bind at all without auth
+   (`Refusing to bind gateway to lan without auth`), and the CLI needs the same
+   credential to talk to it — including the `plugins install` in step 3 and the
+   `channels status` the deploy script polls to decide when the cutover is
+   safe. Generated once into `/config/openclaw/gateway-token` at 0600 and
+   exported. `gateway.auth` is re-derived from that file on every boot, so
+   restoring a config backup without its token file cannot strand you with a
+   gateway that will not bind and a CLI that cannot ask it why.
+2. **Seed the config — without the teamspeak channel block.** See below.
+3. **Merge any staged credentials import.**
+4. **`openclaw plugins install --link`.**
+5. **Now** write the teamspeak channel block, validate, and exec the gateway.
+
+### Why the channel block is written last
+
+Config validation rejects `channels.teamspeak` with `unknown channel id:
+teamspeak` until the plugin that *defines* that channel id is installed — and
+an invalid config makes `openclaw plugins install` refuse to run. Seeding the
+channel first therefore deadlocks the exact step that would make it valid. The
+first option (a) boot did precisely this and looped.
+
+So the seed is written without `channels`, the plugin is linked, and only then
+is the block applied — and only if there is not one already, so hand-edits
+survive restarts. This is a first-boot completion step, not a reconciler. Do
+not fold steps 2 and 5 back together.
+
 ## What the seed deliberately does NOT contain
 
 Model credentials and an agent definition.
