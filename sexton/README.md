@@ -10,7 +10,12 @@ fact — and tells the room he is doing it.
 
 1. **Catch-up PM.** When a client arrives in the watched channel — either by connecting straight
    into it or by moving in from elsewhere — it gets a private message with the last 15 messages
-   (or a "nothing logged yet" note). Rate-limited to one PM per client per 10 minutes so
+   (or a "nothing logged yet" note). The message ring behind it is in memory only (last 200), so
+   on connect it is **rehydrated from the disk log below** — yesterday's file then today's,
+   newest lines kept (PHA-3217). Without that the first catch-up after every container restart
+   is empty. The disk format *is* the wire format, so this is a parse of
+   `HH:MM  nickname: message`, not a second serialisation, and it is fail-open: a missing,
+   unreadable or malformed log is skipped and never stops the bot connecting. Rate-limited to one PM per client per 10 minutes so
    channel-hopping does not spam, and suppressed for the first five seconds after the bot itself
    connects so a restart does not PM everyone already in the room.
 2. **Welcome PM.** The first time a client is ever caught up, and only the first time, the
@@ -28,7 +33,8 @@ fact — and tells the room he is doing it.
 **PHA-3424 removed the rolling log in the channel description** (PHA-3173/PHA-3217): every
 `channeledit` fired a channel-edit notification sound in TS6, and the catch-up PM and disk log
 above already cover the same ground. There is no longer any per-message or on-connect
-`channeledit` at all — the channel description is untouched by the bot.
+`channeledit` at all — the channel description is untouched by the bot. The on-connect
+rehydration survives the removal: it feeds the catch-up PM, not just the old description.
 
 ### HARD RULE: the welcome PM ships in two stages
 
@@ -184,9 +190,9 @@ back online" comment to Paperclip with a bearer mounted from the host, and that 
 it 403'd silently on every connect. A liveness signal that fails silently is worse than none, and
 re-minting the key needs board-level access the bot does not have, so the hook, the script and the
 mounted secret were all removed. Restart evidence is the healthcheck plus `docker logs sexton`
-(`connected; channel resolved`).
+(`connected; channel resolved`, `rehydrated message history from disk`).
 
 Tracking: PHA-3099 (epic), PHA-3173 (this version), PHA-3107 (verification recipe),
 PHA-3341/PHA-3342 (audio bridge consolidation),
-PHA-3217 (description rehydration, hook removal — the rehydration half was removed by PHA-3424),
+PHA-3217 (history rehydration, hook removal),
 PHA-3424 (removed the per-message/on-connect channel description rewrite).

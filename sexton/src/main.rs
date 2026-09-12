@@ -7,10 +7,11 @@
 //!    welcome PM that says out loud what the Sexton does (PHA-3305).
 //! 2. Full markdown log on disk, one file per channel per day.
 //!
-//! PHA-3424 removed the per-message channel description rewrite (PHA-3173,
-//! rehydrated on connect by PHA-3217): every edit fired a channel-edit
+//! PHA-3424 removed the per-message channel description rewrite (PHA-3173) and
+//! the on-connect push that went with it: every edit fired a channel-edit
 //! notification sound in TS6, and the catch-up PM and disk log already cover
-//! the same ground.
+//! the same ground. PHA-3217's on-connect rehydration of the message ring
+//! stays — it feeds the catch-up PM, not just the old description.
 //!
 //! HARD RULE: only real user-authored text messages sent to the watched channel
 //! are logged or displayed. Joins, leaves, moves, mutes, aways, kicks, bans,
@@ -78,8 +79,8 @@ use mixer::Mixer;
 /// in the path would make it a lie.
 const WELCOME_PM: &str = "Evening. I'm the Sexton — I keep the records for this hall.\n\n\
                           One thing worth knowing before you settle in: everything typed in \
-                          the channel goes into the log, and the last twenty lines sit in the \
-                          channel description where you can see them.\n\n\
+                          the channel goes into the log, and I'll send you the last of it \
+                          whenever you walk in.\n\n\
                           Ask me for something out of the log and I'll go down and find it.";
 /// How many messages the catch-up PM includes.
 const CATCHUP_PM_COUNT: usize = 15;
@@ -190,10 +191,41 @@ struct LoggedMessage {
 
 impl LoggedMessage {
     /// The one rendering of a message. The catch-up PM and the on-disk log
-    /// both go through this, so there is exactly one wire format.
+    /// both go through this, so `parse_log_line` can read the log back without
+    /// a second serialisation format (PHA-3217).
     fn render_line(&self) -> String {
         format!("{}  {}: {}\n", self.time_label, self.nickname, self.text)
     }
+}
+
+/// Parse one rendered log line — `HH:MM  nickname: message` — back into a
+/// `LoggedMessage`. Returns `None` for anything not in that exact shape (blank
+/// lines, hand-added markdown, a nickname containing a colon): the caller skips
+/// those rather than failing.
+fn parse_log_line(line: &str) -> Option<LoggedMessage> {
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let (time_label, rest) = line.split_once("  ")?;
+    let b = time_label.as_bytes();
+    if b.len() != 5
+        || !b[0].is_ascii_digit()
+        || !b[1].is_ascii_digit()
+        || b[2] != b':'
+        || !b[3].is_ascii_digit()
+        || !b[4].is_ascii_digit()
+    {
+        return None;
+    }
+    // Split on the first colon, so the nickname can never contain one — same
+    // as the `([^:]+): (.*)` the renderer produces.
+    let (nickname, text) = rest.split_once(':')?;
+    if nickname.is_empty() {
+        return None;
+    }
+    Some(LoggedMessage {
+        time_label: time_label.to_string(),
+        nickname: nickname.to_string(),
+        text: text.strip_prefix(' ').unwrap_or(text).to_string(),
+    })
 }
 
 struct ChannelState {
@@ -250,6 +282,57 @@ impl ChannelState {
         entry
     }
 
+    /// Seed the in-memory ring from the on-disk log so a restart does not blank
+    /// the catch-up PM (PHA-3217). The ring is memory-only, so without this the
+    /// first joiner after a restart gets an empty catch-up for a channel the
+    /// markdown log still has the day's messages for.
+    ///
+    /// Yesterday's file is read first, so a restart early in the day still has
+    /// something to send; the newest `HISTORY_CAP` lines win, so once today's
+    /// log is long enough yesterday's drops out on its own.
+    ///
+    /// Fail-open by contract: a missing, unreadable or malformed log leaves the
+    /// history as it is and must never stop the bot connecting.
+    fn seed_history_from_disk(&mut self) {
+        let dir = self.log_dir.join(&self.channel_name);
+        let today = Local::now().date_naive();
+        let yesterday = today.pred_opt().unwrap_or(today);
+
+        let mut parsed: Vec<LoggedMessage> = Vec::new();
+        let mut skipped = 0usize;
+        for day in [yesterday, today] {
+            let path = dir.join(format!("{}.md", day.format("%Y-%m-%d")));
+            let body = match std::fs::read_to_string(&path) {
+                Ok(body) => body,
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        warn!(error = %e, path = %path.display(), "reading the log back for the history ring failed");
+                    }
+                    continue;
+                }
+            };
+            for line in body.lines() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                match parse_log_line(line) {
+                    Some(entry) => parsed.push(entry),
+                    None => skipped += 1,
+                }
+            }
+        }
+
+        // Keep the newest lines the ring has room for.
+        let keep = parsed.len().min(HISTORY_CAP);
+        let start = parsed.len() - keep;
+        for entry in parsed.drain(start..) {
+            self.history.push_back(entry);
+        }
+        if keep > 0 || skipped > 0 {
+            info!(seeded = keep, skipped, dir = %dir.display(), "rehydrated message history from disk");
+        }
+    }
+
     fn welcomed_path(&self) -> PathBuf {
         self.log_dir.join(&self.channel_name).join(WELCOMED_FILE)
     }
@@ -258,8 +341,8 @@ impl ChannelState {
     /// container restart re-introduces the Sexton to everyone who walks in, and
     /// "once" quietly becomes "once per deploy".
     ///
-    /// Fail-open by contract: a missing or unreadable list costs one repeated
-    /// welcome, never a failed connect.
+    /// Fail-open by contract, like `seed_history_from_disk`: a missing or
+    /// unreadable list costs one repeated welcome, never a failed connect.
     fn load_welcomed_from_disk(&mut self) {
         let path = self.welcomed_path();
         match std::fs::read_to_string(&path) {
@@ -558,7 +641,12 @@ async fn run_once(
     let mut state =
         ChannelState::new(channel_id, args.channel.clone(), args.log_dir.clone(), preexisting);
 
-    // Who has already been introduced to the Sexton, so a restart does not
+    // Rehydrate the ring from disk so a restart still has history to catch
+    // joiners up with (PHA-3217). The description is gone, but the catch-up PM
+    // reads the same ring, so dropping this would silently make the first PM
+    // after every restart empty.
+    state.seed_history_from_disk();
+    // And who has already been introduced to the Sexton, so a restart does not
     // re-welcome the room (PHA-3305).
     state.load_welcomed_from_disk();
 
@@ -1003,6 +1091,53 @@ fn run_on_connected_hook(path: &str) {
 mod tests {
     use super::*;
 
+    fn msg(time: &str, nick: &str, text: &str) -> LoggedMessage {
+        LoggedMessage {
+            time_label: time.to_string(),
+            nickname: nick.to_string(),
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn parses_what_it_renders() {
+        for entry in [
+            msg("18:01", "SextonTestA", "one — from A before the mute"),
+            msg("00:00", "nick with spaces", "text: with a colon [and brackets]"),
+            msg("23:59", "nick", ""),
+        ] {
+            let line = entry.render_line();
+            let line = line.trim_end_matches('\n');
+            assert_eq!(parse_log_line(line).as_ref(), Some(&entry), "round-trip of {line:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_lines_that_are_not_log_lines() {
+        for bad in [
+            "",
+            "# 2026-09-06",
+            "not a log line at all",
+            "18:01 SextonTestA: only one space",
+            "8:01  SextonTestA: short clock",
+            "18:xx  SextonTestA: not a clock",
+            "18:01  : empty nickname",
+        ] {
+            assert!(parse_log_line(bad).is_none(), "should not parse {bad:?}");
+        }
+    }
+
+    fn seeded_from(dir: &std::path::Path, channel: &str) -> Vec<LoggedMessage> {
+        let mut state = ChannelState::new(
+            ChannelId(0),
+            channel.to_string(),
+            dir.to_path_buf(),
+            HashSet::new(),
+        );
+        state.seed_history_from_disk();
+        state.history.into_iter().collect()
+    }
+
     /// A scratch dir under the OS temp dir, keyed by test name so parallel
     /// tests don't collide. Removed and recreated on every run.
     fn scratch(name: &str) -> PathBuf {
@@ -1010,6 +1145,70 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn write_day(dir: &std::path::Path, channel: &str, date: chrono::NaiveDate, body: &str) {
+        let day_dir = dir.join(channel);
+        std::fs::create_dir_all(&day_dir).unwrap();
+        std::fs::write(day_dir.join(format!("{}.md", date.format("%Y-%m-%d"))), body).unwrap();
+    }
+
+    #[test]
+    fn seeds_todays_log_in_order_and_skips_junk() {
+        let dir = scratch("seed-today");
+        let channel = "General Shit"; // the real channel name, spaces and all
+        let today = Local::now().date_naive();
+        write_day(
+            &dir,
+            channel,
+            today,
+            "18:01  SextonTestA: one\n\n### hand-added heading\n18:01  SextonTestB: two\n18:01  SextonTestA: three\n",
+        );
+
+        let seeded = seeded_from(&dir, channel);
+        assert_eq!(
+            seeded,
+            vec![
+                msg("18:01", "SextonTestA", "one"),
+                msg("18:01", "SextonTestB", "two"),
+                msg("18:01", "SextonTestA", "three"),
+            ]
+        );
+    }
+
+    #[test]
+    fn seeds_yesterday_before_today() {
+        let dir = scratch("seed-yesterday");
+        let channel = "chan";
+        let today = Local::now().date_naive();
+        let yesterday = today.pred_opt().unwrap();
+        write_day(&dir, channel, yesterday, "23:59  A: from yesterday\n");
+        write_day(&dir, channel, today, "00:01  B: from today\n");
+
+        let seeded = seeded_from(&dir, channel);
+        assert_eq!(
+            seeded,
+            vec![msg("23:59", "A", "from yesterday"), msg("00:01", "B", "from today")]
+        );
+    }
+
+    #[test]
+    fn seeding_is_trimmed_to_the_history_cap() {
+        let dir = scratch("seed-budget");
+        let channel = "chan";
+        let today = Local::now().date_naive();
+        // 400 lines — comfortably over HISTORY_CAP.
+        let body: String = (0..400)
+            .map(|i| format!("12:00  spammer: message number {i:04} padding padding\n"))
+            .collect();
+        write_day(&dir, channel, today, &body);
+
+        let seeded = seeded_from(&dir, channel);
+        assert!(!seeded.is_empty(), "should have seeded something");
+        assert!(seeded.len() <= HISTORY_CAP, "seeded {} > HISTORY_CAP", seeded.len());
+        // The newest lines are the ones kept.
+        assert_eq!(seeded.last().unwrap().text, "message number 0399 padding padding");
+        assert_eq!(seeded.len(), HISTORY_CAP);
     }
 
     fn state_in(dir: &std::path::Path, channel: &str) -> ChannelState {
@@ -1025,10 +1224,13 @@ mod tests {
             WELCOME_PM,
             "Evening. I'm the Sexton — I keep the records for this hall.\n\n\
              One thing worth knowing before you settle in: everything typed in the channel goes \
-             into the log, and the last twenty lines sit in the channel description where you can \
-             see them.\n\n\
+             into the log, and I'll send you the last of it whenever you walk in.\n\n\
              Ask me for something out of the log and I'll go down and find it."
         );
+
+        // PHA-3424 removed the rolling channel description; the welcome must
+        // not keep pointing people at it.
+        assert!(!WELCOME_PM.contains("description"), "welcome still points at the description");
 
         // PHA-3228 has not landed: nothing here may promise voice, or that the
         // voice never leaves the box.
@@ -1086,5 +1288,23 @@ mod tests {
         let mut state = state_in(&dir, channel);
         state.load_welcomed_from_disk();
         assert!(state.welcomed.is_empty());
+    }
+
+    #[test]
+    fn missing_and_unreadable_logs_are_fail_open() {
+        // No log dir at all.
+        let dir = scratch("seed-missing");
+        assert!(seeded_from(&dir, "never-logged").is_empty());
+
+        // A directory where the day's log file should be — read_to_string
+        // errors, and seeding must still return quietly.
+        let dir = scratch("seed-unreadable");
+        let channel = "chan";
+        let today = Local::now().date_naive();
+        std::fs::create_dir_all(
+            dir.join(channel).join(format!("{}.md", today.format("%Y-%m-%d"))),
+        )
+        .unwrap();
+        assert!(seeded_from(&dir, channel).is_empty());
     }
 }
