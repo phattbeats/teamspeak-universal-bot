@@ -1,0 +1,38 @@
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "lan",
+    "port": 18789
+  },
+  "channels": {
+    "teamspeak": {
+      "bridgeUrl": "ws://127.0.0.1:9099",
+      "channel": "General Shit",
+      "voice": {
+        "mode": "stt-tts",
+        "streaming": {
+          "transcription": {
+            "provider": "whisper-local",
+            "url": "http://127.0.0.1:8080/inference"
+          },
+          "speech": {
+            "provider": "minimax",
+            "model": "speech-2.8-hd"
+          }
+        }
+      },
+      "tools": {
+        "enabled": true,
+        "music": {
+          "enabled": true,
+          "ytdlpPath": "/usr/local/bin/yt-dlp",
+          "ffmpegPath": "/usr/bin/ffmpeg",
+          "extraYtdlpArgs": [
+            "--extractor-args",
+            "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416"
+          ]
+        }
+      }
+    }
+  }
+}

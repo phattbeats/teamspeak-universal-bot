@@ -18,22 +18,51 @@
 #                   the image rather than being fetched on first boot into a
 #                   host directory somebody can forget to back up.
 #   ffmpeg, yt-dlp  The PHA-3176 music lane, plus the ffmpeg the stt-tts lane
-#   + POT provider  decodes TTS with. See the long note in image/README.md
-#                   about WHERE these run — they are spawned by the plugin, in
-#                   the gateway, so the image also exports them at
-#                   /opt/sexton-tools for the gateway to bind-mount. The bgutil
-#                   POT provider is a network service and runs here.
+#   + POT provider  decodes TTS with. The plugin spawns ffmpeg and yt-dlp as
+#                   child processes, and under option (a) the plugin runs in
+#                   THIS container, so they are simply on PATH here. No export
+#                   directory, no bind-mount into another container.
+#   openclaw        A gateway of its own, running the `teamspeak` channel
+#   + the plugin    plugin, installed by the PHA-3326 `--link` path at boot.
+#                   This is option (a), per Brandon 2026-09-12. See the note
+#                   below and image/README.md.
 #   supervisord     PID 1. `autorestart=true` per program, so whisper OOMing on
 #                   a long track does not take the bot out of the channel.
 #
-# NOT inside: a second OpenClaw gateway. That was option (a) in the issue, and
-# the issue's own escape hatch applies — it doubles the gateway's config
-# burden. The reasoning is written out in full in image/README.md under
-# "Where the OpenClaw plugin runs"; read that before trying to move it.
+# On option (a). The issue offered an escape hatch — prefer (a) "unless it
+# doubles the gateway's config burden" — and an earlier revision of this file
+# took it and shipped (b). Brandon overruled that on 2026-09-12: option (a),
+# and do not wire the bridge socket out to the main gateway. So the gateway
+# lives here now. What that buys, concretely:
+#
+#   * The bridge WebSocket, whisper and the POT provider stop being a network
+#     surface at all — the only thing that dials them is a process in this
+#     container, over loopback. Under (b) they had to listen on 0.0.0.0 for a
+#     peer on `phattvip`.
+#   * ffmpeg/yt-dlp stop needing the /opt/sexton-tools export and the two
+#     read-only path mappings on the OpenClaw container that (b) required a
+#     human to add in the Unraid GUI. That was the last manual step in this
+#     issue and it is now gone.
+#   * The main gateway's teamspeak channel must be DISABLED at cutover. Two
+#     gateways on one bridge socket is two answers to every message.
+#
+# The cost (b) was written to avoid is real and unchanged: a second gateway
+# needs its own config, state dir and model credentials, and PHA-3326's finding
+# stands — a core bump does not update a managed channel plugin, so both
+# gateways need checking after an upgrade. image/deploy.sh pays most of that
+# once, by importing the model/auth blocks from the main gateway rather than
+# asking anyone to retype them.
 #
 # Build context is the REPO ROOT (bridge-proto and the workspace Cargo.toml are
 # both needed):  docker build -f image/Dockerfile -t phattbeats/sexton:TAG .
 # image/build.sh does this for you, on the box.
+
+# The gateway version, used by TWO `FROM` lines (the plugin builder and the
+# runtime). It has to be declared up here, before the first FROM, to be global
+# — an ARG written between stages belongs to the stage above it and would not
+# resolve in a later FROM, which fails as a silent `:` tag rather than an error.
+# Keep it equal to the main gateway: docker exec OpenClaw openclaw --version.
+ARG OPENCLAW_VERSION=2026.9.3
 
 # --------------------------------------------------------------------------
 # 1. The Rust build. Same toolchain and same system deps as the old
@@ -124,15 +153,62 @@ RUN set -eu; \
     ls -a /out | head
 
 # --------------------------------------------------------------------------
-# 5. The runtime image.
+# 5. The OpenClaw teamspeak channel plugin (option (a)).
+#
+#    The plugin ships TypeScript and no compiled dist/, deliberately: PHA-3326
+#    found that `openclaw plugins install --link` is the one install form
+#    exempt from the built-runtime-entry check, and that `git:` installs fail
+#    on this plugin outright. So there is no build step here — only its runtime
+#    dependency (`ws`), installed with the gateway image's own node/npm so the
+#    resolved tree is the one that gateway will actually load.
+#
+#    The source comes from the build CONTEXT at plugin/, not from a git clone:
+#    the plugin repo is private, and a clone inside the build would need a
+#    credential in the image. image/build.sh stages it — from the plugin repo
+#    or from the copy already on the box — before calling docker build.
+#
+#    The standalone-only scaffolding is stripped for the same reason
+#    stage-teamspeak-link.sh strips it: the SDK stubs exist so the plugin can
+#    be tested outside a gateway, and in a runtime install they shadow the real
+#    thing.
 # --------------------------------------------------------------------------
-FROM debian:bookworm-slim
+FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION} AS plugin-builder
+WORKDIR /plugin
+COPY plugin/ /plugin/
+RUN rm -rf /plugin/node_modules /plugin/test/sdk-stubs /plugin/vitest.standalone.config.ts \
+    && npm install --omit=dev --no-audit --no-fund \
+    && test -f /plugin/openclaw.plugin.json \
+    && test -d /plugin/node_modules/ws
+
+# --------------------------------------------------------------------------
+# 6. The runtime image.
+#
+#    The base is the stock OpenClaw gateway image, NOT debian:bookworm-slim.
+#    Option (a) needs a gateway in here, and taking it from upstream's own
+#    image is the only way to be certain this gateway is bit-identical to the
+#    one on the box — an `npm i -g openclaw` would drift the moment upstream
+#    republishes, and the whole point of pinning OPENCLAW_VERSION is that the
+#    two gateways stay on one version.
+#
+#    It is Debian bookworm, glibc 2.36 — the same base the runtime used to be,
+#    which is what keeps the whisper.cpp binaries (built against glibc 2.35 on
+#    Ubuntu 22.04) loadable. If upstream ever rebases onto something OLDER than
+#    bookworm, stage 2's note applies and this breaks; check `ldd --version`
+#    before bumping OPENCLAW_VERSION across a base change.
+#
+#    It also already carries node 24, so the POT provider no longer needs node
+#    copied in from its builder stage.
+# --------------------------------------------------------------------------
+FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION}
 ARG WHISPER_MODEL=ggml-base.en.bin
 
 # ca-certificates/curl: TLS out and the healthcheck.
 # libopus0/libasound2: the Sexton's audio lane (PHA-3342).
 # libstdc++6/libgomp1: whisper-server's only non-bundled deps.
-# ffmpeg: the music lane AND the stt-tts decode path.
+# ffmpeg: the music lane AND the stt-tts decode path. The gateway image has
+#   neither ffmpeg nor yt-dlp — checked, `which` returns nothing in it — which
+#   is why the music lane and the TTS decode path never actually worked under
+#   (b). Installing them here fixes that as a side effect of option (a).
 # supervisor: PID 1.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -144,11 +220,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         supervisor \
     && rm -rf /var/lib/apt/lists/*
-
-# node, for the POT provider service. Copied from the pot-builder's base rather
-# than apt (bookworm ships node 18; the provider wants >=20).
-COPY --from=pot-builder /usr/local/bin/node /usr/local/bin/node
-COPY --from=pot-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 # yt-dlp: the official standalone build. Pinned by tag so a deploy is
 # reproducible; bump it deliberately when YouTube breaks it, which it will.
@@ -193,26 +264,24 @@ COPY --from=pot-builder  /out/                                 /opt/bgutil-pot/
 RUN mkdir -p /etc/yt-dlp/plugins/bgutil \
     && cp -a /opt/bgutil-pot/ytdlp-plugin/yt_dlp_plugins /etc/yt-dlp/plugins/bgutil/ 2>/dev/null || true
 
-# --- the tools the gateway-side plugin has to be able to spawn ---
-# See image/README.md: yt-dlp and ffmpeg are spawned by the plugin, which runs
-# in the OpenClaw gateway. This directory is the export surface — bind-mount it
-# into the gateway and point ytdlpPath/ffmpegPath at it, so the versions the
-# plugin runs are the versions this image pinned and tested.
-RUN mkdir -p /opt/sexton-tools \
-    && cp /usr/local/bin/yt-dlp /opt/sexton-tools/yt-dlp \
-    && cp /usr/bin/ffmpeg       /opt/sexton-tools/ffmpeg \
-    && cp /usr/bin/ffprobe      /opt/sexton-tools/ffprobe \
-    && cp -a /etc/yt-dlp/plugins /opt/sexton-tools/yt-dlp-plugins 2>/dev/null || true
-# Exported as the same /etc/yt-dlp/plugins tree, so the gateway mounts it at
-# that path and needs no flag — see image/deploy.sh.
+# --- the gateway's channel plugin ---
+# Baked in, but NOT installed at build time: `openclaw plugins install --link`
+# writes its install record into the gateway's state dir, which is a mounted
+# volume and therefore empty at build time and persistent at runtime. So the
+# link install happens in run-gateway, on every boot, idempotently — which is
+# also what makes it survive an image bump without a manual reinstall.
+COPY --from=plugin-builder /plugin/ /opt/openclaw-teamspeak-plugin/
 
-COPY image/supervisord.conf   /etc/supervisor/conf.d/sexton.conf
-COPY image/run-sexton.sh      /usr/local/bin/run-sexton
-COPY image/run-whisper.sh     /usr/local/bin/run-whisper
-COPY image/run-pot.sh         /usr/local/bin/run-pot
-COPY image/healthcheck.sh     /usr/local/bin/sexton-healthcheck
+COPY image/supervisord.conf          /etc/supervisor/conf.d/sexton.conf
+COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json
+COPY image/run-sexton.sh             /usr/local/bin/run-sexton
+COPY image/run-whisper.sh            /usr/local/bin/run-whisper
+COPY image/run-pot.sh                /usr/local/bin/run-pot
+COPY image/run-gateway.sh            /usr/local/bin/run-gateway
+COPY image/healthcheck.sh            /usr/local/bin/sexton-healthcheck
 RUN chmod 0755 /usr/local/bin/run-sexton /usr/local/bin/run-whisper \
-               /usr/local/bin/run-pot /usr/local/bin/sexton-healthcheck
+               /usr/local/bin/run-pot /usr/local/bin/run-gateway \
+               /usr/local/bin/sexton-healthcheck
 
 ENV RUST_LOG=info \
     SEXTON_ADDR=teamspeak6-server \
@@ -226,15 +295,26 @@ ENV RUST_LOG=info \
     WHISPER_THREADS=4 \
     WHISPER_LANGUAGE=en \
     POT_PORT=4416 \
-    POT_HOST=0.0.0.0
+    POT_HOST=0.0.0.0 \
+    OPENCLAW_STATE_DIR=/config/openclaw \
+    OPENCLAW_CONFIG_PATH=/config/openclaw/openclaw.json \
+    SEXTON_GATEWAY_PORT=18789 \
+    SEXTON_GATEWAY_BIND=lan \
+    SEXTON_PLUGIN_DIR=/opt/openclaw-teamspeak-plugin
 
-# 9099 the bridge WebSocket (the plugin dials this), 8080 whisper, 4416 POT.
-# None of the three should ever be published to the host: the whole premise of
-# the STT lane is that the channel's audio does not leave the box, and a
-# published port is the easiest way to lose that by accident. Reach them by
-# container name on the `phattvip` network.
-EXPOSE 9099 8080 4416
+# 9099 the bridge WebSocket, 8080 whisper, 4416 POT, 18789 the gateway.
+# None of them should ever be published to the host. Under option (a) the only
+# client of the first three is the gateway in this same container, over
+# loopback — the whole premise of the local STT lane is that the channel's
+# audio does not leave the box, and a published port is the easiest way to lose
+# that by accident. 18789 is the gateway's own control port; publish it only if
+# you actually want a second Control UI, and put auth on it if you do.
+EXPOSE 9099 8080 4416 18789
 
+# /config now holds two things: the bot's TeamSpeak identity (sexton-id.txt)
+# and the gateway's whole config+state tree (openclaw/). Both are the kind of
+# state that is painful to lose — the identity IS the bot's server-side UID,
+# and openclaw/ carries the plugin install record and the channel config.
 VOLUME ["/var/sexton-logs", "/config"]
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=90s \

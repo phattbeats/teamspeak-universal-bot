@@ -50,5 +50,33 @@ else
   echo "whisper: not ready (loading, restarting, or disabled) — not fatal"
 fi
 
+# 4. The in-container OpenClaw gateway (PHA-3428 option (a)) — reported, never
+#    fatal, for the same reason as whisper and more so. The gateway is the
+#    slowest thing in here to come up, and restarting the CONTAINER because it
+#    is mid-boot would drop the bot out of the channel and lose the bridge —
+#    the exact failure the supervisor exists to prevent. supervisord already
+#    restarts it on its own if it actually dies.
+#
+#    Skipped entirely when the gateway is deliberately off (the rollback-to-(b)
+#    switch), so that configuration does not print a permanent scary line.
+: "${SEXTON_GATEWAY_PORT:=18789}"
+: "${SEXTON_GATEWAY_ENABLED:=1}"
+if [ "$SEXTON_GATEWAY_ENABLED" != "1" ]; then
+  echo "gateway: disabled (SEXTON_GATEWAY_ENABLED=0)"
+elif curl -fsS -m 5 -o /dev/null "http://127.0.0.1:${SEXTON_GATEWAY_PORT}/" 2>/dev/null; then
+  echo "gateway: ready"
+else
+  # Same curl-exit-code reasoning as the bridge check above: a refused
+  # connection means not listening; anything else means it spoke and simply did
+  # not like an unauthenticated GET, which is a gateway that is up.
+  curl -sS -m 5 -o /dev/null "http://127.0.0.1:${SEXTON_GATEWAY_PORT}/" 2>/dev/null
+  grc=$?
+  if [ "$grc" = 7 ] || [ "$grc" = 28 ]; then
+    echo "gateway: not listening on :${SEXTON_GATEWAY_PORT} (starting, or crashed) — not fatal"
+  else
+    echo "gateway: ready"
+  fi
+fi
+
 [ "$fail" = 0 ] && echo "healthy: sexton + bridge"
 exit "$fail"
