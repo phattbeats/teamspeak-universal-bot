@@ -542,6 +542,13 @@ fn ts_file_json_label(obj: &serde_json::Value) -> Option<String> {
     })
 }
 
+/// Stand-in for a resolved attachment placeholder while the BBCode and
+/// whitespace passes run. Uses control characters a chat message cannot carry,
+/// and no spaces or brackets, so nothing downstream touches it.
+fn placeholder_sentinel(index: usize) -> String {
+    format!("\u{1}{index}\u{2}")
+}
+
 /// Byte offset just past the `}` closing the object that starts at byte 0 of
 /// `s`, skipping braces that sit inside JSON strings. `None` if unbalanced.
 fn json_object_end(s: &str) -> Option<usize> {
@@ -578,7 +585,12 @@ fn json_object_end(s: &str) -> Option<usize> {
 /// The object is found by scanning for a `{` and matching braces (string-aware),
 /// so it is handled wherever it sits — alone, or embedded in a rehydrated
 /// history line like `04:39  kyleonrye: {"msg_type":...}`.
-fn replace_ts_file_json(input: &str) -> String {
+///
+/// The placeholders themselves are `[...]`-shaped, which the BBCode pass would
+/// then happily strip, so each one is parked in `placeholders` and stands in
+/// the text as a sentinel that survives tag stripping and whitespace collapse.
+/// [`sanitize_message`] puts them back at the very end.
+fn replace_ts_file_json(input: &str, placeholders: &mut Vec<String>) -> String {
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
@@ -594,7 +606,8 @@ fn replace_ts_file_json(input: &str) -> String {
             // Not a payload we recognise: leave the brace alone and let the
             // opaque-token rule downstream decide.
             if let Some((label, end)) = label {
-                out.push_str(&label);
+                out.push_str(&placeholder_sentinel(placeholders.len()));
+                placeholders.push(label);
                 i += end;
                 continue;
             }
@@ -690,10 +703,15 @@ fn sanitize_message(input: &str) -> String {
     let flattened = input.replace(['\r', '\n', '\t'], " ");
     // TS6's own attachment shape is an inlined JSON object, so it has to be
     // resolved before BBCode stripping mangles its punctuation.
-    let unpacked = replace_ts_file_json(&flattened);
+    let mut placeholders = Vec::new();
+    let unpacked = replace_ts_file_json(&flattened, &mut placeholders);
     let squashed = squash_bare_tokens(&strip_bbcode(&unpacked));
     // Collapse the whitespace runs that dropped tags and the newline swap leave.
-    squashed.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut out = squashed.split_whitespace().collect::<Vec<_>>().join(" ");
+    for (index, label) in placeholders.iter().enumerate() {
+        out = out.replace(&placeholder_sentinel(index), label);
+    }
+    out
 }
 
 #[tokio::main]
