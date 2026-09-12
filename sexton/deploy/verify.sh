@@ -1,7 +1,8 @@
 #!/bin/bash
 # PHA-3107 / PHA-3173 verification recipe, run on PHATT-RAID.
 #   three messages from two accounts, with a mute and a channel hop in between
-#   -> description shows only the three, joiner gets one PM, log has three lines
+#   -> joiner gets one PM, log has three lines, channel description is
+#      untouched and no channel-edit notification sound fires (PHA-3424)
 #
 # Account A stays connected for the whole run and sends messages one and three;
 # account B joins in the middle and sends message two. A mutes/unmutes between
