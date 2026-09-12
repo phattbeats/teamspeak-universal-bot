@@ -208,8 +208,16 @@ if [ "$DISABLE_MAIN_TEAMSPEAK" = "1" ] && [ "$GATEWAY_ENABLED" = "1" ]; then
       # Config edit + restart, NOT `openclaw channels …`. There is no
       # `channels disable` subcommand, and `channels remove --channel` takes a
       # fixed enum of built-in channel names that a PLUGIN channel like
-      # teamspeak is not in — so neither CLI path can turn this one off. The
-      # config flag is the only lever, and it needs a gateway restart to take.
+      # teamspeak is not in — so neither CLI path can turn this one off.
+      #
+      # And the way to turn it off is to DELETE the block, not to set
+      # `enabled: false` on it. The plugin declares its channel schema with
+      # additionalProperties: false, so an `enabled` key makes the whole config
+      # invalid — "must not have additional properties" — and that gateway then
+      # refuses to start at all, taking Discord, Signal and WhatsApp down with
+      # it. That is a worse outage than the one this step exists to prevent,
+      # and it is exactly what happened the first time. The block is saved
+      # beside the config first, so the (b) rollback is a copy-back.
       docker exec "$MAIN_GATEWAY" node -e '
         const fs = require("fs");
         const p = "/root/.openclaw/openclaw.json";
@@ -218,14 +226,14 @@ if [ "$DISABLE_MAIN_TEAMSPEAK" = "1" ] && [ "$GATEWAY_ENABLED" = "1" ]; then
           console.log("no teamspeak channel block; nothing to disable");
           process.exit(0);
         }
-        if (c.channels.teamspeak.enabled === false) {
-          console.log("teamspeak already disabled");
-          process.exit(0);
-        }
-        c.channels.teamspeak.enabled = false;
+        fs.writeFileSync(
+          "/root/.openclaw/openclaw.json.teamspeak-block.bak",
+          JSON.stringify(c.channels.teamspeak, null, 2) + "\n"
+        );
+        delete c.channels.teamspeak;
         fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
-        console.log("set channels.teamspeak.enabled = false");
-      ' || { echo "WARNING: could not edit $MAIN_GATEWAY config — disable teamspeak by hand, or the room hears everything twice." >&2; }
+        console.log("removed channels.teamspeak (saved to openclaw.json.teamspeak-block.bak); remaining: " + Object.keys(c.channels).join(", "));
+      ' || { echo "WARNING: could not edit $MAIN_GATEWAY config — remove its channels.teamspeak block by hand, or the room hears everything twice." >&2; }
 
       log "restarting $MAIN_GATEWAY so the change takes"
       # This briefly drops Discord/Signal/WhatsApp on that gateway. The Sexton
@@ -278,10 +286,15 @@ IMPORT_GATEWAY_CONFIG=1, or put a models/auth block in that file by hand.
 
 Rolling back to (b), if this ever needs it:
   GATEWAY_ENABLED=0 DISABLE_MAIN_TEAMSPEAK=0 image/deploy.sh
-then set channels.teamspeak.enabled back to true in the main gateway's
-/root/.openclaw/openclaw.json and restart it — there is no CLI for this, see
-the note above the disable step — and re-point its bridgeUrl at
-ws://${NAME}:9099. That also needs
+then copy the saved block back into the main gateway's config and restart it:
+  docker exec ${MAIN_GATEWAY} node -e '
+    const fs=require("fs"), p="/root/.openclaw/openclaw.json";
+    const c=JSON.parse(fs.readFileSync(p,"utf8"));
+    c.channels.teamspeak=JSON.parse(fs.readFileSync(p+".teamspeak-block.bak","utf8"));
+    c.channels.teamspeak.bridgeUrl="ws://${NAME}:9099";
+    fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");'
+  docker restart ${MAIN_GATEWAY}
+There is no CLI for this — see the note above the disable step. That also needs
 the bridge/whisper ports reachable from ${MAIN_GATEWAY} on ${NETWORK}, which
 they are — they bind 0.0.0.0 and both containers are on that network. Nothing
 is published to the host either way.

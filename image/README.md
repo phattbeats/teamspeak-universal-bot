@@ -128,18 +128,30 @@ two different agents. `image/deploy.sh` does this automatically
 
 …and there is **no CLI for it**. `openclaw channels disable` does not exist,
 and `openclaw channels remove --channel` takes a fixed enum of built-in channel
-names that a *plugin* channel like `teamspeak` is not in. The config flag is
-the only lever, and it needs a gateway restart to take:
+names that a *plugin* channel like `teamspeak` is not in.
+
+**Delete the block. Do not set `enabled: false` on it.** The plugin declares
+its channel schema with `additionalProperties: false`, so an `enabled` key
+makes the whole config invalid — `must not have additional properties:
+"enabled"` — and that gateway then refuses to start *at all*, taking Discord,
+Signal and WhatsApp with it. That is a worse outage than the double-answer this
+step exists to prevent, and it is what happened on the first attempt.
 
 ```bash
 docker exec OpenClaw node -e '
   const fs = require("fs"), p = "/root/.openclaw/openclaw.json";
   const c = JSON.parse(fs.readFileSync(p, "utf8"));
-  c.channels.teamspeak.enabled = false;
+  fs.writeFileSync("/root/.openclaw/openclaw.json.teamspeak-block.bak",
+                   JSON.stringify(c.channels.teamspeak, null, 2) + "\n");
+  delete c.channels.teamspeak;
   fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
 '
 docker restart OpenClaw
 ```
+
+`image/deploy.sh` does exactly this, and only after confirming the
+in-container gateway has the channel connected. The saved block is what makes
+the (b) rollback a copy-back rather than a retype.
 
 `config.ts`'s comment that the POT provider is "an image concern, not a plugin
 concern" was written when PHA-3306's custom-gateway-image plan was still alive.
