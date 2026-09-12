@@ -9,10 +9,11 @@ and is the platform the later voice/tool work builds on.
 
 ## Scope
 
-- **v1 — chat memory** (PHA-3173, PHA-3107): rolling last-N messages written
-  into the channel description, a catch-up PM on join, and a full markdown
-  log on disk. Content-only — no joins/leaves/moves/mutes/system messages,
-  just what people typed.
+- **v1 — chat memory** (PHA-3173, PHA-3107): a catch-up PM on join and a full
+  markdown log on disk (PHA-3424 removed the earlier rolling last-N-messages
+  channel description, since editing it on every message fired a
+  channel-edit notification sound). Content-only — no joins/leaves/moves/
+  mutes/system messages, just what people typed.
 - **Audio bridge** (PHA-3174, `plnt-ts-bridge`): sidecar exposing per-speaker
   PCM out, mixed PCM in, and a music lane with ducking over a local
   WebSocket.
@@ -47,9 +48,8 @@ tracked separately as PHA-3172 and PHA-3177.
 
 Someone in the channel says "Sexton, what did I miss" and hears the last
 messages within two seconds; "Sexton, play some smooth jazz" starts music
-that ducks when anyone speaks and stops on "Sexton, stop"; the rolling
-description and catch-up PM keep working underneath; and the group has been
-told the Sexton listens.
+that ducks when anyone speaks and stops on "Sexton, stop"; the catch-up PM
+keeps working underneath; and the group has been told the Sexton listens.
 
 ## Status
 
