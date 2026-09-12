@@ -112,6 +112,14 @@ const CHANNEL_TREE_TIMEOUT: Duration = Duration::from_secs(15);
 /// connect is not their arrival. Without this a bot restart PMs the whole
 /// room.
 const STARTUP_GRACE: Duration = Duration::from_secs(5);
+/// How long to keep retrying `clientupdate client_nickname=<configured>`
+/// after the server assigns us a suffixed nickname at connect time (PHA-3426).
+/// A stale identity's session is reaped by the server on its own schedule
+/// (observed up to several minutes — see the ts-bridge deploy traps note);
+/// this window is generous so a normal restart self-heals without a human
+/// re-restarting the container.
+const NICKNAME_RECLAIM_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const NICKNAME_RECLAIM_RETRY_INTERVAL: Duration = Duration::from_secs(20);
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "sexton", about = "The Sexton — persistent TeamSpeak channel chat logger")]
@@ -676,6 +684,28 @@ async fn run_once(
 
     info!(?channel_id, own = ?own_client_id, clients_present = preexisting.len(), "connected; channel resolved");
 
+    // PHA-3426: the server accepts a login whose requested nickname is still
+    // held by a not-yet-reaped ghost session, but silently suffixes it
+    // ("Sexton" -> "Sexton1") instead of refusing the connection — see the
+    // ts-bridge deploy traps note on reused TS_IDENTITY. Detect that here and
+    // reclaim the configured name once the collision clears, rather than
+    // requiring a human to notice and restart the container.
+    let assigned_name = con
+        .get_state()
+        .map_err(|e| anyhow!("get_state: {e}"))?
+        .clients
+        .get(&own_client_id)
+        .map(|c| c.name.clone())
+        .unwrap_or_default();
+    if assigned_name != args.nickname {
+        warn!(
+            assigned = %assigned_name,
+            configured = %args.nickname,
+            "server assigned a different nickname than configured; retrying rename"
+        );
+        reclaim_nickname(&mut con, &args.nickname).await?;
+    }
+
     // Move into the watched channel.
     let password = if args.channel_password.is_empty() {
         None
@@ -1059,6 +1089,55 @@ fn set_description(
         channel.edit().set_description(description)
     };
     cmd.send_with_result(con).map_err(|e| anyhow!("channeledit: {e}"))
+}
+
+/// Retry `clientupdate client_nickname=<want>` until the server accepts it
+/// or `NICKNAME_RECLAIM_TIMEOUT` elapses (PHA-3426). Unlike the initial
+/// login — which silently suffixes a taken nickname instead of refusing the
+/// connection — an explicit `clientupdate` while the name is still held
+/// comes back as a `CommandError`, which is what we're polling away here.
+async fn reclaim_nickname(con: &mut Connection, want: &str) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + NICKNAME_RECLAIM_TIMEOUT;
+    loop {
+        let cmd = {
+            let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
+            state.client_update().set_name(want)
+        };
+        let handle = cmd.send_with_result(con).map_err(|e| anyhow!("clientupdate nickname: {e}"))?;
+
+        let outcome = loop {
+            match tokio::time::timeout_at(deadline, con.events().next()).await {
+                Ok(Some(Ok(StreamItem::MessageResult(h, res)))) if h == handle => break Some(res),
+                Ok(Some(Ok(_))) => continue,
+                Ok(Some(Err(e))) => return Err(anyhow!("waiting for nickname rename result: {e}")),
+                Ok(None) => return Err(anyhow!("stream ended while reclaiming nickname")),
+                Err(_) => break None, // deadline elapsed
+            }
+        };
+
+        match outcome {
+            Some(Ok(())) => {
+                info!(nickname = %want, "nickname reclaimed");
+                return Ok(());
+            }
+            Some(Err(e)) => {
+                warn!(error = %e.error, nickname = %want, "nickname still unavailable; retrying");
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(anyhow!(
+                        "nickname {want:?} still unavailable after {}s",
+                        NICKNAME_RECLAIM_TIMEOUT.as_secs()
+                    ));
+                }
+                tokio::time::sleep(NICKNAME_RECLAIM_RETRY_INTERVAL).await;
+            }
+            None => {
+                return Err(anyhow!(
+                    "nickname {want:?} still unavailable after {}s",
+                    NICKNAME_RECLAIM_TIMEOUT.as_secs()
+                ));
+            }
+        }
+    }
 }
 
 fn set_avatar_hash(con: &mut Connection, hash: &str) -> Result<MessageHandle> {
