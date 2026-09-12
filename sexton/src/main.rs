@@ -1131,32 +1131,36 @@ async fn reclaim_nickname(con: &mut Connection, want: &str) -> Result<()> {
         };
         let handle = cmd.send_with_result(con).map_err(|e| anyhow!("clientupdate nickname: {e}"))?;
 
-        // Wait for our result, but never stop polling the event stream in the
-        // meantime: tsclientlib only advances the connection (acks, pings,
-        // reassembly) while its stream is being drained, so a bare
-        // `tokio::time::sleep` here between attempts starves the connection
-        // and gets us disconnected instead of just re-trying the rename.
+        // Keep polling the event stream for the whole `wait_until` window
+        // before sending the next attempt — never stop draining it (tsclientlib
+        // only advances the connection, acks and resends included, while its
+        // stream is being polled, so a bare `tokio::time::sleep` here starves
+        // the connection instead of just pacing the retry) and never resend
+        // the instant the server's rejection comes back either, since that
+        // rejection is near-instant and resending on it would hammer the
+        // server in a tight loop instead of waiting out the retry interval.
         let next_attempt_at = tokio::time::Instant::now() + NICKNAME_RECLAIM_RETRY_INTERVAL;
         let wait_until = next_attempt_at.min(overall_deadline);
-        let outcome = loop {
+        let mut reclaimed = false;
+        loop {
             match tokio::time::timeout_at(wait_until, con.events().next()).await {
-                Ok(Some(Ok(StreamItem::MessageResult(h, res)))) if h == handle => break Some(res),
-                Ok(Some(Ok(_))) => continue,
+                Ok(Some(Ok(StreamItem::MessageResult(h, Ok(()))))) if h == handle => {
+                    reclaimed = true;
+                    break;
+                }
+                Ok(Some(Ok(StreamItem::MessageResult(h, Err(e))))) if h == handle => {
+                    warn!(error = %e.error, nickname = %want, "nickname still unavailable; retrying");
+                }
+                Ok(Some(Ok(_))) => {}
                 Ok(Some(Err(e))) => return Err(anyhow!("waiting for nickname rename result: {e}")),
                 Ok(None) => return Err(anyhow!("stream ended while reclaiming nickname")),
-                Err(_) => break None, // hit wait_until, not necessarily overall_deadline
+                Err(_) => break, // hit wait_until
             }
-        };
+        }
 
-        match outcome {
-            Some(Ok(())) => {
-                info!(nickname = %want, "nickname reclaimed");
-                return Ok(());
-            }
-            Some(Err(e)) => {
-                warn!(error = %e.error, nickname = %want, "nickname still unavailable; retrying");
-            }
-            None => {}
+        if reclaimed {
+            info!(nickname = %want, "nickname reclaimed");
+            return Ok(());
         }
         if tokio::time::Instant::now() >= overall_deadline {
             return Err(anyhow!(
