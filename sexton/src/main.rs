@@ -501,6 +501,111 @@ fn attachment_label(src: &str, assume_image: bool) -> String {
     }
 }
 
+/// Turn one TS6 `ts.file.*` attachment object into a short placeholder.
+///
+/// Ground truth, captured live 2026-09-12 from a real image sent in
+/// `General Shit` (PHA-3425 step 1) — TS6 does **not** use BBCode for
+/// attachments, it inlines a JSON object as the message body:
+///
+/// ```text
+/// {"msg_type":"ts.file.myts","file_id":"<base64 blob>",
+///  "chat_user_id":"@...:chat-7.tmspk.net","file_name":"202609~4.JPG",
+///  "file_size":613563,"body":"202609~4.JPG","v2":true}
+/// ```
+///
+/// `file_id` is a myTS chat-service handle, not a URL: there is no address a
+/// tsclientlib bot can GET, so the download-and-local-copy tier of the issue
+/// is not reachable for this shape and we emit the placeholder tier instead.
+fn ts_file_json_label(obj: &serde_json::Value) -> Option<String> {
+    let msg_type = obj.get("msg_type")?.as_str()?;
+    if !msg_type.starts_with("ts.file") {
+        // Some other structured payload we have not seen. Keep whatever human
+        // text it carries, and never the raw object.
+        let body = obj.get("body").and_then(|b| b.as_str()).unwrap_or("").trim();
+        return Some(if body.is_empty() { "[attachment]".to_string() } else { body.to_string() });
+    }
+    let name = ["file_name", "body"]
+        .iter()
+        .filter_map(|k| obj.get(*k).and_then(|v| v.as_str()))
+        .map(str::trim)
+        .find(|n| !n.is_empty() && n.contains('.') && n.len() <= 64);
+    Some(match name {
+        Some(name) => {
+            let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+            if IMAGE_EXTS.contains(&ext.as_str()) {
+                format!("[image: {name}]")
+            } else {
+                format!("[file: {name}]")
+            }
+        }
+        None => "[file]".to_string(),
+    })
+}
+
+/// Byte offset just past the `}` closing the object that starts at byte 0 of
+/// `s`, skipping braces that sit inside JSON strings. `None` if unbalanced.
+fn json_object_end(s: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, b) in s.as_bytes().iter().enumerate() {
+        if in_string {
+            match (escaped, b) {
+                (true, _) => escaped = false,
+                (false, b'\\') => escaped = true,
+                (false, b'"') => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Replace every inlined TS6 JSON payload in `input` with its placeholder.
+///
+/// The object is found by scanning for a `{` and matching braces (string-aware),
+/// so it is handled wherever it sits — alone, or embedded in a rehydrated
+/// history line like `04:39  kyleonrye: {"msg_type":...}`.
+fn replace_ts_file_json(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let label = json_object_end(&input[i..]).and_then(|end| {
+                serde_json::from_str::<serde_json::Value>(&input[i..i + end])
+                    .ok()
+                    .as_ref()
+                    .and_then(ts_file_json_label)
+                    .map(|label| (label, end))
+            });
+            // Not a payload we recognise: leave the brace alone and let the
+            // opaque-token rule downstream decide.
+            if let Some((label, end)) = label {
+                out.push_str(&label);
+                i += end;
+                continue;
+            }
+        }
+        let ch_len = input[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        out.push_str(&input[i..i + ch_len]);
+        i += ch_len;
+    }
+    out
+}
+
 /// Strip BBCode tags, keeping the visible text. `[url=X]text[/url]` -> `text`,
 /// bare `[url]X[/url]` -> `X`, both subject to the length rule in
 /// [`link_label`]. `[img]` becomes a short placeholder rather than echoing the
@@ -583,7 +688,10 @@ fn squash_bare_tokens(input: &str) -> String {
 fn sanitize_message(input: &str) -> String {
     // Newlines first — a summary line has to stay a single line.
     let flattened = input.replace(['\r', '\n', '\t'], " ");
-    let squashed = squash_bare_tokens(&strip_bbcode(&flattened));
+    // TS6's own attachment shape is an inlined JSON object, so it has to be
+    // resolved before BBCode stripping mangles its punctuation.
+    let unpacked = replace_ts_file_json(&flattened);
+    let squashed = squash_bare_tokens(&strip_bbcode(&unpacked));
     // Collapse the whitespace runs that dropped tags and the newline swap leave.
     squashed.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -1461,6 +1569,39 @@ mod tests {
             sanitize_message("here [img]ts3file://server/files/notes.pdf[/img]"),
             "here [file: notes.pdf]"
         );
+    }
+
+    /// The real payload TS6 sent for an image posted in `General Shit`,
+    /// captured from the live raw-payload log on 2026-09-12. Verbatim except
+    /// for the shortened `file_id`.
+    const REAL_TS6_IMAGE_PAYLOAD: &str = r#"{"msg_type":"ts.file.myts","file_id":"YnlkanZud3lnanRuc3d3eHFpcHljaHdyemdkYmZtdnNwbmJrdGtkb2dlYXZva2xjdGJyZm1ob3Z4Y2Zn","chat_user_id":"@aetojq5cdrys7ys2mc6jy2s5yunxuapnhceygtqjyqczqbvuuaua4===:chat-7.tmspk.net","file_name":"202609~4.JPG","file_size":613563,"body":"202609~4.JPG","v2":true}"#;
+
+    #[test]
+    fn the_real_ts6_attachment_payload_becomes_a_placeholder() {
+        assert_eq!(sanitize_message(REAL_TS6_IMAGE_PAYLOAD), "[image: 202609~4.JPG]");
+        // Same shape with a non-image name reads as a file...
+        let doc = REAL_TS6_IMAGE_PAYLOAD.replace("202609~4.JPG", "quarterly.pdf");
+        assert_eq!(sanitize_message(&doc), "[file: quarterly.pdf]");
+        // ...and it is still handled when it arrives embedded in other text,
+        // as it does on the rehydrated-history path.
+        assert_eq!(
+            sanitize_message(&format!("04:39  kyleonrye: {REAL_TS6_IMAGE_PAYLOAD}")),
+            "04:39 kyleonrye: [image: 202609~4.JPG]"
+        );
+        // Nothing of the raw object survives — no file_id, no chat_user_id.
+        let out = sanitize_message(REAL_TS6_IMAGE_PAYLOAD);
+        assert!(!out.contains("msg_type") && !out.contains("chat-7") && !out.contains("file_id"));
+    }
+
+    #[test]
+    fn an_unknown_structured_payload_keeps_only_its_body() {
+        assert_eq!(
+            sanitize_message(r#"{"msg_type":"ts.poll.v1","poll_id":"abc","body":"who is in?"}"#),
+            "who is in?"
+        );
+        assert_eq!(sanitize_message(r#"{"msg_type":"ts.unknown","blob":"xyz"}"#), "[attachment]");
+        // Prose that merely contains braces is not a payload and is untouched.
+        assert_eq!(sanitize_message("use {braces} like this"), "use {braces} like this");
     }
 
     #[test]
