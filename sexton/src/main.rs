@@ -51,7 +51,7 @@ use chrono::Local;
 use futures::prelude::*;
 use md5::{Digest, Md5};
 use tokio::sync::{broadcast, mpsc, Mutex as TokioMutex};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use tsclientlib::prelude::*;
 use tsclientlib::messages::c2s::{
@@ -272,7 +272,7 @@ impl ChannelState {
     }
 
     fn push(&mut self, nickname: String, raw_message: &str) -> LoggedMessage {
-        let text = strip_bbcode(raw_message);
+        let text = sanitize_message(raw_message);
         let time_label = Local::now().format("%H:%M").to_string();
         let entry = LoggedMessage { time_label, nickname, text };
         self.history.push_back(entry.clone());
@@ -427,9 +427,85 @@ impl ChannelState {
     }
 }
 
+/// Past this a URL stops being readable in a one-line summary, so it collapses
+/// to its domain instead (PHA-3425).
+const MAX_URL_LEN: usize = 80;
+
+/// An opaque whitespace-delimited run longer than this is not something a
+/// person typed — it is an attachment token or an inlined blob. We do not know
+/// every payload shape TS6 can produce, so this is the catch-all that keeps raw
+/// junk out of the summaries even when it arrives untagged.
+const MAX_OPAQUE_TOKEN_LEN: usize = 120;
+
+const IMAGE_EXTS: [&str; 7] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+
+fn looks_like_url(s: &str) -> bool {
+    let l = s.to_ascii_lowercase();
+    ["http://", "https://", "ts3file://", "www."]
+        .iter()
+        .any(|p| l.starts_with(p))
+}
+
+/// The host part of a URL-ish string, for the `[link: domain.tld]` fallback.
+fn link_domain(url: &str) -> Option<String> {
+    let rest = url.split("://").nth(1).unwrap_or(url);
+    let host = rest.split('/').next()?;
+    // Drop any `user:pass@` prefix and `:port` suffix.
+    let host = host.split('@').last()?.split(':').next()?;
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// The trailing filename of a URL-ish string, ignoring query and fragment.
+/// A bare host is not a filename, so a real path segment is required.
+fn link_filename(url: &str) -> Option<String> {
+    let no_query = url.split(['?', '#']).next()?;
+    let path = no_query.split("://").nth(1).unwrap_or(no_query);
+    let (_, after_host) = path.split_once('/')?;
+    let name = after_host.rsplit('/').next()?.trim();
+    if name.is_empty() || name.len() > 64 || !name.contains('.') {
+        return None;
+    }
+    let ext = name.rsplit('.').next()?;
+    let plausible = (1..=5).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric());
+    plausible.then(|| name.to_string())
+}
+
+/// A link short enough to read survives as-is; anything longer collapses to its
+/// domain. Never returns more than one short line.
+fn link_label(url: &str) -> String {
+    let url = url.trim();
+    if url.len() <= MAX_URL_LEN {
+        return url.to_string();
+    }
+    match link_domain(url) {
+        Some(domain) => format!("[link: {domain}]"),
+        None => "[link]".to_string(),
+    }
+}
+
+/// The placeholder for an attachment, chosen by extension: `[image: shot.png]`
+/// for pictures, `[file: notes.pdf]` otherwise, and a bare `[image]`/`[file]`
+/// when the source carries no usable name.
+fn attachment_label(src: &str, assume_image: bool) -> String {
+    match link_filename(src) {
+        Some(name) => {
+            let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+            if IMAGE_EXTS.contains(&ext.as_str()) {
+                format!("[image: {name}]")
+            } else {
+                format!("[file: {name}]")
+            }
+        }
+        None if assume_image => "[image]".to_string(),
+        None => "[file]".to_string(),
+    }
+}
+
 /// Strip BBCode tags, keeping the visible text. `[url=X]text[/url]` -> `text`,
-/// bare `[url]X[/url]` -> `X`. Other tags (`[b]`, `[i]`, `[color=..]`, etc.)
-/// are dropped, keeping their inner text.
+/// bare `[url]X[/url]` -> `X`, both subject to the length rule in
+/// [`link_label`]. `[img]` becomes a short placeholder rather than echoing the
+/// source. Other tags (`[b]`, `[i]`, `[color=..]`, etc.) are dropped, keeping
+/// their inner text.
 fn strip_bbcode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
@@ -439,12 +515,32 @@ fn strip_bbcode(input: &str) -> String {
             if let Some(close) = input[i..].find(']') {
                 let tag = &input[i + 1..i + close];
                 let tag_lower = tag.to_ascii_lowercase();
+                let rest_lower = input[i + close + 1..].to_ascii_lowercase();
                 if tag_lower.starts_with("url") {
                     // Find the matching [/url] to extract the inner text.
-                    if let Some(end_tag) = input[i + close + 1..].to_ascii_lowercase().find("[/url]") {
+                    if let Some(end_tag) = rest_lower.find("[/url]") {
                         let inner = &input[i + close + 1..i + close + 1 + end_tag];
-                        out.push_str(inner.trim());
+                        // `[url=X]text[/url]` keeps text and bare `[url]X[/url]`
+                        // keeps X, but either way it goes through the length
+                        // rule — the "text" half is very often the URL again.
+                        out.push_str(&link_label(inner.trim()));
                         i = i + close + 1 + end_tag + "[/url]".len();
+                        continue;
+                    }
+                }
+                if tag_lower.starts_with("img") {
+                    // `[img]SRC[/img]`, plus `[img=SRC]` with or without a
+                    // closing tag. The attribute form wins when both are there.
+                    let attr_src = tag_lower.starts_with("img=").then(|| tag[4..].trim());
+                    if let Some(end_tag) = rest_lower.find("[/img]") {
+                        let inner = &input[i + close + 1..i + close + 1 + end_tag];
+                        out.push_str(&attachment_label(attr_src.unwrap_or(inner).trim(), true));
+                        i = i + close + 1 + end_tag + "[/img]".len();
+                        continue;
+                    }
+                    if let Some(src) = attr_src {
+                        out.push_str(&attachment_label(src, true));
+                        i += close + 1;
                         continue;
                     }
                 }
@@ -459,6 +555,37 @@ fn strip_bbcode(input: &str) -> String {
         i += ch_len;
     }
     out
+}
+
+/// Apply the length rules to anything that survived untagged: a bare URL the
+/// user just typed, and any opaque run too long to be real prose.
+fn squash_bare_tokens(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for (n, token) in input.split(' ').enumerate() {
+        if n > 0 {
+            out.push(' ');
+        }
+        if looks_like_url(token) {
+            out.push_str(&link_label(token));
+        } else if token.len() > MAX_OPAQUE_TOKEN_LEN {
+            out.push_str(&attachment_label(token, false));
+        } else {
+            out.push_str(token);
+        }
+    }
+    out
+}
+
+/// The single choke point for turning a raw TS6 message into something a
+/// summary, a log line or the voice lane can read: tags resolved, attachments
+/// and images reduced to short placeholders, long links reduced to their
+/// domain, and the whole thing guaranteed to be one line (PHA-3425).
+fn sanitize_message(input: &str) -> String {
+    // Newlines first — a summary line has to stay a single line.
+    let flattened = input.replace(['\r', '\n', '\t'], " ");
+    let squashed = squash_bare_tokens(&strip_bbcode(&flattened));
+    // Collapse the whitespace runs that dropped tags and the newline swap leave.
+    squashed.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[tokio::main]
@@ -741,10 +868,19 @@ async fn run_once(
                                 MessageTarget::Client(_) => "client",
                                 MessageTarget::Poke(_) => "poke",
                             };
+                            // PHA-3425 step 1: the one place the untouched TS6
+                            // payload is visible. Run with
+                            // `RUST_LOG=sexton=debug` to capture the real
+                            // shapes for an inline image, a file attachment and
+                            // a link before widening the parser above.
+                            debug!(raw = %message, target = target_str, "raw text message payload");
                             let _ = event_tx.send(bridge_proto::BridgeEvent::TextMessage {
                                 client_id: invoker.id.0,
                                 nickname: invoker.name.clone(),
-                                text: message.clone(),
+                                // Sanitized, not raw: the voice and
+                                // what_did_i_miss lanes read this and must get
+                                // the same placeholders the summaries show.
+                                text: sanitize_message(message),
                                 target: target_str,
                             });
                         }
@@ -1288,6 +1424,70 @@ mod tests {
         let mut state = state_in(&dir, channel);
         state.load_welcomed_from_disk();
         assert!(state.welcomed.is_empty());
+    }
+
+    #[test]
+    fn a_short_link_survives_but_a_long_one_becomes_its_domain() {
+        let short = "https://phatt.tech/blog";
+        assert_eq!(sanitize_message(short), short);
+        assert_eq!(sanitize_message(&format!("look at [url]{short}[/url]")), format!("look at {short}"));
+
+        // Past MAX_URL_LEN nothing but the domain is worth reading.
+        let long = format!("https://tracking.example.com/watch?v=abc&{}", "q=1&".repeat(40));
+        assert!(long.len() > MAX_URL_LEN);
+        assert_eq!(sanitize_message(&long), "[link: tracking.example.com]");
+        assert_eq!(sanitize_message(&format!("[url]{long}[/url]")), "[link: tracking.example.com]");
+    }
+
+    #[test]
+    fn link_text_is_kept_when_it_is_actually_words() {
+        assert_eq!(
+            sanitize_message("[url=https://phatt.tech/a/very/long/path/that/keeps/going/on]the writeup[/url]"),
+            "the writeup"
+        );
+    }
+
+    #[test]
+    fn images_and_files_become_short_placeholders() {
+        assert_eq!(
+            sanitize_message("[img]https://ts.example.com/files/2026/shot.png[/img]"),
+            "[image: shot.png]"
+        );
+        // The attribute form, and a source with no usable filename.
+        assert_eq!(sanitize_message("[img=https://cdn.example.com/a/b.jpg]x[/img]"), "[image: b.jpg]");
+        assert_eq!(sanitize_message("[img]https://cdn.example.com[/img]"), "[image]");
+        // A non-image extension reads as a file, not an image.
+        assert_eq!(
+            sanitize_message("here [img]ts3file://server/files/notes.pdf[/img]"),
+            "here [file: notes.pdf]"
+        );
+    }
+
+    #[test]
+    fn an_untagged_attachment_token_never_reaches_the_summary() {
+        // We do not know every shape TS6 can send, so an opaque run that long
+        // is replaced whatever it turns out to be.
+        let token = "A".repeat(MAX_OPAQUE_TOKEN_LEN + 1);
+        assert_eq!(sanitize_message(&format!("sent {token}")), "sent [file]");
+        // ...while ordinary prose of the same total length is untouched.
+        let prose = "word ".repeat(40);
+        assert_eq!(sanitize_message(&prose), prose.trim());
+    }
+
+    #[test]
+    fn a_sanitized_message_is_always_one_line() {
+        let multi = "first line\r\nsecond\tline\n\n   third";
+        let out = sanitize_message(multi);
+        assert_eq!(out, "first line second line third");
+        assert!(!out.contains('\n') && !out.contains('\r') && !out.contains('\t'));
+    }
+
+    #[test]
+    fn plain_formatting_still_reduces_to_its_text() {
+        // The pre-PHA-3425 behaviour these changes must not regress.
+        assert_eq!(sanitize_message("[b]bold[/b] and [color=#fff]red[/color]"), "bold and red");
+        assert_eq!(sanitize_message("no tags at all"), "no tags at all");
+        assert_eq!(sanitize_message("unclosed [bracket"), "unclosed [bracket");
     }
 
     #[test]
