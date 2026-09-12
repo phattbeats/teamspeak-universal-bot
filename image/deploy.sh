@@ -99,6 +99,12 @@ image/README.md, "Where the OpenClaw plugin runs"). Two things point it here:
      docker cp ${NAME}:/opt/sexton-tools/. ${APPDATA}/tools/
    then add ${APPDATA}/tools -> /opt/sexton-tools (read-only) to the OpenClaw
    container's path mappings.
+   That directory also carries yt-dlp-plugins/ — the yt-dlp SIDE of the POT
+   provider. Without it yt-dlp reports "PO Token Providers: none" and never
+   contacts the provider at all. Mount it at the path yt-dlp searches:
+     ${APPDATA}/tools/yt-dlp-plugins -> /etc/yt-dlp/plugins (read-only)
+   Do NOT try to do this with --plugin-dirs instead; it does not register the
+   plugin on this yt-dlp build, in either path form.
 
 2. Channel config, in the gateway:
      "channels": { "teamspeak": {

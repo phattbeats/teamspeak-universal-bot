@@ -114,6 +114,7 @@ RUN set -eu; \
          && npm install --no-audit --no-fund \
          && npx tsc \
          && cp -a /src/server/. /out/ \
+         && cp -a /src/plugin /out/ytdlp-plugin \
          && [ -f /out/build/main.js ]; then \
       echo "bgutil POT provider built from $POT_REF"; \
     else \
@@ -133,8 +134,6 @@ ARG WHISPER_MODEL=ggml-base.en.bin
 # libstdc++6/libgomp1: whisper-server's only non-bundled deps.
 # ffmpeg: the music lane AND the stt-tts decode path.
 # supervisor: PID 1.
-# python3-minimal: the yt-dlp standalone binary bundles its own interpreter,
-#   but the bgutil yt-dlp *plugin* below is plain Python and is loaded by it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -153,7 +152,7 @@ COPY --from=pot-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 # yt-dlp: the official standalone build. Pinned by tag so a deploy is
 # reproducible; bump it deliberately when YouTube breaks it, which it will.
-ARG YTDLP_VERSION=2025.09.05
+ARG YTDLP_VERSION=2026.08.19
 RUN curl -fL --retry 3 \
       -o /usr/local/bin/yt-dlp \
       "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_linux" \
@@ -176,6 +175,24 @@ ENV WHISPER_MODEL_PATH=/opt/whisper/models/${WHISPER_MODEL}
 # --- the music lane's POT provider ---
 COPY --from=pot-builder  /out/                                 /opt/bgutil-pot/
 
+# The yt-dlp SIDE of the POT provider. The server above is only half of it:
+# without this plugin, `yt-dlp --verbose` reports "PO Token Providers: none" and
+# quietly never contacts the server at all — a running service and a feature
+# that does nothing, which is exactly what the first verification run found.
+#
+# The path shape is load-bearing and is NOT the one the repo ships. yt-dlp wants
+#   /etc/yt-dlp/plugins/<package>/yt_dlp_plugins/extractor/*.py
+# — note the <package> level. Dropping `yt_dlp_plugins` straight into
+# /etc/yt-dlp/plugins leaves it invisible ("Plugin directories: none"), and
+# `--plugin-dirs` does not rescue it: neither the parent-of-yt_dlp_plugins form
+# nor pointing at yt_dlp_plugins itself registers anything on this build. Verified
+# working here as `PO Token Providers: bgutil:http-2.0.0 (external)`.
+#
+# `|| true`: the POT stage is allowed to fail (see stage 4), and if it did there
+# is no plugin to install and music still works without a token.
+RUN mkdir -p /etc/yt-dlp/plugins/bgutil \
+    && cp -a /opt/bgutil-pot/ytdlp-plugin/yt_dlp_plugins /etc/yt-dlp/plugins/bgutil/ 2>/dev/null || true
+
 # --- the tools the gateway-side plugin has to be able to spawn ---
 # See image/README.md: yt-dlp and ffmpeg are spawned by the plugin, which runs
 # in the OpenClaw gateway. This directory is the export surface — bind-mount it
@@ -184,7 +201,10 @@ COPY --from=pot-builder  /out/                                 /opt/bgutil-pot/
 RUN mkdir -p /opt/sexton-tools \
     && cp /usr/local/bin/yt-dlp /opt/sexton-tools/yt-dlp \
     && cp /usr/bin/ffmpeg       /opt/sexton-tools/ffmpeg \
-    && cp /usr/bin/ffprobe      /opt/sexton-tools/ffprobe
+    && cp /usr/bin/ffprobe      /opt/sexton-tools/ffprobe \
+    && cp -a /etc/yt-dlp/plugins /opt/sexton-tools/yt-dlp-plugins 2>/dev/null || true
+# Exported as the same /etc/yt-dlp/plugins tree, so the gateway mounts it at
+# that path and needs no flag — see image/deploy.sh.
 
 COPY image/supervisord.conf   /etc/supervisor/conf.d/sexton.conf
 COPY image/run-sexton.sh      /usr/local/bin/run-sexton

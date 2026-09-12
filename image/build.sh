@@ -20,7 +20,7 @@ ALSO_LATEST=${ALSO_LATEST:-0}
 # Set WITH_POT=0 to skip the bgutil POT provider stage (faster build; music
 # still works, it just gets challenged by YouTube more often).
 WITH_POT=${WITH_POT:-1}
-YTDLP_VERSION=${YTDLP_VERSION:-2025.09.05}
+YTDLP_VERSION=${YTDLP_VERSION:-2026.08.19}
 WHISPER_MODEL=${WHISPER_MODEL:-ggml-base.en.bin}
 # The weights are ~148 MB and the Rust build tree is large; the whisper.cpp
 # source image alone is 1.14 GB. 92%-full is the normal state of this box.
@@ -70,7 +70,24 @@ docker run --rm --entrypoint sh "${IMAGE}:${TAG}" -c '
   if [ -f /opt/bgutil-pot/DISABLED ]; then
     echo "  note POT provider absent: $(cat /opt/bgutil-pot/DISABLED)"
   else
-    check "POT provider"      "test -f /opt/bgutil-pot/build/main.js"
+    check "POT server"        "test -f /opt/bgutil-pot/build/main.js"
+    # The server on its own is half of it. Without the yt-dlp-side plugin,
+    # yt-dlp reports "PO Token Providers: none" and never contacts the server --
+    # a green build, a running service, and a feature that does nothing. That
+    # exact failure shipped in the first pha-3428 build; do not drop this check.
+    # Written out rather than routed through check() because the grep pattern
+    # has to survive two levels of shell quoting.
+    # Asserts on the plugin DIRECTORY being discovered, not on the
+    # "PO Token Providers: bgutil" line — that one is youtube-specific debug and
+    # printing it would make every image build depend on reaching YouTube.
+    if yt-dlp --verbose --simulate about:blank 2>&1 | grep -q "Plugin directories:.*yt_dlp_plugins"; then
+      echo "  ok   POT yt-dlp plugin discovered"
+    else
+      echo "  MISS POT yt-dlp plugin not on a path yt-dlp searches — it will"
+      echo "       never contact the provider. Check the <package> level in"
+      echo "       /etc/yt-dlp/plugins/<package>/yt_dlp_plugins."
+      fail=1
+    fi
   fi
   echo
   echo "  model: $(ls -lh /opt/whisper/models/ | tail -1)"
