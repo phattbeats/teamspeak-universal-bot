@@ -10,6 +10,11 @@
       "channel": "General Shit",
       "voice": {
         "mode": "stt-tts",
+        "requireWakeName": true,
+        "wakeNames": [
+          "Sexton",
+          "sexton"
+        ],
         "streaming": {
           "transcription": {
             "provider": "whisper-local",
