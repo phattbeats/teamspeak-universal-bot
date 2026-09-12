@@ -58,6 +58,12 @@ struct Args {
     #[arg(short = 's', long, default_value = "")]
     script: String,
 
+    /// Separator between script steps. Override it to send a message that
+    /// itself contains commas — a real TS6 attachment payload, for one
+    /// (PHA-3425), which is JSON and so is full of them.
+    #[arg(long, default_value = ",")]
+    script_sep: String,
+
     /// Name of the temporary side channel `hop` creates/joins.
     #[arg(long, default_value = "sexton-hop-test")]
     hop_channel: String,
@@ -122,7 +128,9 @@ async fn main() -> Result<()> {
     pump(&mut con, STEP_SETTLE).await?;
     info!("joined channel");
 
-    for step in args.script.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+    let steps: Vec<String> =
+        args.script.split(&args.script_sep).map(|s| s.trim().to_string()).collect();
+    for step in steps.iter().filter(|s| !s.is_empty()) {
         run_step(&mut con, &args, own_client_id, channel_id, step).await?;
         pump(&mut con, STEP_SETTLE).await?;
     }

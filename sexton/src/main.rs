@@ -542,6 +542,43 @@ fn ts_file_json_label(obj: &serde_json::Value) -> Option<String> {
     })
 }
 
+/// The value of a `"key":"value"` pair, read straight out of the text.
+///
+/// The lenient half of the attachment handling: TS6 is the only thing writing
+/// these objects and we have seen exactly one version of one of them, so a
+/// payload `serde_json` rejects — a newer variant, a truncation, anything —
+/// must still not be echoed raw. Structure we cannot parse is not a reason to
+/// print a `file_id`.
+fn scrape_json_string_field(s: &str, key: &str) -> Option<String> {
+    let at = s.find(&format!("\"{key}\""))?;
+    let after_colon = s[at..].find(':')? + at + 1;
+    let inner = s[after_colon..].trim_start().strip_prefix('"')?;
+    let end = inner.find('"')?;
+    Some(inner[..end].to_string())
+}
+
+/// Placeholder for a brace-object we could not parse but that is plainly one
+/// of TS6's, i.e. it carries a `msg_type`. `None` if it is not.
+fn scraped_payload_label(candidate: &str) -> Option<String> {
+    let msg_type = scrape_json_string_field(candidate, "msg_type")?;
+    let name = ["file_name", "body"]
+        .iter()
+        .filter_map(|k| scrape_json_string_field(candidate, k))
+        .find(|n| !n.trim().is_empty() && n.contains('.') && n.len() <= 64);
+    Some(match name {
+        Some(name) => {
+            let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+            if IMAGE_EXTS.contains(&ext.as_str()) {
+                format!("[image: {name}]")
+            } else {
+                format!("[file: {name}]")
+            }
+        }
+        None if msg_type.starts_with("ts.file") => "[file]".to_string(),
+        None => "[attachment]".to_string(),
+    })
+}
+
 /// Stand-in for a resolved attachment placeholder while the BBCode and
 /// whitespace passes run. Uses control characters a chat message cannot carry,
 /// and no spaces or brackets, so nothing downstream touches it.
@@ -596,11 +633,17 @@ fn replace_ts_file_json(input: &str, placeholders: &mut Vec<String>) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'{' {
-            let label = json_object_end(&input[i..]).and_then(|end| {
-                serde_json::from_str::<serde_json::Value>(&input[i..i + end])
+            // An unterminated object (truncated in transit) still gets read to
+            // the end of the line rather than printed.
+            let end = json_object_end(&input[i..]).unwrap_or(input.len() - i);
+            let label = Some(end).and_then(|end| {
+                let candidate = &input[i..i + end];
+                serde_json::from_str::<serde_json::Value>(candidate)
                     .ok()
                     .as_ref()
                     .and_then(ts_file_json_label)
+                    // Malformed, but still recognisably a TS6 payload.
+                    .or_else(|| scraped_payload_label(candidate))
                     .map(|label| (label, end))
             });
             // Not a payload we recognise: leave the brace alone and let the
@@ -1609,6 +1652,21 @@ mod tests {
         // Nothing of the raw object survives — no file_id, no chat_user_id.
         let out = sanitize_message(REAL_TS6_IMAGE_PAYLOAD);
         assert!(!out.contains("msg_type") && !out.contains("chat-7") && !out.contains("file_id"));
+    }
+
+    #[test]
+    fn a_payload_that_does_not_parse_is_still_not_echoed_raw() {
+        // We have seen exactly one version of one of these objects. A variant
+        // strict JSON rejects must not fall through to the raw line — this one
+        // has its separators mangled.
+        let mangled = REAL_TS6_IMAGE_PAYLOAD.replace(",", " ");
+        assert!(serde_json::from_str::<serde_json::Value>(&mangled).is_err());
+        let out = sanitize_message(&mangled);
+        assert_eq!(out, "[image: 202609~4.JPG]");
+        assert!(!out.contains("file_id") && !out.contains("chat-7"));
+        // A truncated one keeps whatever name it got as far as.
+        let truncated = &REAL_TS6_IMAGE_PAYLOAD[..REAL_TS6_IMAGE_PAYLOAD.len() - 30];
+        assert!(!sanitize_message(truncated).contains("YnlkanZud3ln"));
     }
 
     #[test]
