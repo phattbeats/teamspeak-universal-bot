@@ -120,6 +120,9 @@ const STARTUP_GRACE: Duration = Duration::from_secs(5);
 /// re-restarting the container.
 const NICKNAME_RECLAIM_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const NICKNAME_RECLAIM_RETRY_INTERVAL: Duration = Duration::from_secs(20);
+/// How long to wait, right after connecting, for our own `Client` book entry
+/// to appear before giving up on reading back the assigned nickname.
+const OWN_CLIENT_ENTRY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "sexton", about = "The Sexton — persistent TeamSpeak channel chat logger")]
@@ -690,13 +693,36 @@ async fn run_once(
     // ts-bridge deploy traps note on reused TS_IDENTITY. Detect that here and
     // reclaim the configured name once the collision clears, rather than
     // requiring a human to notice and restart the container.
-    let assigned_name = con
-        .get_state()
-        .map_err(|e| anyhow!("get_state: {e}"))?
-        .clients
-        .get(&own_client_id)
-        .map(|c| c.name.clone())
-        .unwrap_or_default();
+    //
+    // Our own `Client` book entry can land a moment after the channel tree
+    // does (the ClientEnterView burst for everyone already in the channel,
+    // including us, is still in flight right after "connected" above), so
+    // poll briefly for it instead of reading immediately — reading too early
+    // would see no entry and misfire on every clean connect, not just a
+    // colliding one.
+    let own_name_deadline = tokio::time::Instant::now() + OWN_CLIENT_ENTRY_TIMEOUT;
+    let assigned_name = loop {
+        if let Some(name) = con
+            .get_state()
+            .map_err(|e| anyhow!("get_state: {e}"))?
+            .clients
+            .get(&own_client_id)
+            .map(|c| c.name.clone())
+        {
+            break name;
+        }
+        match tokio::time::timeout_at(own_name_deadline, con.events().next()).await {
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(e))) => return Err(anyhow!("waiting for own client entry: {e}")),
+            Ok(None) => return Err(anyhow!("stream ended while waiting for own client entry")),
+            Err(_) => {
+                return Err(anyhow!(
+                    "own client entry did not appear within {}s",
+                    OWN_CLIENT_ENTRY_TIMEOUT.as_secs()
+                ))
+            }
+        }
+    };
     if assigned_name != args.nickname {
         warn!(
             assigned = %assigned_name,
@@ -1097,7 +1123,7 @@ fn set_description(
 /// connection — an explicit `clientupdate` while the name is still held
 /// comes back as a `CommandError`, which is what we're polling away here.
 async fn reclaim_nickname(con: &mut Connection, want: &str) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + NICKNAME_RECLAIM_TIMEOUT;
+    let overall_deadline = tokio::time::Instant::now() + NICKNAME_RECLAIM_TIMEOUT;
     loop {
         let cmd = {
             let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
@@ -1105,13 +1131,20 @@ async fn reclaim_nickname(con: &mut Connection, want: &str) -> Result<()> {
         };
         let handle = cmd.send_with_result(con).map_err(|e| anyhow!("clientupdate nickname: {e}"))?;
 
+        // Wait for our result, but never stop polling the event stream in the
+        // meantime: tsclientlib only advances the connection (acks, pings,
+        // reassembly) while its stream is being drained, so a bare
+        // `tokio::time::sleep` here between attempts starves the connection
+        // and gets us disconnected instead of just re-trying the rename.
+        let next_attempt_at = tokio::time::Instant::now() + NICKNAME_RECLAIM_RETRY_INTERVAL;
+        let wait_until = next_attempt_at.min(overall_deadline);
         let outcome = loop {
-            match tokio::time::timeout_at(deadline, con.events().next()).await {
+            match tokio::time::timeout_at(wait_until, con.events().next()).await {
                 Ok(Some(Ok(StreamItem::MessageResult(h, res)))) if h == handle => break Some(res),
                 Ok(Some(Ok(_))) => continue,
                 Ok(Some(Err(e))) => return Err(anyhow!("waiting for nickname rename result: {e}")),
                 Ok(None) => return Err(anyhow!("stream ended while reclaiming nickname")),
-                Err(_) => break None, // deadline elapsed
+                Err(_) => break None, // hit wait_until, not necessarily overall_deadline
             }
         };
 
@@ -1122,20 +1155,14 @@ async fn reclaim_nickname(con: &mut Connection, want: &str) -> Result<()> {
             }
             Some(Err(e)) => {
                 warn!(error = %e.error, nickname = %want, "nickname still unavailable; retrying");
-                if tokio::time::Instant::now() >= deadline {
-                    return Err(anyhow!(
-                        "nickname {want:?} still unavailable after {}s",
-                        NICKNAME_RECLAIM_TIMEOUT.as_secs()
-                    ));
-                }
-                tokio::time::sleep(NICKNAME_RECLAIM_RETRY_INTERVAL).await;
             }
-            None => {
-                return Err(anyhow!(
-                    "nickname {want:?} still unavailable after {}s",
-                    NICKNAME_RECLAIM_TIMEOUT.as_secs()
-                ));
-            }
+            None => {}
+        }
+        if tokio::time::Instant::now() >= overall_deadline {
+            return Err(anyhow!(
+                "nickname {want:?} still unavailable after {}s",
+                NICKNAME_RECLAIM_TIMEOUT.as_secs()
+            ));
         }
     }
 }
