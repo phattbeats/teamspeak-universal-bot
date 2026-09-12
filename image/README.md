@@ -11,6 +11,7 @@ image/unraid-sexton.xml   the Unraid template
 image/supervisord.conf    PID 1
 image/run-*.sh            env -> argv wrappers for each supervised program
 image/healthcheck.sh      one healthcheck for a container that runs several things
+image/gateway/            the in-container OpenClaw gateway's seed config + notes
 ```
 
 ## What is in the container
@@ -20,13 +21,17 @@ image/healthcheck.sh      one healthcheck for a container that runs several thin
 | Sexton bot | `sexton` container | the `sexton` binary |
 | audio bridge (PHA-3174) | `ts-bridge` container | same binary — folded in by PHA-3342 |
 | whisper.cpp + `ggml-base.en.bin` (PHA-3228) | `whisper` container, model on a host mount | `/opt/whisper`, weights **baked into the image** |
-| ffmpeg, yt-dlp (PHA-3176) | nowhere — never installed | `/usr/local/bin`, exported at `/opt/sexton-tools` |
+| ffmpeg, yt-dlp (PHA-3176) | nowhere — never installed | `/usr/local/bin`, on PATH for the plugin |
 | bgutil POT provider | nowhere | `/opt/bgutil-pot`, served on `:4416` |
+| OpenClaw gateway + `teamspeak` plugin | the main `OpenClaw` container | the base image, plus `/opt/openclaw-teamspeak-plugin` |
 | supervisor | n/a (one process per container) | `supervisord` as PID 1 |
 
-Three containers become one. `image/deploy.sh` removes `ts-bridge` and
-`whisper` as part of deploying, because leaving `whisper` up would mean two
-transcribers and a real chance the gateway is still pointed at the stale one.
+Three containers become one, and the channel comes with it.
+`image/deploy.sh` removes `ts-bridge` and `whisper` as part of deploying,
+because leaving `whisper` up would mean two transcribers and a real chance
+something is still pointed at the stale one — and it disables the `teamspeak`
+channel on the main gateway for the same class of reason: two gateways on one
+bridge socket is two answers to every message.
 
 ### Why the weights are baked in and not mounted
 
@@ -60,70 +65,110 @@ The issue asked for a decision between:
 
 with a preference for (a) "unless it doubles the gateway's config burden".
 
-**We picked (b).** It doubles the gateway's config burden, and it does so in the
-literal sense the escape hatch was written for — not "adds some config", but
-"there are now two gateways":
+**It is (a).** An earlier revision of this file took the escape hatch and
+argued for (b); Brandon overruled that on 2026-09-12:
 
-1. **Two gateway configs, two upgrade paths.** A second `openclaw` needs its own
-   config file, data dir, agent identity, workspace, memory, and model-provider
-   credentials. PHA-3326's whole finding was that a core version bump does not
-   update managed channel plugins, so every OpenClaw upgrade would have to be
-   performed and verified twice, in two places, forever.
-2. **The main gateway already has it, working.** `openclaw channels status` on
-   the box reports `teamspeak default: enabled, configured, running, connected`
-   today, installed via the PHA-3326 `--link` path. (a) means tearing that out
-   and rebuilding it inside a container whose own reason to exist is the audio
-   lane.
-3. **It is not actually a sidecar.** The thing (b) leaves outside is the
-   pre-existing OpenClaw gateway that also runs Discord, Signal and WhatsApp.
-   It is not a piece of the Sexton stack that we declined to fold in; it is
-   unrelated infrastructure that the Sexton is one channel of. Under (b) the
-   Sexton stack is exactly one container and one Unraid entry, which is what
-   the decision asked for.
-4. **OpenClaw is already on `phattvip`.** No network change is needed for the
-   gateway to reach `ws://sexton:9099` and `http://sexton:8080/inference` by
-   container name.
+> **option (a)** — this container runs its own OpenClaw gateway instance with
+> the teamspeak plugin installed via the PHA-3326 managed install. Do not wire
+> the bridge socket out to the main gateway.
 
-### The one thing (b) costs, and how the image pays it
+So the gateway is in here, started by `supervisord` as `[program:gateway]`, and
+the plugin is `--link`-installed into it on every boot by
+`image/run-gateway.sh`. See `image/gateway/README.md` for the config side.
 
-`ffmpeg` and `yt-dlp` are spawned **by the plugin**, in the gateway process —
-see `src/tools/music.ts` and `src/voice/speech.ts` in
-`openclaw-teamspeak-plugin`. The gateway image has neither installed (checked:
-`which ffmpeg yt-dlp` inside the running `OpenClaw` container returns nothing),
-which is why the music lane and the TTS decode path have never actually worked
-there. Putting them only inside this container would not fix that — they would
-be sitting next to a process that never calls them.
+### What (a) buys
 
-So the image **exports** them at `/opt/sexton-tools`, and the deploy copies that
-directory onto the host for the gateway to bind-mount:
+1. **The internal ports stop being a network surface.** Under (b) the bridge,
+   whisper and the POT provider had to be reachable from another container on
+   `phattvip`. Under (a) the only process that dials them is in this container,
+   over loopback. For a lane whose entire premise is that the channel's audio
+   does not leave the box, that is the right shape.
+2. **ffmpeg and yt-dlp land where they are actually spawned.** They are spawned
+   **by the plugin** — see `src/tools/music.ts` and `src/voice/speech.ts` in
+   `openclaw-teamspeak-plugin` — and the stock gateway image has neither
+   installed (checked: `which ffmpeg yt-dlp` in the running `OpenClaw`
+   container returns nothing), which is why the music lane and the TTS decode
+   path never actually worked there. Under (a) the plugin and the binaries are
+   the same container. The `/opt/sexton-tools` export that (b) needed is gone.
+3. **The last manual step in this issue is gone with it.** (b) required a human
+   to add two read-only path mappings to the `OpenClaw` container in the Unraid
+   GUI. (a) requires none.
+
+### What (a) costs — the escape hatch was not wrong, just overruled
+
+The (b) argument was that a second gateway needs its own config file, state
+dir, agent identity and model credentials, and that PHA-3326's finding — a core
+version bump does not update a managed channel plugin — means every OpenClaw
+upgrade now has to be performed and verified in two places. **All of that is
+still true.** What changed is who decides whether it is worth paying.
+
+The image pays down the parts it can:
+
+- `run-gateway.sh` re-runs the `--link` install on every boot, so *this*
+  gateway self-heals after an image bump. The main gateway still needs its own
+  `openclaw channels status` check after an upgrade.
+- `image/deploy.sh` imports the `models`/`auth`/`agents`/`tts` blocks out of
+  the main gateway's config once, so nobody retypes an API key into a second
+  file. It deliberately does **not** import `channels` — that would start
+  Discord, Signal and WhatsApp in here too.
+- `image/gateway/openclaw.seed.json` ships the whole teamspeak channel block
+  pre-wired to loopback, so first boot is configured, not blank.
+
+What is left is genuinely irreducible: two gateways to keep on one version.
+`OPENCLAW_VERSION` in `build.sh` is pinned to the main gateway's version for
+exactly that reason — check `docker exec OpenClaw openclaw --version` before
+bumping it.
+
+### The cutover has a sharp edge
+
+Until the main gateway's `teamspeak` channel is **disabled**, both gateways are
+connected to the same bridge socket and the room hears every answer twice, from
+two different agents. `image/deploy.sh` does this automatically
+(`DISABLE_MAIN_TEAMSPEAK=1`, the default). If you deploy by hand:
+
+…and there is **no CLI for it**. `openclaw channels disable` does not exist,
+and `openclaw channels remove --channel` takes a fixed enum of built-in channel
+names that a *plugin* channel like `teamspeak` is not in.
+
+**Delete the block. Do not set `enabled: false` on it.** The plugin declares
+its channel schema with `additionalProperties: false`, so an `enabled` key
+makes the whole config invalid — `must not have additional properties:
+"enabled"` — and that gateway then refuses to start *at all*, taking Discord,
+Signal and WhatsApp with it. That is a worse outage than the double-answer this
+step exists to prevent, and it is what happened on the first attempt.
 
 ```bash
-docker cp sexton:/opt/sexton-tools/. /mnt/user/appdata/sexton/tools/
-# then: Unraid -> Docker -> OpenClaw -> Edit -> add path mapping
-#       /mnt/user/appdata/sexton/tools -> /opt/sexton-tools (read-only)
+docker exec OpenClaw node -e '
+  const fs = require("fs"), p = "/root/.openclaw/openclaw.json";
+  const c = JSON.parse(fs.readFileSync(p, "utf8"));
+  fs.writeFileSync("/root/.openclaw/openclaw.json.teamspeak-block.bak",
+                   JSON.stringify(c.channels.teamspeak, null, 2) + "\n");
+  delete c.channels.teamspeak;
+  fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
+'
+docker restart OpenClaw
 ```
 
-and the plugin is pointed at them with `tools.music.ytdlpPath` /
-`ffmpegPath`. This keeps the property that matters — the versions the plugin
-spawns are the versions this image pinned and `build.sh` verified — without a
-custom gateway image, and it survives core bumps the same way the `--link`
-plugin install does.
-
-The POT provider needs none of that: it is an HTTP service, so it runs here and
-the gateway's `yt-dlp` reaches it at `http://sexton:4416`.
+`image/deploy.sh` does exactly this, and only after confirming the
+in-container gateway has the channel connected. The saved block is what makes
+the (b) rollback a copy-back rather than a retype.
 
 `config.ts`'s comment that the POT provider is "an image concern, not a plugin
 concern" was written when PHA-3306's custom-gateway-image plan was still alive.
-That plan is dead; this is its replacement.
+That plan is dead; this is its replacement, and under (a) the provider and the
+plugin are finally in the same container.
 
 ## Ports
 
-`9099` bridge WebSocket · `8080` whisper · `4416` POT provider.
+`9099` bridge WebSocket · `8080` whisper · `4416` POT provider ·
+`18789` the in-container gateway.
 
 **None of them is published to the host.** The local STT lane exists so the
 channel's audio does not leave the box, and a published port is the easiest way
-to lose that by accident. Everything reaches them by container name on
-`phattvip`.
+to lose that by accident. Under (a) the first three are reached over loopback by
+a process in this same container and have no remaining reason to be reachable
+from anywhere else. `18789` is this gateway's own control port — publish it only
+if you actually want a second Control UI, and put auth on it if you do.
 
 ## Superseded
 
@@ -134,3 +179,14 @@ to lose that by accident. Everything reaches them by container name on
 - `whisper/deploy.sh`, `whisper/whisper-compose.yml` — the sidecar is gone.
   `whisper/verify.sh` still works if you point it at the `sexton` container.
 - The multi-container deploy steps in PHA-3220 and PHA-3306.
+- The `teamspeak` channel on the main `OpenClaw` gateway, and the
+  `/opt/sexton-tools` + `/etc/yt-dlp/plugins` path mappings it needed there.
+  `install/stage-teamspeak-link.sh` in the plugin repo still describes that
+  install; it is now the *rollback* path, not the deploy path.
+
+## A note on whisper, since PHA-3458
+
+PHA-3458 makes MiniMax the primary STT provider with whisper.cpp as the
+fallback. That does **not** take whisper or `ggml-base.en.bin` out of this
+image: a fallback that has to be downloaded when the primary fails is not a
+fallback. The weights stay baked in and `[program:whisper]` stays supervised.

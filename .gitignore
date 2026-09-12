@@ -2,3 +2,7 @@
 *.log
 .env
 node_modules/
+
+# PHA-3428: image/build.sh stages the private teamspeak plugin here for the
+# Docker build context, and removes it again on exit. Never commit it.
+/plugin/

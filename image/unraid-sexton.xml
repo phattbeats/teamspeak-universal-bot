@@ -33,9 +33,9 @@
   <Overview>
     The Sexton — chat memory, voice, ears and music for teamspeak.phatt.vip, in one container (PHA-3099 / PHA-3428).
 
-    Runs, under supervisord: the Sexton bot and its audio bridge (one tsclientlib connection, one bot account), a local whisper.cpp server with ggml-base.en baked in, and the bgutil POT provider for the music lane. ffmpeg and yt-dlp ship at /opt/sexton-tools for the OpenClaw gateway to bind-mount.
+    Runs, under supervisord: the Sexton bot and its audio bridge (one tsclientlib connection, one bot account), a local whisper.cpp server with ggml-base.en baked in, the bgutil POT provider with pinned ffmpeg/yt-dlp for the music lane, and — option (a), Brandon 2026-09-12 — its OWN OpenClaw gateway running the teamspeak channel plugin.
 
-    The OpenClaw teamspeak channel plugin is NOT in here — it stays in the main OpenClaw gateway, which is already on this network. See image/README.md in the repo.
+    Because the plugin runs in here, the bridge, whisper and the POT provider are reached over loopback and nothing has to be mounted into the main OpenClaw container. IMPORTANT: disable the teamspeak channel on the main gateway before starting this, or both gateways answer every message. There is no CLI for that — set channels.teamspeak.enabled to false in its openclaw.json and restart it. image/deploy.sh does this for you, after confirming this container has taken the channel over. See image/README.md in the repo.
   </Overview>
   <Category>Tools: Network:Voip</Category>
   <WebUI/>
@@ -54,7 +54,7 @@
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/sexton/logs</Config>
 
   <Config Name="Config" Target="/config" Default="/mnt/user/appdata/sexton/config"
-          Mode="rw" Description="Holds sexton-id.txt — the bot's TeamSpeak identity, which IS its server-side UID and permissions. Lose it and the Sexton comes back as a stranger. Keep it 0600 and back it up."
+          Mode="rw" Description="Two things live here. sexton-id.txt is the bot's TeamSpeak identity — it IS its server-side UID and permissions; lose it and the Sexton comes back as a stranger. openclaw/ is the in-container gateway's whole config and state tree, including the channel config and the plugin install record. Both are 0600 and both belong in your backups."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/sexton/config</Config>
 
   <Config Name="Channel" Target="SEXTON_CHANNEL" Default="General Shit"
@@ -84,6 +84,14 @@
   <Config Name="Duck gain" Target="SEXTON_DUCK_GAIN" Default="0.25"
           Mode="" Description="Music-lane gain floor (0..1) while someone is talking. Reaches the floor in 50ms, recovers in 800ms."
           Type="Variable" Display="advanced" Required="false" Mask="false">0.25</Config>
+
+  <Config Name="In-container gateway" Target="SEXTON_GATEWAY_ENABLED" Default="1"
+          Mode="" Description="1 = this container runs its own OpenClaw gateway with the teamspeak plugin (option (a), the deployed design). 0 = don't; that is the rollback to option (b), and it also means you must re-enable the teamspeak channel on the main OpenClaw gateway and point its bridgeUrl at ws://sexton:9099."
+          Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+
+  <Config Name="Gateway port" Target="SEXTON_GATEWAY_PORT" Default="18789"
+          Mode="" Description="Control port for the in-container gateway. Not published to the host by this template; it is here so it can be changed if it ever collides on a custom network."
+          Type="Variable" Display="advanced" Required="false" Mask="false">18789</Config>
 
   <Config Name="Log level" Target="RUST_LOG" Default="info"
           Mode="" Description="Rust tracing filter for the bot and bridge."
