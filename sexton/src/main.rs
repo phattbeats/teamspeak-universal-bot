@@ -70,24 +70,54 @@ mod ws_server;
 use audio::AudioState;
 use mixer::Mixer;
 
-/// First-contact PM: sent once per client, ever, immediately before their first
-/// catch-up (PHA-3305). Not the catch-up PM — see `catchup_text`.
+/// First-contact PM, stage one: sent once per client, ever, immediately before
+/// their first catch-up (PHA-3305). Not the catch-up PM — see `catchup_text`.
 ///
-/// Stage 2 adds the voice paragraph and the "your voice doesn't leave the house"
-/// line. Do not add either early: the second one is the $0-ceiling constraint
-/// from PHA-3228 restated as a wording rule, and a hosted metered STT anywhere
-/// in the path would make it a lie.
-const WELCOME_PM: &str = "Evening. I'm the Sexton — I keep the records for this hall.\n\n\
-                          One thing worth knowing before you settle in: everything typed in \
-                          the channel goes into the log, and I'll send you the last of it \
-                          whenever you walk in.\n\n\
-                          Ask me for something out of the log and I'll go down and find it.";
+/// Verbatim from PHA-3458, and it is load-bearing. The old stage-one copy
+/// promised only that *typed* messages were logged; the stt-tts lane now
+/// transcribes the hot mic, and PHA-3458 put a hosted second pass (MiniMax)
+/// behind it. "Assume anything said aloud here can leave the room" is the
+/// honest restatement of that. The earlier rule — "your voice doesn't leave the
+/// house" — is retired, not deferred: it was the $0-ceiling constraint from
+/// PHA-3177 worn as a wording rule, and Brandon traded it on 2026-09-12 for
+/// MiniMax's accuracy on the segments whisper is weak on.
+///
+/// Keep this next to the STT config (`transcription.provider` / `.secondary` in
+/// the teamspeak plugin). If the primary/secondary order ever flips back so no
+/// audio leaves the box, this copy flips in the same change.
+const WELCOME_PM: &str = "The Sexton is listening in this channel and writing down what is \
+                          said. It keeps a log you can ask it about. Most of that listening \
+                          happens on our own server — but when the house transcriber is busy \
+                          or the audio is hard, the segment goes out to MiniMax to be turned \
+                          into text. Assume anything said aloud here can leave the room.";
+/// Stage two: sent once per client, ever, the first time they address the
+/// Sexton by name. Not folded into `WELCOME_PM` on purpose — stage one is the
+/// disclosure and has to land before anyone speaks; this one is the how-to and
+/// is only useful to someone who has already tried.
+const ADDRESSED_PM: &str = "I keep the log. Say \"Sexton\" and I answer; say \"Plant\" and you \
+                            are speaking to the Plant, not to me.";
+/// The wake names stage two explains, lowercased. `Sexton` reaches this bot;
+/// `Plant` is the god persona and routes elsewhere, but someone calling for
+/// either has plainly worked out that something is listening, so both earn the
+/// explanation.
+const WAKE_NAMES: [&str; 2] = ["sexton", "plant"];
+/// One line, replacing the PHA-3305 channel description header. PHA-3424 took
+/// the rolling description away from this bot, so nothing here writes it — it
+/// is a server-side edit. Parked here so the copy lives in one place and the
+/// test below holds all three strings to the same standard.
+#[allow(dead_code)]
+const CHANNEL_DESCRIPTION: &str = "The Sexton listens here and keeps the log. Transcription \
+                                   runs on the house server; some audio is sent to MiniMax \
+                                   when the house transcriber can't take it. Say \"Sexton\" to \
+                                   be answered.";
 /// How many messages the catch-up PM includes.
 const CATCHUP_PM_COUNT: usize = 15;
 /// One catch-up PM per client per this long.
 const PM_RATE_LIMIT: Duration = Duration::from_secs(10 * 60);
 /// Where the welcomed-client list lives, inside the channel's log directory.
 const WELCOMED_FILE: &str = ".welcomed";
+/// Where the stage-two list lives, beside it.
+const ADDRESSED_FILE: &str = ".addressed";
 /// How many messages we keep in memory (comfortably covers the catch-up PM
 /// window).
 const HISTORY_CAP: usize = 200;
@@ -249,6 +279,10 @@ struct ChannelState {
     /// disk. Deliberately *not* the `last_pm` map: that one expires every ten
     /// minutes, and the welcome goes out once and stays out.
     welcomed: HashSet<String>,
+    /// Clients that have already had the stage-two PM, same keying and same
+    /// "once, ever" contract as `welcomed`, in its own file so the two stages
+    /// cannot be confused for one another on disk.
+    addressed: HashSet<String>,
     log_dir: PathBuf,
     /// Clients that were already connected when the bot came up — never PM'd
     /// on account of our own connect.
@@ -275,6 +309,7 @@ impl ChannelState {
             history: VecDeque::with_capacity(HISTORY_CAP),
             last_pm: HashMap::new(),
             welcomed: HashSet::new(),
+            addressed: HashSet::new(),
             log_dir,
             preexisting,
             quiet_until: tokio::time::Instant::now() + STARTUP_GRACE,
@@ -348,38 +383,33 @@ impl ChannelState {
         self.log_dir.join(&self.channel_name).join(WELCOMED_FILE)
     }
 
-    /// Read back who has already been welcomed (PHA-3305). Without this every
-    /// container restart re-introduces the Sexton to everyone who walks in, and
-    /// "once" quietly becomes "once per deploy".
+    fn addressed_path(&self) -> PathBuf {
+        self.log_dir.join(&self.channel_name).join(ADDRESSED_FILE)
+    }
+
+    /// Read back who has already had each stage of the notice (PHA-3305,
+    /// PHA-3458). Without this every container restart re-introduces the Sexton
+    /// to everyone who walks in, and "once" quietly becomes "once per deploy".
     ///
     /// Fail-open by contract, like `seed_history_from_disk`: a missing or
-    /// unreadable list costs one repeated welcome, never a failed connect.
+    /// unreadable list costs one repeated PM, never a failed connect.
     fn load_welcomed_from_disk(&mut self) {
-        let path = self.welcomed_path();
-        match std::fs::read_to_string(&path) {
-            Ok(body) => {
-                for line in body.lines() {
-                    let key = line.trim();
-                    if !key.is_empty() {
-                        self.welcomed.insert(key.to_string());
-                    }
-                }
-                info!(
-                    known = self.welcomed.len(),
-                    path = %path.display(),
-                    "loaded the already-welcomed list"
-                );
-            }
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    warn!(
-                        error = %e,
-                        path = %path.display(),
-                        "reading the already-welcomed list failed; someone may be welcomed twice"
-                    );
-                }
-            }
-        }
+        let welcomed_path = self.welcomed_path();
+        let mut welcomed = std::mem::take(&mut self.welcomed);
+        read_key_list(&welcomed_path, &mut welcomed);
+        self.welcomed = welcomed;
+
+        let addressed_path = self.addressed_path();
+        let mut addressed = std::mem::take(&mut self.addressed);
+        read_key_list(&addressed_path, &mut addressed);
+        self.addressed = addressed;
+
+        info!(
+            welcomed = self.welcomed.len(),
+            addressed = self.addressed.len(),
+            dir = %self.log_dir.join(&self.channel_name).display(),
+            "loaded the already-notified lists"
+        );
     }
 
     /// Record `key` as welcomed. `durable` keys — client uids — are appended to
@@ -387,24 +417,34 @@ impl ChannelState {
     /// `ClientId` means nothing to the next process.
     fn remember_welcomed(&mut self, key: String, durable: bool) {
         if durable {
-            if let Err(e) = self.append_welcomed(&key) {
+            if let Err(e) = self.append_key(WELCOMED_FILE, &key) {
                 warn!(error = %e, "recording the welcome on disk failed; it may go out again after a restart");
             }
         }
         self.welcomed.insert(key);
     }
 
-    fn append_welcomed(&self, key: &str) -> Result<()> {
+    /// Same contract as `remember_welcomed`, for the stage-two PM.
+    fn remember_addressed(&mut self, key: String, durable: bool) {
+        if durable {
+            if let Err(e) = self.append_key(ADDRESSED_FILE, &key) {
+                warn!(error = %e, "recording the stage-two PM on disk failed; it may go out again after a restart");
+            }
+        }
+        self.addressed.insert(key);
+    }
+
+    fn append_key(&self, file: &str, key: &str) -> Result<()> {
         let dir = self.log_dir.join(&self.channel_name);
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("creating log dir {}", dir.display()))?;
-        let path = dir.join(WELCOMED_FILE);
+        let path = dir.join(file);
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
-            .with_context(|| format!("opening welcomed list {}", path.display()))?;
+            .with_context(|| format!("opening notified list {}", path.display()))?;
         writeln!(f, "{key}")?;
         Ok(())
     }
@@ -1230,6 +1270,9 @@ fn handle_event(
                 error!(error = %e, "disk log append failed");
             }
             info!(from = %entry.nickname, kept = state.history.len(), "logged message");
+            // Stage two rides the same event: they have just addressed the
+            // Sexton, which is exactly when the how-to is worth reading.
+            maybe_send_addressed(con, state, invoker.id, &message);
         }
         // A client connected to the server and landed in a channel. If that
         // channel is the watched one, they are a joiner: catch them up.
@@ -1317,6 +1360,70 @@ fn maybe_send_catchup(
 /// the server has not handed us a uid for this client, fall back to the runtime
 /// `ClientId` — good enough to stop a channel hop re-welcoming them inside this
 /// session, and never persisted, where it would only collide with a stranger.
+/// Read one key per line into `into`. Fail-open: a missing file is the normal
+/// cold start, and an unreadable one costs a repeated PM, never a connect.
+fn read_key_list(path: &std::path::Path, into: &mut HashSet<String>) {
+    match std::fs::read_to_string(path) {
+        Ok(body) => {
+            for line in body.lines() {
+                let key = line.trim();
+                if !key.is_empty() {
+                    into.insert(key.to_string());
+                }
+            }
+        }
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "reading a notified list failed; someone may be PM'd twice"
+                );
+            }
+        }
+    }
+}
+
+/// Whether `message` addresses one of the wake names.
+///
+/// Deliberately a whole-word match on an ASCII-lowercased copy, not a substring
+/// one: "transplant" and "sextone" are not someone calling for the bot, and a
+/// stage-two PM fired at a word that happened to contain "plant" is a worse
+/// failure than a missed one — it goes out once, ever, and cannot be taken back.
+fn mentions_wake_name(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| WAKE_NAMES.contains(&word))
+}
+
+/// Stage two (PHA-3458): the first time a client calls a wake name out, tell
+/// them once how to use it. Keyed and persisted exactly like the welcome.
+fn maybe_send_addressed(
+    con: &mut Connection,
+    state: &mut ChannelState,
+    client_id: ClientId,
+    message: &str,
+) {
+    if !mentions_wake_name(message) {
+        return;
+    }
+    let (key, durable) = welcome_key(con, client_id);
+    if state.addressed.contains(&key) {
+        return;
+    }
+    match send_pm(con, client_id, ADDRESSED_PM) {
+        Ok(handle) => {
+            info!(?client_id, %key, durable, "stage-two PM sent");
+            state.pending_cmds.insert(handle.0, format!("stage-two PM to {client_id:?}"));
+            state.remember_addressed(key, durable);
+        }
+        // Not remembered on failure, same as the welcome: an unsent PM should
+        // be retried the next time they call, not marked as delivered.
+        Err(e) => warn!(error = %e, ?client_id, "stage-two PM failed"),
+    }
+}
+
 fn welcome_key(con: &mut Connection, client_id: ClientId) -> (String, bool) {
     let uid = con
         .get_state()
@@ -1630,28 +1737,92 @@ mod tests {
         ChannelState::new(ChannelId(0), channel.to_string(), dir.to_path_buf(), HashSet::new())
     }
 
-    /// The welcome PM ships in two stages (PHA-3177). Stage 2's sentences are
-    /// promises the text-only Sexton cannot keep, so this test is the guard
-    /// against them arriving early by way of a well-meaning edit.
+    /// The notice is approved copy, not prose to be improved in passing
+    /// (PHA-3177, PHA-3458). Both stages and the description line are held
+    /// verbatim so an edit has to be a deliberate one.
+    ///
+    /// The old two-stage *gate* — stage two withheld until the voice lane was
+    /// real — is discharged: PHA-3228 landed the lane and PHA-3458 put MiniMax
+    /// behind it. What replaces it is the disclosure check below.
     #[test]
-    fn the_welcome_pm_is_stage_one_and_carries_nothing_from_stage_two() {
+    fn the_notice_is_the_approved_copy_and_discloses_that_audio_leaves() {
         assert_eq!(
             WELCOME_PM,
-            "Evening. I'm the Sexton — I keep the records for this hall.\n\n\
-             One thing worth knowing before you settle in: everything typed in the channel goes \
-             into the log, and I'll send you the last of it whenever you walk in.\n\n\
-             Ask me for something out of the log and I'll go down and find it."
+            "The Sexton is listening in this channel and writing down what is said. It keeps a \
+             log you can ask it about. Most of that listening happens on our own server — but \
+             when the house transcriber is busy or the audio is hard, the segment goes out to \
+             MiniMax to be turned into text. Assume anything said aloud here can leave the room."
+        );
+        assert_eq!(
+            ADDRESSED_PM,
+            "I keep the log. Say \"Sexton\" and I answer; say \"Plant\" and you are speaking to \
+             the Plant, not to me."
+        );
+        assert_eq!(
+            CHANNEL_DESCRIPTION,
+            "The Sexton listens here and keeps the log. Transcription runs on the house server; \
+             some audio is sent to MiniMax when the house transcriber can't take it. Say \
+             \"Sexton\" to be answered."
         );
 
         // PHA-3424 removed the rolling channel description; the welcome must
         // not keep pointing people at it.
         assert!(!WELCOME_PM.contains("description"), "welcome still points at the description");
 
-        // PHA-3228 has not landed: nothing here may promise voice, or that the
-        // voice never leaves the box.
-        for stage_two in ["out loud", "listening", "voice", "say my name"] {
-            assert!(!WELCOME_PM.contains(stage_two), "stage-2 wording {stage_two:?} in the welcome");
+        // The hosted second pass is in the path. The welcome may not go back to
+        // claiming the audio stays home, and it must name where it goes.
+        assert!(WELCOME_PM.contains("MiniMax"), "the welcome no longer names the hosted provider");
+        assert!(
+            WELCOME_PM.contains("can leave the room"),
+            "the welcome no longer discloses that audio leaves"
+        );
+        for retired in ["doesn't leave the house", "does not leave the house", "stays in the house"]
+        {
+            assert!(!WELCOME_PM.contains(retired), "retired promise {retired:?} is back");
+            assert!(!CHANNEL_DESCRIPTION.contains(retired), "retired promise {retired:?} is back");
         }
+    }
+
+    /// A whole-word match, so ordinary words that merely contain a wake name do
+    /// not spend someone's one-and-only stage-two PM.
+    #[test]
+    fn the_stage_two_pm_fires_on_a_wake_name_and_not_on_a_word_containing_one() {
+        for addressed in [
+            "Sexton, what did I miss?",
+            "hey sexton",
+            "plant play something",
+            "ask the SEXTON",
+            "sexton?",
+        ] {
+            assert!(mentions_wake_name(addressed), "{addressed:?} should count as addressing");
+        }
+        for not_addressed in [
+            "transplant that into the other channel",
+            "sextons everywhere",
+            "planted",
+            "nothing to see here",
+        ] {
+            assert!(!mentions_wake_name(not_addressed), "{not_addressed:?} should not count");
+        }
+    }
+
+    #[test]
+    fn the_stage_two_pm_goes_out_once_and_stays_out_across_a_restart() {
+        let dir = scratch("addressed");
+        let channel = "General Shit";
+        let uid = "aQm5FQ0RfBBBhP0Cw0S1FCxjnbg=";
+
+        let mut state = state_in(&dir, channel);
+        assert!(!state.addressed.contains(uid), "nobody is stage-two'd on a cold start");
+        state.remember_addressed(uid.to_string(), true);
+        assert!(state.addressed.contains(uid));
+
+        let mut restarted = state_in(&dir, channel);
+        restarted.load_welcomed_from_disk();
+        assert!(restarted.addressed.contains(uid), "restart forgot who it had explained itself to");
+        // The two stages are tracked separately: stage two must not imply the
+        // welcome, or a restart would swallow someone's first-contact PM.
+        assert!(!restarted.welcomed.contains(uid), "stage two leaked into the welcomed list");
     }
 
     #[test]

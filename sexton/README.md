@@ -20,11 +20,14 @@ fact — and tells the room he is doing it.
    connects so a restart does not PM everyone already in the room.
 2. **Welcome PM.** The first time a client is ever caught up, and only the first time, the
    catch-up is preceded by a one-time notice saying what the Sexton does — that the channel is
-   logged, and that he will fetch older ones on request. Announced, not discovered (PHA-3177
-   draft B, PHA-3305). This is *not* the catch-up PM and does not share its 10-minute window: it
-   is keyed on the client's TeamSpeak uid, which survives reconnects, and the list of welcomed
-   uids is written to `<log-dir>/<channel-name>/.welcomed` so a container restart does not
-   re-introduce the Sexton to the whole room. Fail-open: a lost list costs one repeated welcome,
+   listened to and written down, that most transcription happens on the house server, and that
+   hard or busy segments go out to MiniMax, so anything said aloud can leave the room. Announced,
+   not discovered (PHA-3177 draft B, PHA-3305, copy revised on PHA-3458). A **stage-two PM** —
+   how to use the wake names — follows separately, the first time that client calls one out.
+   Neither is the catch-up PM, and neither shares its 10-minute window: each is keyed on the
+   client's TeamSpeak uid, which survives reconnects, and the uid lists are written to
+   `<log-dir>/<channel-name>/.welcomed` and `.addressed` so a container restart does not
+   re-introduce the Sexton to the whole room. Fail-open: a lost list costs one repeated PM,
    never a failed connect. Clients whose uid the server has not given us fall back to a
    session-only key, which is never written down.
 3. **Full log on disk.** Every message is appended to `<log-dir>/<channel-name>/YYYY-MM-DD.md`
@@ -36,15 +39,32 @@ above already cover the same ground. There is no longer any per-message or on-co
 `channeledit` at all — the channel description is untouched by the bot. The on-connect
 rehydration survives the removal: it feeds the catch-up PM, not just the old description.
 
-### HARD RULE: the welcome PM ships in two stages
+### HARD RULE: the notice discloses that audio can leave the room
 
-The welcome PM above is **stage 1**. Stage 2 — the voice paragraph and the line
-`your voice doesn't leave the house` — ships in the same commit as the voice lane going live
-(PHA-3228), and not before. Both stage-2 sentences are promises: the first is false while the
-Sexton is text-only, and the second is false if any metered hosted STT is ever in the path,
-which is the $0-ceiling constraint from PHA-3177 restated as a wording rule. The exact stage-2
-text is in the PHA-3099 banner; `the_welcome_pm_is_stage_one_and_carries_nothing_from_stage_two`
-in `src/main.rs` fails if it arrives early.
+The old rule here held stage 2 of the welcome back until the voice lane was real, and forbade
+the line `your voice doesn't leave the house` while any metered hosted STT could be in the path.
+**Both halves are discharged as of PHA-3458.** PHA-3228 landed the lane, and Brandon's
+2026-09-12 decision put a hosted second pass behind it: whisper.cpp transcribes every segment on
+the house server, and MiniMax `asr-1.0` re-hears the ones whisper is weak on (low confidence,
+long, or explicitly escalated). The `$0`-ceiling wording rule from PHA-3177 is retired, not
+deferred — it was traded for accuracy, deliberately.
+
+What replaces it: **the notice must say that audio can leave the room, and name where it goes.**
+The copy is approved verbatim on PHA-3458 and lives in `src/main.rs` as `WELCOME_PM` (stage one,
+on first catch-up), `ADDRESSED_PM` (stage two, the first time a client calls a wake name), and
+`CHANNEL_DESCRIPTION` (one line, a server-side edit — PHA-3424 took the description away from
+this bot, so nothing here writes it). `the_notice_is_the_approved_copy_and_discloses_that_audio_leaves`
+fails on an edit to any of the three, on the welcome dropping `MiniMax` or the leaves-the-room
+sentence, and on the retired promise coming back.
+
+Keep the copy next to the STT config (`transcription.provider` / `.secondary` in the teamspeak
+plugin). **If the primary/secondary order ever flips back so that no audio leaves the box, the
+copy flips in the same change.**
+
+Stage two is keyed and persisted exactly like stage one, in `<log-dir>/<channel-name>/.addressed`
+beside `.welcomed` — once per client, ever, surviving restarts, fail-open. The wake-name match is
+whole-word (`mentions_wake_name`): `transplant` is not someone calling for the Plant, and a
+stage-two PM spent on a false positive cannot be taken back.
 
 ### HARD RULE: content only
 
