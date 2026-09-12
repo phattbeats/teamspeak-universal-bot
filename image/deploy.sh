@@ -148,25 +148,6 @@ docker run -d \
   -v "$APPDATA/config":/config \
   "$IMAGE"
 
-# --------------------------------------------------------------------------
-# Turn the main gateway's teamspeak channel off.
-#
-# This is the other half of "do not wire the bridge socket out to the main
-# gateway" (Brandon, 2026-09-12). It is not optional housekeeping: until this
-# runs, the main gateway is still dialling ws://sexton:9099 and the room gets
-# every answer twice, from two different agents.
-# --------------------------------------------------------------------------
-if [ "$DISABLE_MAIN_TEAMSPEAK" = "1" ]; then
-  if docker ps --format '{{.Names}}' | grep -qx "$MAIN_GATEWAY"; then
-    log "disabling the teamspeak channel on the $MAIN_GATEWAY gateway"
-    docker exec "$MAIN_GATEWAY" openclaw channels disable teamspeak \
-      || echo "WARNING: could not disable teamspeak on $MAIN_GATEWAY — do it by hand, or the room hears everything twice." >&2
-    docker exec "$MAIN_GATEWAY" openclaw channels status 2>&1 | grep -i teamspeak || true
-  else
-    echo "note: $MAIN_GATEWAY is not running; nothing to disable."
-  fi
-fi
-
 log "waiting for health"
 for _ in $(seq 1 40); do
   status=$(docker inspect -f '{{.State.Health.Status}}' "$NAME" 2>/dev/null || echo unknown)
@@ -175,6 +156,58 @@ for _ in $(seq 1 40); do
   sleep 5
 done
 docker inspect -f "$NAME: {{.State.Status}} health={{.State.Health.Status}}" "$NAME"
+
+# --------------------------------------------------------------------------
+# Turn the main gateway's teamspeak channel off — AFTER the new one is up.
+#
+# This is the other half of "do not wire the bridge socket out to the main
+# gateway" (Brandon, 2026-09-12), and it is not optional housekeeping: until it
+# runs, the main gateway is still dialling ws://sexton:9099 and the room gets
+# every answer twice, from two different agents.
+#
+# Order matters, and the wrong order is the one that bites. Disabling before
+# the new gateway answers leaves the channel with NO agent in it for however
+# long this deploy takes to go wrong — a silent Sexton, which from the room
+# looks exactly like the bot being broken. So: wait for health first, confirm
+# this container's gateway has actually connected the channel, and only then
+# take the old one out.
+#
+# If the new gateway did NOT connect, we leave the main one alone and say so.
+# Double answers are annoying; no answers is an outage.
+# --------------------------------------------------------------------------
+if [ "$DISABLE_MAIN_TEAMSPEAK" = "1" ] && [ "$GATEWAY_ENABLED" = "1" ]; then
+  log "waiting for this container's gateway to connect the teamspeak channel"
+  connected=0
+  for _ in $(seq 1 30); do
+    if docker exec "$NAME" openclaw channels status 2>/dev/null \
+         | grep -i teamspeak | grep -q connected; then
+      connected=1
+      break
+    fi
+    sleep 5
+  done
+  docker exec "$NAME" openclaw channels status 2>&1 | grep -i teamspeak || true
+
+  if [ "$connected" = 1 ]; then
+    if docker ps --format '{{.Names}}' | grep -qx "$MAIN_GATEWAY"; then
+      log "disabling the teamspeak channel on the $MAIN_GATEWAY gateway"
+      docker exec "$MAIN_GATEWAY" openclaw channels disable teamspeak \
+        || echo "WARNING: could not disable teamspeak on $MAIN_GATEWAY — do it by hand, or the room hears everything twice." >&2
+      docker exec "$MAIN_GATEWAY" openclaw channels status 2>&1 | grep -i teamspeak || true
+    else
+      echo "note: $MAIN_GATEWAY is not running; nothing to disable."
+    fi
+  else
+    echo >&2
+    echo "WARNING: this container's gateway did not report the teamspeak channel" >&2
+    echo "         connected. LEAVING the main gateway's channel enabled, so the" >&2
+    echo "         room still has an agent in it." >&2
+    echo "         Expect double answers until one of them is turned off." >&2
+    echo "         Look at:  docker logs $NAME 2>&1 | grep -i run-gateway" >&2
+    echo "         Most likely cause: no model credentials in" >&2
+    echo "         $APPDATA/config/openclaw/openclaw.json." >&2
+  fi
+fi
 
 cat <<EOF
 
