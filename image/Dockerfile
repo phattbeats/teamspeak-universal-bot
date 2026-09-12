@@ -205,7 +205,8 @@ ENV RUST_LOG=info \
     WHISPER_PORT=8080 \
     WHISPER_THREADS=4 \
     WHISPER_LANGUAGE=en \
-    POT_PORT=4416
+    POT_PORT=4416 \
+    POT_HOST=0.0.0.0
 
 # 9099 the bridge WebSocket (the plugin dials this), 8080 whisper, 4416 POT.
 # None of the three should ever be published to the host: the whole premise of
