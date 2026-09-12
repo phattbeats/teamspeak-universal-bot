@@ -77,10 +77,21 @@ log "stage the teamspeak plugin from ${PLUGIN_SRC}"
 }
 rm -rf "$REPO_ROOT/plugin"
 cp -a "$PLUGIN_SRC" "$REPO_ROOT/plugin"
-# node_modules comes back in the plugin-builder stage against the gateway
-# image's own npm; shipping the host's copy in would only risk a tree resolved
-# by a different node.
-rm -rf "$REPO_ROOT/plugin/node_modules" "$REPO_ROOT/plugin/.git"
+# Strip HERE rather than in the Dockerfile. node_modules comes back in the
+# plugin-builder stage against the gateway image's own npm (the host's copy
+# could be a tree resolved by a different node), and the standalone-only
+# scaffolding — the SDK stubs and the standalone vitest config — exists so the
+# plugin can be tested outside a gateway; in a runtime install the stubs shadow
+# the real SDK. stage-teamspeak-link.sh strips exactly this set, for exactly
+# this reason.
+#
+# Doing it on the host also sidesteps the thing that broke the first build of
+# this: the gateway image does not run as root, COPY lands files owned by root,
+# and the unprivileged user cannot rm them.
+rm -rf "$REPO_ROOT/plugin/node_modules" \
+       "$REPO_ROOT/plugin/.git" \
+       "$REPO_ROOT/plugin/test/sdk-stubs" \
+       "$REPO_ROOT/plugin/vitest.standalone.config.ts"
 trap 'rm -rf "$REPO_ROOT/plugin"' EXIT
 
 log "build ${IMAGE}:${TAG}  (openclaw ${OPENCLAW_VERSION})"

@@ -173,11 +173,20 @@ RUN set -eu; \
 #    thing.
 # --------------------------------------------------------------------------
 FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION} AS plugin-builder
+# The gateway image does not run as root, and COPY lands files owned by root,
+# so an unprivileged npm cannot write node_modules into /plugin. This is a
+# throwaway builder stage — nothing from it ships except the directory itself —
+# so root here costs nothing. The runtime stage keeps the base image's user.
+USER root
 WORKDIR /plugin
+# The standalone-only scaffolding (SDK stubs, the standalone vitest config) is
+# already stripped by image/build.sh, on the host, before the context is built.
+# Doing it there rather than here means this stage needs no write access to
+# anything it did not create.
 COPY plugin/ /plugin/
-RUN rm -rf /plugin/node_modules /plugin/test/sdk-stubs /plugin/vitest.standalone.config.ts \
-    && npm install --omit=dev --no-audit --no-fund \
+RUN npm install --omit=dev --no-audit --no-fund \
     && test -f /plugin/openclaw.plugin.json \
+    && test -f /plugin/index.ts \
     && test -d /plugin/node_modules/ws
 
 # --------------------------------------------------------------------------
@@ -201,6 +210,14 @@ RUN rm -rf /plugin/node_modules /plugin/test/sdk-stubs /plugin/vitest.standalone
 # --------------------------------------------------------------------------
 FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION}
 ARG WHISPER_MODEL=ggml-base.en.bin
+
+# The gateway image declares USER node. Everything here needs root: apt, the
+# supervisord that is PID 1 (its conf says user=root and its socket lives in
+# /run), the bot writing its identity to the mounted /config, and whisper
+# reading /opt. This is also what the `OpenClaw` container on the box already
+# does — Unraid overrides that image's user to root — so running as root here
+# is matching the deployed gateway, not loosening it.
+USER root
 
 # ca-certificates/curl: TLS out and the healthcheck.
 # libopus0/libasound2: the Sexton's audio lane (PHA-3342).
