@@ -47,7 +47,7 @@ use chrono::Local;
 use futures::prelude::*;
 use md5::{Digest, Md5};
 use tokio::sync::{broadcast, mpsc, Mutex as TokioMutex};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use tsclientlib::prelude::*;
 use tsclientlib::messages::c2s::{
