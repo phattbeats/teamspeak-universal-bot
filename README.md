@@ -7,6 +7,16 @@ TeamSpeak does not persist channel text chat — anyone who joins a channel
 late sees nothing that was said before they arrived. The Sexton fixes that,
 and is the platform the later voice/tool work builds on.
 
+## Deploy
+
+Everything ships as **one container** (PHA-3428): the bot, the audio bridge,
+a local whisper.cpp with its weights baked in, and the music lane's tooling,
+supervised so one process dying does not drop the rest. Build it with
+`image/build.sh` and deploy it with `image/deploy.sh` (or the Unraid template
+in `image/unraid-sexton.xml`) — see [`image/README.md`](image/README.md),
+which also records why the OpenClaw channel plugin stays in the main gateway
+rather than moving in here.
+
 ## Scope
 
 - **v1 — chat memory** (PHA-3173, PHA-3107): a catch-up PM on join and a full

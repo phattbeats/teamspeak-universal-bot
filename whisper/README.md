@@ -1,4 +1,17 @@
-# whisper — the local STT sidecar (PHA-3228)
+# whisper — the local STT lane (PHA-3228)
+
+> **SUPERSEDED as a container by PHA-3428.** whisper.cpp and `ggml-base.en.bin`
+> are now baked into the single `phattbeats/sexton` image and run under
+> supervisord beside the bot — there is no `whisper` container any more, and
+> `deploy.sh` / `whisper-compose.yml` below are kept only as the record of how
+> the sidecar was configured. The flags they pass are the flags
+> `image/run-whisper.sh` still passes; keep the two in step. The rest of this
+> file — why the lane is local at all, what the plugin requires, how to probe
+> it — is unchanged and still correct, except that the hostname is now
+> `sexton` rather than `whisper`:
+> `http://sexton:8080/inference`.
+>
+> See `image/README.md`.
 
 The `voice.mode=stt-tts` lane transcribes speaker audio here, on the TS6 host's
 own Docker network, and nowhere else.

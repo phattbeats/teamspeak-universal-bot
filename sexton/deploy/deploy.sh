@@ -1,5 +1,10 @@
 #!/bin/bash
 # PHA-3173 / PHA-3215 production deploy for the Sexton on PHATT-RAID.
+#
+# SUPERSEDED by image/deploy.sh (PHA-3428): the whole stack is one container
+# now. Do NOT run this alongside it — two bots on one identity is a UID
+# collision and the server drops one of them. Kept as the record of the
+# settings this deploy proved; image/deploy.sh carries them forward.
 # PHATT-RAID has no docker compose plugin, so this is the `docker run` form of
 # sexton-compose.yml. Keep the two in step.
 # Connect by container name on the TS6 server's own Docker network; do NOT use
