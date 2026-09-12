@@ -119,6 +119,20 @@ if [ "$IMPORT_GATEWAY_CONFIG" = "1" ] && [ "$GATEWAY_ENABLED" = "1" ]; then
       for (const k of ["models", "auth", "agents", "tts", "env"]) {
         if (src[k] !== undefined) out[k] = src[k];
       }
+      // Bindings, but ONLY the teamspeak one. `agents` above brings over every
+      // agent the main gateway defines, and with more than one agent present
+      // the channel refuses to start rather than guess: "Multiple agents are
+      // configured, but teamspeak account default routing has no explicit
+      // owner." The teamspeak binding is the answer to exactly that, and it
+      // names the agent that has actually been serving the room.
+      //
+      // The discord/signal/whatsapp bindings are dropped: harmless here, since
+      // those channels are not configured, but a binding for a channel this
+      // gateway does not run is a lie in a config file.
+      if (Array.isArray(src.bindings)) {
+        const ts = src.bindings.filter((b) => b?.match?.channel === "teamspeak");
+        if (ts.length) out.bindings = ts;
+      }
       process.stdout.write(JSON.stringify(out, null, 2));
     ' > "$APPDATA/config/openclaw/credentials.import.json.part"
     mv "$APPDATA/config/openclaw/credentials.import.json.part" \
@@ -191,9 +205,34 @@ if [ "$DISABLE_MAIN_TEAMSPEAK" = "1" ] && [ "$GATEWAY_ENABLED" = "1" ]; then
   if [ "$connected" = 1 ]; then
     if docker ps --format '{{.Names}}' | grep -qx "$MAIN_GATEWAY"; then
       log "disabling the teamspeak channel on the $MAIN_GATEWAY gateway"
-      docker exec "$MAIN_GATEWAY" openclaw channels disable teamspeak \
-        || echo "WARNING: could not disable teamspeak on $MAIN_GATEWAY — do it by hand, or the room hears everything twice." >&2
-      docker exec "$MAIN_GATEWAY" openclaw channels status 2>&1 | grep -i teamspeak || true
+      # Config edit + restart, NOT `openclaw channels …`. There is no
+      # `channels disable` subcommand, and `channels remove --channel` takes a
+      # fixed enum of built-in channel names that a PLUGIN channel like
+      # teamspeak is not in — so neither CLI path can turn this one off. The
+      # config flag is the only lever, and it needs a gateway restart to take.
+      docker exec "$MAIN_GATEWAY" node -e '
+        const fs = require("fs");
+        const p = "/root/.openclaw/openclaw.json";
+        const c = JSON.parse(fs.readFileSync(p, "utf8"));
+        if (!c.channels || !c.channels.teamspeak) {
+          console.log("no teamspeak channel block; nothing to disable");
+          process.exit(0);
+        }
+        if (c.channels.teamspeak.enabled === false) {
+          console.log("teamspeak already disabled");
+          process.exit(0);
+        }
+        c.channels.teamspeak.enabled = false;
+        fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
+        console.log("set channels.teamspeak.enabled = false");
+      ' || { echo "WARNING: could not edit $MAIN_GATEWAY config — disable teamspeak by hand, or the room hears everything twice." >&2; }
+
+      log "restarting $MAIN_GATEWAY so the change takes"
+      # This briefly drops Discord/Signal/WhatsApp on that gateway. The Sexton
+      # is unaffected — its channel is served from this container now, which is
+      # the entire point of option (a).
+      docker restart "$MAIN_GATEWAY" >/dev/null \
+        || echo "WARNING: could not restart $MAIN_GATEWAY; it is still serving teamspeak until you do." >&2
     else
       echo "note: $MAIN_GATEWAY is not running; nothing to disable."
     fi
@@ -239,8 +278,10 @@ IMPORT_GATEWAY_CONFIG=1, or put a models/auth block in that file by hand.
 
 Rolling back to (b), if this ever needs it:
   GATEWAY_ENABLED=0 DISABLE_MAIN_TEAMSPEAK=0 image/deploy.sh
-  docker exec ${MAIN_GATEWAY} openclaw channels enable teamspeak
-and re-point the main gateway's bridgeUrl at ws://${NAME}:9099. That also needs
+then set channels.teamspeak.enabled back to true in the main gateway's
+/root/.openclaw/openclaw.json and restart it — there is no CLI for this, see
+the note above the disable step — and re-point its bridgeUrl at
+ws://${NAME}:9099. That also needs
 the bridge/whisper ports reachable from ${MAIN_GATEWAY} on ${NETWORK}, which
 they are — they bind 0.0.0.0 and both containers are on that network. Nothing
 is published to the host either way.

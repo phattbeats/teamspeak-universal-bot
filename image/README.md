@@ -126,8 +126,19 @@ connected to the same bridge socket and the room hears every answer twice, from
 two different agents. `image/deploy.sh` does this automatically
 (`DISABLE_MAIN_TEAMSPEAK=1`, the default). If you deploy by hand:
 
+…and there is **no CLI for it**. `openclaw channels disable` does not exist,
+and `openclaw channels remove --channel` takes a fixed enum of built-in channel
+names that a *plugin* channel like `teamspeak` is not in. The config flag is
+the only lever, and it needs a gateway restart to take:
+
 ```bash
-docker exec OpenClaw openclaw channels disable teamspeak
+docker exec OpenClaw node -e '
+  const fs = require("fs"), p = "/root/.openclaw/openclaw.json";
+  const c = JSON.parse(fs.readFileSync(p, "utf8"));
+  c.channels.teamspeak.enabled = false;
+  fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
+'
+docker restart OpenClaw
 ```
 
 `config.ts`'s comment that the POT provider is "an image concern, not a plugin

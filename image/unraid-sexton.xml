@@ -35,7 +35,7 @@
 
     Runs, under supervisord: the Sexton bot and its audio bridge (one tsclientlib connection, one bot account), a local whisper.cpp server with ggml-base.en baked in, the bgutil POT provider with pinned ffmpeg/yt-dlp for the music lane, and — option (a), Brandon 2026-09-12 — its OWN OpenClaw gateway running the teamspeak channel plugin.
 
-    Because the plugin runs in here, the bridge, whisper and the POT provider are reached over loopback and nothing has to be mounted into the main OpenClaw container. IMPORTANT: disable the teamspeak channel on the main gateway ("docker exec OpenClaw openclaw channels disable teamspeak") before starting this, or both gateways answer every message. See image/README.md in the repo.
+    Because the plugin runs in here, the bridge, whisper and the POT provider are reached over loopback and nothing has to be mounted into the main OpenClaw container. IMPORTANT: disable the teamspeak channel on the main gateway before starting this, or both gateways answer every message. There is no CLI for that — set channels.teamspeak.enabled to false in its openclaw.json and restart it. image/deploy.sh does this for you, after confirming this container has taken the channel over. See image/README.md in the repo.
   </Overview>
   <Category>Tools: Network:Voip</Category>
   <WebUI/>
