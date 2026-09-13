@@ -1033,7 +1033,17 @@ async fn run_once(
     audio::emit_state_and_roster(&mut con, event_tx, snapshot, &mut last_roster_sig, &mut last_channel_id).await;
 
     let mut tick = tokio::time::interval(Duration::from_millis(20));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // `Burst`, not `Skip`. `on_tick` pops exactly one 20 ms frame from the
+    // mixer and emits one Opus packet, so the tick rate *is* the playout
+    // clock. Under `Skip` a stalled loop — four speakers waking the event
+    // branch while whisper pegs the box — silently retires the missed ticks,
+    // and the queue then drains slower than real time forever: the listener's
+    // jitter buffer underruns and conceals the gaps, which is what made the
+    // voice warble and stutter (PHA-3428, Brandon 2026-09-13). `Burst` pays
+    // the backlog off in a catch-up run so the average frame rate stays 50/s;
+    // the bunched packets land inside the receiver's jitter buffer instead of
+    // starving it.
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
 
     // The text lane used to just `.await` `con.events().next()` in a bare
     // loop. PHA-3342 adds two more wakeups against the same connection: the
