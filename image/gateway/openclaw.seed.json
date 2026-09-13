@@ -13,7 +13,9 @@
         "requireWakeName": true,
         "wakeNames": [
           "Sexton",
-          "sexton"
+          "sexton",
+          "Henchman",
+          "henchman"
         ],
         "streaming": {
           "transcription": {
