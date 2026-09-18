@@ -251,6 +251,12 @@ if ! node -e '
       const names = env.SEXTON_WAKE_NAMES.split(",").map((n) => n.trim()).filter(Boolean);
       ts.voice.wakeNames = [...new Set(names.flatMap((n) => [n, n.toLowerCase()]))];
     }
+    // A voice of its own (PHA-3554, Brandon: a different MiniMax voice so
+    // Bexton does not match the Sexton). The plugin passes this as the TTS
+    // override, so it wins over the voiceId in the imported tts block.
+    if (env.SEXTON_TTS_VOICE_ID) {
+      ts.voice.streaming.speech.voiceId = env.SEXTON_TTS_VOICE_ID;
+    }
     // The house band (PHA-3554). Opt-in, and the MiniMax key is the one the
     // TTS block already carries, so nobody types it twice.
     if (env.SEXTON_BAND_ENABLED === "1") {

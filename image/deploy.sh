@@ -53,6 +53,8 @@ IMPORT_CONFIG_PATH=${IMPORT_CONFIG_PATH:-/root/.openclaw/openclaw.json}
 # Sexton. See image/deploy-bexton.sh for the values.
 AGENT_ID=${AGENT_ID:-}
 WAKE_NAMES=${WAKE_NAMES:-}
+# MiniMax voice id for this persona; empty keeps the imported tts block's.
+TTS_VOICE_ID=${TTS_VOICE_ID:-}
 BAND_ENABLED=${BAND_ENABLED:-0}
 BAND_PROVIDER=${BAND_PROVIDER:-minimax}
 AVATAR=${AVATAR:-/usr/local/share/sexton-avatar/brandon.png}
@@ -175,6 +177,7 @@ docker run -d \
   -e SEXTON_GATEWAY_PORT="$GATEWAY_PORT" \
   -e SEXTON_AGENT_ID="$AGENT_ID" \
   -e SEXTON_WAKE_NAMES="$WAKE_NAMES" \
+  ${TTS_VOICE_ID:+-e SEXTON_TTS_VOICE_ID="$TTS_VOICE_ID"} \
   -e SEXTON_BAND_ENABLED="$BAND_ENABLED" \
   -e SEXTON_BAND_PROVIDER="$BAND_PROVIDER" \
   ${BAND_NAME:+-e SEXTON_BAND_NAME="$BAND_NAME"} \

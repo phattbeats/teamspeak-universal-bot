@@ -39,6 +39,10 @@ export APPDATA=${APPDATA:-/mnt/user/appdata/bexton}
 export CHANNEL=${CHANNEL:-General Shit}
 export AGENT_ID=${AGENT_ID:-bexton}
 export WAKE_NAMES=${WAKE_NAMES:-Bexton,band leader,maestro}
+# Not the Sexton's English_WiseScholar (Brandon, 2026-09-18). A bossy leader
+# "speaking unconcernedly with an air of command"; English_ManWithDeepVoice is
+# the other fit if this one reads too flat.
+export TTS_VOICE_ID=${TTS_VOICE_ID:-English_BossyLeader}
 export BAND_ENABLED=1
 export BAND_PROVIDER=${BAND_PROVIDER:-minimax}
 export BAND_NAME=${BAND_NAME:-The Velvet Vice Lounge Band}

@@ -95,6 +95,10 @@
           Mode="" Description="Comma-separated names that wake the bot in voice. Lower-case variants are added automatically."
           Type="Variable" Display="always" Required="false" Mask="false">Bexton,band leader,maestro</Config>
 
+  <Config Name="MiniMax voice" Target="SEXTON_TTS_VOICE_ID" Default="English_BossyLeader"
+          Mode="" Description="MiniMax system voice id for this persona, so Bexton does not sound like the Sexton (English_WiseScholar). English_ManWithDeepVoice is the other fit."
+          Type="Variable" Display="always" Required="false" Mask="false">English_BossyLeader</Config>
+
   <Config Name="House band" Target="SEXTON_BAND_ENABLED" Default="1"
           Mode="" Description="1 = compose_song / band_status are on and the band leader announces and plays generated songs. Generation costs money on every provider that can do it."
           Type="Variable" Display="always" Required="true" Mask="false">1</Config>
