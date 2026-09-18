@@ -91,10 +91,14 @@ const WELCOME_PM: &str = "Evening. I'm the Sexton — I keep the records for thi
                           Ask me for something out of the log and I'll go down and find it.";
 /// How many messages the catch-up PM includes.
 const CATCHUP_PM_COUNT: usize = 15;
-/// One catch-up PM per client per this long.
-const PM_RATE_LIMIT: Duration = Duration::from_secs(10 * 60);
 /// Where the welcomed-client list lives, inside the channel's log directory.
 const WELCOMED_FILE: &str = ".welcomed";
+/// Where the per-UID "last caught up to" history index lives. One
+/// tab-separated line per UID, sorted by UID. Loaded on connect and
+/// rewritten every time a catch-up PM is sent, so a bot restart within
+/// the catch-up window no longer re-broadcasts the same recap (the
+/// trade-off the old in-memory `last_pm` map used to take, PHA-3340).
+const CAUGHT_UP_FILE: &str = ".caught_up";
 /// How many messages we keep in memory (comfortably covers the description
 /// budget and the catch-up PM window).
 const HISTORY_CAP: usize = 200;
@@ -187,6 +191,15 @@ struct Args {
     /// either way; push `voice_audio` directly in the meantime.
     #[arg(long, default_value = "")]
     tts_webhook_url: String,
+
+    /// Disable the catch-up PM entirely (welcome still fires). For second
+    /// instances of the sexton binary — Bexton, etc. — that run on the
+    /// same channel as the primary Sexton: their catch-up PMs duplicate the
+    /// primary's and serve only to spam every joiner with a duplicate
+    /// recap. Set `SEXTON_NO_CATCHUP=1` in the container env (or pass
+    /// `--no-catchup`) to suppress.
+    #[arg(long, env = "SEXTON_NO_CATCHUP", default_value_t = false)]
+    no_catchup: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -239,18 +252,22 @@ struct ChannelState {
     channel_id: ChannelId,
     channel_name: String,
     history: VecDeque<LoggedMessage>,
-    /// Last catch-up PM sent to each client, keyed by their TeamSpeak uid (the
-    /// same key `welcomed` uses). `ClientId` is session-bound — the server
-    /// hands out a fresh one every reconnect — so keying off it would re-PM
-    /// the same person every login. We do not persist this map: a bot restart
-    /// inside the rate-limit window is rare, and the welcome-then-catch-up
-    /// blast on a fresh process is the lesser evil compared to growing the
-    /// `.welcomed` format.
-    last_pm: HashMap<String, tokio::time::Instant>,
+    /// Where each UID was caught up to: the `history.len()` at the moment of
+    /// their last catch-up PM. Persisted to `.caught_up` (next to `.welcomed`)
+    /// so a bot restart within the old 10-min rate-limit window no longer
+    /// re-broadcasts the same recap. A UID that has never been caught up is
+    /// absent — `unwrap_or(0)` treats it as the empty-history case.
+    caught_up: HashMap<String, usize>,
+    /// Clients whose TeamSpeak uid isn't yet populated in `state.clients` at
+    /// the moment their channel-property event fires — the bot defers the
+    /// catch-up until a later PropertyChanged populates the uid, so we never
+    /// fall back to the session-bound `client-id:{N}` key the way PHA-3340's
+    /// `welcome_key` did for the time-based rate-limit map. Cleared on every
+    /// successful catch-up.
+    pending_catchup: HashSet<ClientId>,
     /// Clients that have already had the one-time welcome PM, keyed by
     /// TeamSpeak uid (stable across reconnects and restarts) and persisted to
-    /// disk. Welcomes are durable; catch-ups just suppress within the
-    /// `PM_RATE_LIMIT` window so a quick hop in and out is not re-broadcast.
+    /// disk.
     welcomed: HashSet<String>,
     log_dir: PathBuf,
     /// Clients that were already connected when the bot came up — never PM'd
@@ -276,7 +293,8 @@ impl ChannelState {
             channel_id,
             channel_name,
             history: VecDeque::with_capacity(HISTORY_CAP),
-            last_pm: HashMap::new(),
+            caught_up: HashMap::new(),
+            pending_catchup: HashSet::new(),
             welcomed: HashSet::new(),
             log_dir,
             preexisting,
@@ -444,16 +462,99 @@ impl ChannelState {
         Ok(())
     }
 
-    fn catchup_text(&self) -> String {
-        if self.history.is_empty() {
+    fn catchup_text_from(&self, start: usize) -> String {
+        let total = self.history.len();
+        if total == 0 {
             return format!("Nothing logged yet in \"{}\".", self.channel_name);
         }
-        let start = self.history.len().saturating_sub(CATCHUP_PM_COUNT);
+        let actual_start = start.min(total);
+        let available = total - actual_start;
+        if available == 0 {
+            return "Nothing new since you were last here.".to_string();
+        }
+        // Cap at CATCHUP_PM_COUNT messages from the *end*, so a brand-new
+        // uid (start=0) sees the same last-15 the old behaviour sent, while
+        // a returning uid sees only what arrived since their last catch-up.
+        let take = available.min(CATCHUP_PM_COUNT);
+        let begin = total - take;
         let mut out = String::new();
-        for entry in self.history.iter().skip(start) {
+        for entry in self.history.iter().skip(begin).take(take) {
             out.push_str(&entry.render_line());
         }
         out
+    }
+
+    fn caught_up_path(&self) -> PathBuf {
+        self.log_dir.join(&self.channel_name).join(CAUGHT_UP_FILE)
+    }
+
+    /// Read back per-UID "last caught up to" history index from `.caught_up`.
+    /// Fail-open by contract (like `load_welcomed_from_disk`): a missing or
+    /// unreadable file leaves `caught_up` empty (every uid treated as never
+    /// caught up — same shape as a fresh deploy) and never stops the bot
+    /// connecting. The cost of a missing/unreadable index is one redundant
+    /// catch-up after a restart, never a failed connect.
+    fn load_caught_up_from_disk(&mut self) {
+        let path = self.caught_up_path();
+        match std::fs::read_to_string(&path) {
+            Ok(body) => {
+                for line in body.lines() {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    // Format: "<uid>\t<history_len>". Skip anything that
+                    // doesn't parse — hand-added markdown, a uid containing
+                    // a tab (none exist, but be defensive), or a stale
+                    // header.
+                    let Some((uid, len_str)) = line.split_once('\t') else {
+                        continue;
+                    };
+                    if let Ok(history_len) = len_str.parse::<usize>() {
+                        self.caught_up.insert(uid.to_string(), history_len);
+                    }
+                }
+                info!(
+                    known = self.caught_up.len(),
+                    path = %path.display(),
+                    "loaded the caught-up history index"
+                );
+            }
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    warn!(
+                        error = %e,
+                        path = %path.display(),
+                        "reading the caught-up file failed; some users may re-receive the same recap after a restart"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Persist the full `caught_up` map. Truncate-and-rewrite, sorted by uid
+    /// so the file is deterministic across writes (diffable, predictable
+    /// for tests). Called after every successful catch-up PM, so a bot
+    /// restart within what used to be the 10-min rate-limit window can no
+    /// longer re-broadcast the same recap.
+    fn save_caught_up(&self) -> Result<()> {
+        let dir = self.log_dir.join(&self.channel_name);
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("creating log dir {}", dir.display()))?;
+        let path = dir.join(CAUGHT_UP_FILE);
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("opening caught_up file {}", path.display()))?;
+        let mut entries: Vec<_> = self.caught_up.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        for (uid, history_len) in entries {
+            writeln!(f, "{uid}\t{history_len}")?;
+        }
+        Ok(())
     }
 
     fn append_disk_log(&self, entry: &LoggedMessage) -> Result<()> {
@@ -707,6 +808,10 @@ async fn run_once(
     // And who has already been introduced to the Sexton, so a restart does not
     // re-welcome the room (PHA-3305).
     state.load_welcomed_from_disk();
+    // And the per-UID "last caught up to" history index, so a restart inside
+    // the old 10-min rate-limit window no longer re-broadcasts the same
+    // recap (PHA-3XXX delta-based dedup).
+    state.load_caught_up_from_disk();
 
     // Kick off the avatar upload (if configured). We track the handle and
     // finish the two-step process (upload, then set_avatar_hash) once the
@@ -819,7 +924,7 @@ async fn run_once(
                         }
                     }
                     for ev in events {
-                        handle_event(&mut con, &mut state, own_client_id, ev)?;
+                        handle_event(&mut con, &mut state, own_client_id, ev, args.no_catchup)?;
                     }
                     audio::emit_state_and_roster(&mut con, event_tx, snapshot, &mut last_roster_sig, &mut last_channel_id).await;
                 }
@@ -918,6 +1023,7 @@ fn handle_event(
     state: &mut ChannelState,
     own_client_id: ClientId,
     ev: Event,
+    no_catchup: bool,
 ) -> Result<()> {
     match ev {
         // HARD RULE: only real user-authored text messages targeted at the
@@ -958,13 +1064,13 @@ fn handle_event(
         // A client connected to the server and landed in a channel. If that
         // channel is the watched one, they are a joiner: catch them up.
         Event::PropertyAdded { id: PropertyId::Client(client_id), .. } => {
-            maybe_send_catchup(con, state, own_client_id, client_id);
+            maybe_send_catchup(con, state, own_client_id, client_id, no_catchup);
         }
         // A client moved. If they moved INTO the watched channel (and it's
-        // not us), send the rate-limited catch-up PM. This is a plain move
+        // not us), do the delta-based catch-up PM. This is a plain move
         // event, never a join/leave/mute/away — those don't touch this path.
         Event::PropertyChanged { id: PropertyId::ClientChannel(client_id), .. } => {
-            maybe_send_catchup(con, state, own_client_id, client_id);
+            maybe_send_catchup(con, state, own_client_id, client_id, no_catchup);
         }
         _ => {}
     }
@@ -972,13 +1078,20 @@ fn handle_event(
 }
 
 /// Send the catch-up PM to `client_id` if they are now sitting in the watched
-/// channel, are not us, were not already here when we connected, and have not
-/// been PM'd inside the rate-limit window.
+/// channel, are not us, were not already here when we connected, and have
+/// already been caught up to where they were last caught up to
+/// (delta-based dedup, persisted to disk).
+///
+/// `no_catchup` (PHA-3XXX) suppresses the catch-up PM entirely while
+/// still letting the welcome fire — used by second instances of the
+/// binary on the same channel (Bexton) so their catch-ups stop duplicating
+/// the primary Sexton's.
 fn maybe_send_catchup(
     con: &mut Connection,
     state: &mut ChannelState,
     own_client_id: ClientId,
     client_id: ClientId,
+    no_catchup: bool,
 ) {
     if client_id == own_client_id || state.preexisting.contains(&client_id) {
         return;
@@ -996,21 +1109,14 @@ fn maybe_send_catchup(
     if now_in_channel != Some(state.channel_id) {
         return;
     }
-    // The announced notice (PHA-3305): before this client's *first* catch-up,
-    // and only ever before the first, say what the Sexton is doing. We need
-    // the durable key first so the rate-limit map below can suppress a quick
-    // reconnect with the same intent.
-    let (key, durable) = welcome_key(con, client_id);
-    let now = tokio::time::Instant::now();
-    let should_send = match state.last_pm.get(&key) {
-        Some(last) => now.duration_since(*last) >= PM_RATE_LIMIT,
-        None => true,
-    };
-    if !should_send {
-        return;
-    }
-    state.last_pm.insert(key.clone(), now);
 
+    // The announced notice (PHA-3305): before this client's *first* catch-up,
+    // and only ever before the first, say what the Sexton is doing. Use the
+    // welcome_key fallback (client-id:{N}, in-memory only) so a uid that
+    // hasn't been populated yet still gets welcomed this session; a bot
+    // restart will re-welcome under the same fallback until a real uid is
+    // available, then under the real uid going forward.
+    let (key, durable) = welcome_key(con, client_id);
     if !state.welcomed.contains(&key) {
         match send_pm(con, client_id, WELCOME_PM) {
             Ok(handle) => {
@@ -1024,11 +1130,64 @@ fn maybe_send_catchup(
         }
     }
 
-    let text = state.catchup_text();
+    // PHA-3XXX: catch-up suppressed entirely (welcome still fires above) for
+    // second instances on the same channel. See the `--no-catchup` flag
+    // docstring.
+    if no_catchup {
+        return;
+    }
+
+    // PHA-3XXX: catchup uses a STRICTLY durable uid key — defer if not
+    // available. The old `welcome_key` fallback to `client-id:{N}` is
+    // session-bound and would re-fire on every reconnect, which is exactly
+    // the bug the old PHA-3340 time-based rate-limit was masking. A later
+    // PropertyChanged event for the same client (talk power update, server
+    // populating uid post-connect, etc.) will retry here with a real uid.
+    let uid = match con
+        .get_state()
+        .ok()
+        .and_then(|s| s.clients.get(&client_id).and_then(|c| c.uid.as_ref().map(|u| u.to_string())))
+    {
+        Some(uid) => {
+            state.pending_catchup.remove(&client_id);
+            uid
+        }
+        None => {
+            state.pending_catchup.insert(client_id);
+            return;
+        }
+    };
+
+    // PHA-3XXX: delta-based dedup. The `caught_up` map persists per-uid
+    // the history index they were last caught up to, so a bot restart
+    // (within the old 10-min rate-limit window) no longer re-blasts the
+    // same recap, and a hop in/out cycle that produced no new messages
+    // produces no PM at all.
+    let current_history_len = state.history.len();
+    let last_caught_up_to = state.caught_up.get(&uid).copied().unwrap_or(0);
+    if last_caught_up_to >= current_history_len {
+        info!(
+            ?client_id, %uid, last_caught_up_to,
+            "no new messages since last catch-up; skipping PM"
+        );
+        return;
+    }
+    let text = state.catchup_text_from(last_caught_up_to);
     match send_pm(con, client_id, &text) {
         Ok(handle) => {
-            info!(?client_id, "catch-up PM sent");
+            info!(
+                ?client_id, %uid,
+                from = last_caught_up_to, to = current_history_len,
+                "catch-up PM sent"
+            );
             state.pending_cmds.insert(handle.0, format!("catch-up PM to {client_id:?}"));
+            state.caught_up.insert(uid.clone(), current_history_len);
+            if let Err(e) = state.save_caught_up() {
+                warn!(
+                    error = %e,
+                    "caught_up persistence failed; this client may re-receive the same recap on next reconnect"
+                );
+            }
         }
         Err(e) => warn!(error = %e, ?client_id, "catch-up PM failed"),
     }
@@ -1390,37 +1549,115 @@ mod tests {
         assert!(restarted.welcomed.is_empty(), "a runtime client id was persisted");
     }
 
-    /// Regression: PHA-3340. The rate-limit map was previously keyed by
-    /// session-bound `ClientId`, so a logout/login cycle — which the server
-    /// signals as a fresh client — wiped the entry and re-broadcast the
-    /// welcome + last 15 messages every single time. The map is now keyed
-    /// by the durable uid (the same key `welcomed` uses), so a reconnect
-    /// within `PM_RATE_LIMIT` is suppressed, and one outside the window
-    /// can fire without colliding with a different human.
+    // -- PHA-3XXX: delta-based dedup + persistence tests ------------------------
+
+    /// A reconnect with no new messages since the user's last catch-up gets
+    /// no body text. (The PM is skipped entirely at the call site; this test
+    /// pins the helper so the empty-case string never silently reverts to a
+    /// "here are messages 0..end" body if the dedup check is ever relaxed.)
     #[test]
-    fn last_pm_is_keyed_by_uid_not_session_client_id() {
-        let mut state = state_in(&scratch("last-pm-uid"), "chan");
+    fn catchup_text_from_with_full_coverage_is_empty() {
+        let dir = scratch("catchup-full");
+        let mut state = state_in(&dir, "chan");
+        for i in 0..5 {
+            state.push(format!("u{i}"), &format!("msg {i}"));
+        }
+        let body = state.catchup_text_from(state.history.len());
+        assert_eq!(body, "Nothing new since you were last here.");
+    }
 
-        let uid = "aQm5FQ0RfBBBhP0Cw0S1FCxjnbg=".to_string();
-        // First connect for this uid: no entry, no prior welcome.
-        assert!(state.last_pm.get(&uid).is_none());
-        assert!(!state.welcomed.contains(&uid));
+    /// A reconnect with new messages since the last catch-up gets only the
+    /// new ones (capped at CATCHUP_PM_COUNT from the end), never the full
+    /// last-15-from-now regardless.
+    #[test]
+    fn catchup_text_from_sends_only_new_messages_since_start() {
+        let dir = scratch("catchup-delta");
+        let mut state = state_in(&dir, "chan");
+        for i in 0..30 {
+            state.push(format!("u{i}"), &format!("msg {i:02}"));
+        }
+        // Pretend the user was caught up after message index 5.
+        let body = state.catchup_text_from(5);
+        assert!(body.contains("msg 29"), "newest message must be in body: {body:?}");
+        assert!(body.contains("msg 15"), "15th-from-end must be in body: {body:?}");
+        assert!(!body.contains("msg 14"), "older message must NOT be in body: {body:?}");
+        assert!(!body.contains("msg 05"), "already-caught-up message must NOT be in body: {body:?}");
+    }
 
-        // Simulate the bot recording that it just PM'd this uid.
-        state.last_pm.insert(uid.clone(), tokio::time::Instant::now());
+    /// A brand-new uid (start=0) gets the last CATCHUP_PM_COUNT messages —
+    /// same as the pre-fix behaviour, so the first catch-up still works.
+    #[test]
+    fn catchup_text_from_zero_returns_last_15() {
+        let dir = scratch("catchup-fresh");
+        let mut state = state_in(&dir, "chan");
+        for i in 0..30 {
+            state.push(format!("u{i}"), &format!("msg {i:02}"));
+        }
+        let body = state.catchup_text_from(0);
+        assert!(body.contains("msg 29"));
+        assert!(body.contains("msg 15"));
+        assert!(!body.contains("msg 14"));
+    }
 
-        // Same uid, fresh `ClientId` after a reconnect — must still hit the
-        // rate-limit entry. Pre-fix this was two separate keys and the
-        // catch-up + welcome re-fired every login.
-        assert!(
-            state.last_pm.get(&uid).is_some(),
-            "reconnect must hit the same rate-limit entry"
-        );
+    /// `caught_up` survives a bot restart: save from one process, load
+    /// into a fresh one, both should see the same per-uid index.
+    #[test]
+    fn caught_up_survives_restart() {
+        let dir = scratch("caught-up-restart");
+        let channel = "chan";
+        let uid_a = "aQm5FQ0RfBBBhP0Cw0S1FCxjnbg=".to_string();
+        let uid_b = "bbbbFQ0RfBBBhP0Cw0S1FCxjnbg=".to_string();
 
-        // A second, distinct uid has its own slot and is not suppressed by
-        // the first one's entry.
-        let other = "bbbbFQ0RfBBBhP0Cw0S1FCxjnbg=".to_string();
-        assert!(state.last_pm.get(&other).is_none());
+        let mut first = state_in(&dir, channel);
+        first.caught_up.insert(uid_a.clone(), 42);
+        first.caught_up.insert(uid_b.clone(), 99);
+        first.save_caught_up().unwrap();
+
+        let mut restarted = state_in(&dir, channel);
+        restarted.load_caught_up_from_disk();
+        assert_eq!(restarted.caught_up.get(&uid_a), Some(&42));
+        assert_eq!(restarted.caught_up.get(&uid_b), Some(&99));
+    }
+
+    /// Fail-open: a directory where the .caught_up file should be but is
+    /// unreadable must not stop the bot from connecting. The cost of an
+    /// unreadable index is one redundant catch-up after the restart, which
+    /// the delta dedup will catch up to on the very next join — never a
+    /// failed connect.
+    #[test]
+    fn an_unreadable_caught_up_file_is_fail_open() {
+        let dir = scratch("caught-up-unreadable");
+        let channel = "chan";
+        std::fs::create_dir_all(dir.join(channel).join(CAUGHT_UP_FILE)).unwrap();
+        let mut state = state_in(&dir, channel);
+        state.load_caught_up_from_disk();
+        assert!(state.caught_up.is_empty());
+    }
+
+    /// Missing .caught_up file is fail-open too — same shape as a fresh
+    /// deploy, where every uid is treated as never caught up.
+    #[test]
+    fn missing_caught_up_file_is_fail_open() {
+        let dir = scratch("caught-up-missing");
+        let mut state = state_in(&dir, "never-logged");
+        state.load_caught_up_from_disk();
+        assert!(state.caught_up.is_empty());
+    }
+
+    /// `save_caught_up` writes a deterministic file (sorted by uid) so the
+    /// file is diffable and predictable for tests. A new entry inserted
+    /// mid-run only changes one line.
+    #[test]
+    fn caught_up_save_is_sorted_by_uid() {
+        let dir = scratch("caught-up-sort");
+        let mut state = state_in(&dir, "chan");
+        state.caught_up.insert("zzz".to_string(), 3);
+        state.caught_up.insert("aaa".to_string(), 1);
+        state.caught_up.insert("mmm".to_string(), 2);
+        state.save_caught_up().unwrap();
+        let body = std::fs::read_to_string(dir.join("chan").join(CAUGHT_UP_FILE)).unwrap();
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines, vec!["aaa\t1", "mmm\t2", "zzz\t3"]);
     }
 
     #[test]
