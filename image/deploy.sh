@@ -43,6 +43,19 @@ DISABLE_MAIN_TEAMSPEAK=${DISABLE_MAIN_TEAMSPEAK:-1}
 # Copy models/auth/agents/tts from the main gateway into this one on first
 # deploy. Skipped automatically once the in-container config exists.
 IMPORT_GATEWAY_CONFIG=${IMPORT_GATEWAY_CONFIG:-1}
+# Where to import them FROM. The main gateway by default; a second persona
+# (PHA-3554, image/deploy-bexton.sh) imports from the running sexton container
+# instead, because that config already has the workspace paths, the sonnet
+# model and the TTS voice that are known to work on this lane.
+IMPORT_FROM=${IMPORT_FROM:-$MAIN_GATEWAY}
+IMPORT_CONFIG_PATH=${IMPORT_CONFIG_PATH:-/root/.openclaw/openclaw.json}
+# PHA-3554: a persona other than the Sexton in this container. Empty = the
+# Sexton. See image/deploy-bexton.sh for the values.
+AGENT_ID=${AGENT_ID:-}
+WAKE_NAMES=${WAKE_NAMES:-}
+BAND_ENABLED=${BAND_ENABLED:-0}
+BAND_PROVIDER=${BAND_PROVIDER:-minimax}
+AVATAR=${AVATAR:-/usr/local/share/sexton-avatar/brandon.png}
 
 log() { printf '\n== %s\n' "$*"; }
 
@@ -52,7 +65,9 @@ mkdir -p "$APPDATA/logs" "$APPDATA/config" "$APPDATA/config/openclaw"
 # read from /mnt/user/scratch/sexton/sexton-id.txt at deploy time and passed on
 # the command line, where `docker inspect` shows it to anyone on the box. It
 # now lives in the mounted config dir instead. Migrate the old one once.
-if [ ! -s "$APPDATA/config/sexton-id.txt" ] && [ -s /mnt/user/scratch/sexton/sexton-id.txt ]; then
+# Only for the Sexton itself: a second persona must NOT inherit this identity,
+# or two bots share one UID and the server drops one of them.
+if [ "$NAME" = "sexton" ] && [ ! -s "$APPDATA/config/sexton-id.txt" ] && [ -s /mnt/user/scratch/sexton/sexton-id.txt ]; then
   log "migrating the bot identity into $APPDATA/config"
   install -m 0600 /mnt/user/scratch/sexton/sexton-id.txt "$APPDATA/config/sexton-id.txt"
 fi
@@ -92,12 +107,12 @@ gw_config="$APPDATA/config/openclaw/openclaw.json"
 if [ "$IMPORT_GATEWAY_CONFIG" = "1" ] && [ "$GATEWAY_ENABLED" = "1" ]; then
   if [ -s "$gw_config" ] && grep -q '"models"' "$gw_config"; then
     echo "gateway config already has a models block — not importing"
-  elif ! docker ps --format '{{.Names}}' | grep -qx "$MAIN_GATEWAY"; then
-    echo "WARNING: $MAIN_GATEWAY is not running; cannot import credentials." >&2
-    echo "         The Sexton will join the channel and not answer until you" >&2
+  elif ! docker ps --format '{{.Names}}' | grep -qx "$IMPORT_FROM"; then
+    echo "WARNING: $IMPORT_FROM is not running; cannot import credentials." >&2
+    echo "         The bot will join the channel and not answer until you" >&2
     echo "         put a models/auth block in $gw_config." >&2
   else
-    log "importing models/auth/agents/tts from the $MAIN_GATEWAY gateway"
+    log "importing models/auth/agents/tts from the $IMPORT_FROM gateway ($IMPORT_CONFIG_PATH)"
     mkdir -p "$APPDATA/config/openclaw"
     # We only DROP THE FILE here; run-gateway merges it on boot and deletes it.
     # Doing the merge there rather than here keeps this order-independent: the
@@ -109,9 +124,9 @@ if [ "$IMPORT_GATEWAY_CONFIG" = "1" ] && [ "$GATEWAY_ENABLED" = "1" ]; then
     # its config lives on the host. Written to a .part and moved on success —
     # a truncated import is the one thing that could leave the Sexton's gateway
     # with half a credentials block.
-    docker exec "$MAIN_GATEWAY" node -e '
+    docker exec "$IMPORT_FROM" node -e '
       const fs = require("fs");
-      const src = JSON.parse(fs.readFileSync("/root/.openclaw/openclaw.json", "utf8"));
+      const src = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
       const out = {};
       // NOT channels/gateway/plugins: this gateway'"'"'s channel set, bind and
       // plugin list are its own. Importing the main gateway'"'"'s `channels`
@@ -134,7 +149,7 @@ if [ "$IMPORT_GATEWAY_CONFIG" = "1" ] && [ "$GATEWAY_ENABLED" = "1" ]; then
         if (ts.length) out.bindings = ts;
       }
       process.stdout.write(JSON.stringify(out, null, 2));
-    ' > "$APPDATA/config/openclaw/credentials.import.json.part"
+    ' "$IMPORT_CONFIG_PATH" > "$APPDATA/config/openclaw/credentials.import.json.part"
     mv "$APPDATA/config/openclaw/credentials.import.json.part" \
        "$APPDATA/config/openclaw/credentials.import.json"
     chmod 0600 "$APPDATA/config/openclaw/credentials.import.json"
@@ -154,10 +169,18 @@ docker run -d \
   -e SEXTON_CHANNEL="$CHANNEL" \
   -e SEXTON_LOG_DIR=/var/sexton-logs \
   -e SEXTON_IDENTITY_FILE=/config/sexton-id.txt \
-  -e SEXTON_AVATAR=/usr/local/share/sexton-avatar/brandon.png \
+  -e SEXTON_AVATAR="$AVATAR" \
   -e WHISPER_THREADS="$WHISPER_THREADS" \
   -e SEXTON_GATEWAY_ENABLED="$GATEWAY_ENABLED" \
   -e SEXTON_GATEWAY_PORT="$GATEWAY_PORT" \
+  -e SEXTON_AGENT_ID="$AGENT_ID" \
+  -e SEXTON_WAKE_NAMES="$WAKE_NAMES" \
+  -e SEXTON_BAND_ENABLED="$BAND_ENABLED" \
+  -e SEXTON_BAND_PROVIDER="$BAND_PROVIDER" \
+  ${BAND_NAME:+-e SEXTON_BAND_NAME="$BAND_NAME"} \
+  ${BAND_SUNO_API_URL:+-e SEXTON_BAND_SUNO_API_URL="$BAND_SUNO_API_URL"} \
+  ${BAND_SUNO_API_KEY:+-e SEXTON_BAND_SUNO_API_KEY="$BAND_SUNO_API_KEY"} \
+  ${BAND_COMMAND:+-e SEXTON_BAND_COMMAND="$BAND_COMMAND"} \
   -v "$APPDATA/logs":/var/sexton-logs \
   -v "$APPDATA/config":/config \
   "$IMAGE"

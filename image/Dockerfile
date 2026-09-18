@@ -291,6 +291,9 @@ COPY --from=plugin-builder /plugin/ /opt/openclaw-teamspeak-plugin/
 
 COPY image/supervisord.conf          /etc/supervisor/conf.d/sexton.conf
 COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json
+# PHA-3554: the Bexton persona, seeded into the gateway workspace on first boot
+# when SEXTON_AGENT_ID=bexton. Same image, different agent in the chair.
+COPY image/bexton/workspace/           /opt/sexton-persona/bexton/
 COPY image/run-sexton.sh             /usr/local/bin/run-sexton
 COPY image/run-whisper.sh            /usr/local/bin/run-whisper
 COPY image/run-pot.sh                /usr/local/bin/run-pot

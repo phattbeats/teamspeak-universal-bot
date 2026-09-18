@@ -54,6 +54,58 @@ treat whisper being down as unhealthy, because a Docker-level restart would take
 the bot out of the channel and undo exactly the thing the supervisor is there to
 preserve.
 
+## Bexton and the house band (PHA-3554)
+
+Bexton leads The Velvet Vice Lounge Band. He is **the same image as a second
+container**: same binary, same bridge, same in-container gateway, and three
+things different, all env:
+
+| knob | Sexton | Bexton |
+| --- | --- | --- |
+| `SEXTON_AGENT_ID` | (empty: the imported `sexton` agent) | `bexton` — `run-gateway.sh` seeds `/opt/sexton-persona/bexton/` (`image/bexton/workspace/`) into the gateway workspace on first boot, adds the agent entry with the Sexton's model block, and binds the channel to it |
+| `SEXTON_WAKE_NAMES` | seed default (`Sexton`, `Henchman`) | `Bexton,band leader,maestro` |
+| `SEXTON_BAND_ENABLED` | `0` | `1` — writes `tools.band` into the channel block, reusing the TTS block's MiniMax key |
+
+`image/deploy-bexton.sh` sets those and calls `image/deploy.sh` with its own
+`NAME`/`APPDATA` (`/mnt/user/appdata/bexton`), `IMPORT_FROM=sexton` (the
+credentials come from the config known to work on this lane, not the main
+gateway's), and `DISABLE_MAIN_TEAMSPEAK=0` (the Sexton's deploy already did
+that). `image/unraid-bexton.xml` is the same thing as a template. Both need
+Bexton's **own** TeamSpeak identity at `$APPDATA/config/sexton-id.txt` — never
+the Sexton's, two bots on one UID and the server drops one — and the first boot
+generates and prints one; give it the Sexton's server group afterwards.
+
+How a song happens is in the plugin README (`compose_song`): the agent writes
+title and lyrics, the tool returns at once, and when the generator delivers, the
+band leader announces over the voice lane and starts the track on the music
+lane, so `stop_music` stops the band too. Files land in
+`$APPDATA/config/band-songs/`, newest 20 kept.
+
+### The generator is the open question
+
+Probed 2026-09-17 with the granted MiniMax key: `POST /v1/music_generation`
+returns **status 2153, "This Music API is no longer available to new users.
+Existing paying customers can continue"** on `music-2.5`, `music-2.0`,
+`music-1.5` and `music-01` alike. So the provider the issue was written against
+only works if the MiniMax account behind the TTS key already paid for music.
+The plugin therefore ships three generators behind one interface and Bexton's
+deploy picks one with `BAND_PROVIDER`:
+
+- `minimax` — the default; works only for an existing music customer.
+- `suno-api` — a self-hosted [gcui-art/suno-api](https://github.com/gcui-art/suno-api)
+  container on `phattvip`, driven by a Suno web-account cookie (Suno has no
+  official API). `BAND_SUNO_API_URL=http://suno-api:3000`. Free beyond the Suno
+  plan, but it is a browser-cookie automation and breaks when Suno changes.
+- `command` — any executable at `/config/band/generate` (spec as JSON on
+  stdin, `{audioPath}` on stdout). The seam for a self-hosted open model
+  ([MiniMax-Music3](https://huggingface.co/MiniMaxAI/MiniMax-Music3), ACE-Step)
+  — which on this box means CPU inference, minutes per song, or a GPU it does
+  not have.
+
+None of these is switched on by this repo; the band lane refuses to start and
+logs why until one is configured, and the rest of Bexton (voice, chat,
+`play_music`) comes up regardless.
+
 ## Where the OpenClaw plugin runs
 
 The issue asked for a decision between:
