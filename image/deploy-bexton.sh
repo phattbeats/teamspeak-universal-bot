@@ -42,6 +42,8 @@ export WAKE_NAMES=${WAKE_NAMES:-Bexton,band leader,maestro}
 export BAND_ENABLED=1
 export BAND_PROVIDER=${BAND_PROVIDER:-minimax}
 export BAND_NAME=${BAND_NAME:-The Velvet Vice Lounge Band}
+# Pipe-separated other billings (Brandon, 2026-09-18). Used in a minority of intros.
+export BAND_ALIASES=${BAND_ALIASES-Sgt. Bexton and the Digital Heart Club Band}
 export WHISPER_THREADS=${WHISPER_THREADS:-2}
 # No baked avatar for Bexton yet; drop a PNG at $APPDATA/config/avatar.png.
 export AVATAR=${AVATAR:-/config/avatar.png}

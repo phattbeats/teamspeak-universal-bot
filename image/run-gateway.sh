@@ -260,6 +260,11 @@ if ! node -e '
         provider,
         songsDir: "/config/band-songs",
         ...(env.SEXTON_BAND_NAME ? { name: env.SEXTON_BAND_NAME } : {}),
+        // Pipe-separated (the names have commas in them). Unset keeps the
+        // plugin's built-in billing; an explicit empty string means none.
+        ...(env.SEXTON_BAND_ALIASES !== undefined
+          ? { aliases: env.SEXTON_BAND_ALIASES.split("|").map((n) => n.trim()).filter(Boolean) }
+          : {}),
       };
       const ttsKey = cfg.tts?.providers?.minimax?.apiKey;
       if (provider === "minimax") {
