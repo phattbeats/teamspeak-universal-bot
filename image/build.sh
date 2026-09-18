@@ -119,6 +119,12 @@ docker run --rm --entrypoint sh "${IMAGE}:${TAG}" -c '
   check "bridge-test"         "test -x /usr/local/bin/bridge-test"
   check "whisper-server"      "/opt/whisper/bin/whisper-server --help"
   check "whisper weights"     "test -s /opt/whisper/models/ggml-base.en.bin"
+  # PHA-3554: --help is not proof. The upstream :main image of 2026-09-17
+  # passed --help and then died with SIGILL at the first inference on this
+  # CPU. One second of silence through whisper-cli is the smallest thing that
+  # actually executes the ggml kernels.
+  ffmpeg -loglevel error -f lavfi -i anullsrc=r=16000:cl=mono -t 1 /tmp/silence.wav
+  check "whisper inference"   "/opt/whisper/bin/whisper-cli -m /opt/whisper/models/ggml-base.en.bin -f /tmp/silence.wav -nt"
   check "ffmpeg"              "ffmpeg -version"
   check "yt-dlp"              "yt-dlp --version"
   check "supervisord"         "supervisord --version"

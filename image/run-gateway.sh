@@ -261,7 +261,10 @@ if ! node -e '
         songsDir: "/config/band-songs",
         ...(env.SEXTON_BAND_NAME ? { name: env.SEXTON_BAND_NAME } : {}),
         // Pipe-separated (the names have commas in them). Unset keeps the
-        // plugin's built-in billing; an explicit empty string means none.
+        // built-in billing; an explicit empty string means none. NO
+        // apostrophes anywhere in this node script: it is a single-quoted
+        // sh string and one apostrophe ends it (that is exactly what broke
+        // the first pha-3554 boot).
         ...(env.SEXTON_BAND_ALIASES !== undefined
           ? { aliases: env.SEXTON_BAND_ALIASES.split("|").map((n) => n.trim()).filter(Boolean) }
           : {}),

@@ -849,7 +849,15 @@ async fn run_once(
 ) -> Result<()> {
     let identity = if args.identity.is_empty() {
         let id = Identity::create();
-        warn!("no identity supplied; generated a new one — pin this in Paperclip secrets");
+        // PHA-3554: print the identity in the "<counter>V<key>" form that
+        // `--identity` / `Identity::new_from_str` reads back, so a first boot
+        // with no identity file can actually be pinned. Before this the
+        // warning said "pin this" and printed nothing to pin; Bexton's first
+        // boot came up as an unpinnable stranger.
+        warn!(
+            identity = %format!("{}V{}", id.counter(), id.key().to_ts()),
+            "no identity supplied; generated a new one — write it to the identity file before the next restart"
+        );
         id
     } else {
         Identity::new_from_str(&args.identity)
