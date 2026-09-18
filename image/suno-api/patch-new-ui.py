@@ -139,12 +139,55 @@ EDITS[api].extend(
             "export const pickAudioUrl = (clip: any): string | undefined => {\n"
             "  const direct = typeof clip?.audio_url === 'string' ? clip.audio_url : '';\n"
             "  const media: any[] = Array.isArray(clip?.media_urls) ? clip.media_urls : [];\n"
-            "  const pick = media.find((m) => m?.url && !m.encrypted && m.delivery === 'progressive')\n"
-            "    ?? media.find((m) => m?.url && !m.encrypted);\n"
+            "  const pick = media.find((m) => m?.url && m.delivery === 'progressive') ?? media.find((m) => m?.url);\n"
+            "  if (pick?.url && pick.encoding) {\n"
+            "    // Encrypted (\"Mango\"). Serve it decrypted from this server, see /api/audio/[id].\n"
+            "    const base = (process.env.SUNO_API_PUBLIC_URL || 'http://suno-api:3000').replace(/\\/+$/, '');\n"
+            "    return `${base}/api/audio/${clip.id}`;\n"
+            "  }\n"
             "  if (pick?.url) return pick.url; // the whole file, no auth, no expiry seen\n"
             "  if (direct && !direct.endsWith('/api/forbidden')) return direct; // audiopipe stream while still rendering\n"
             "  return undefined;\n"
             "};\n",
+        ),
+        # Suno encrypts delivered media ("Mango", since 2026-08): AES-CTR over the
+        # file, the content key and IV wrapped with AES-GCM under a key that is
+        # SHA-256 of the caller's own session JWT, fetched from /api/mango/rights.
+        # This is exactly what suno.com's player does in the browser to play the
+        # account's own songs; it is done here so the band can play them too.
+        (
+            "  /**\n   * Imitates Cloudflare Turnstile loading error",
+            "  /** PHA-3554: fetch a clip's media and undo Suno's playback encryption the way the web player does. */\n"
+            "  public async decryptedAudio(clipId: string): Promise<{ bytes: Buffer; contentType: string }> {\n"
+            "    await this.keepAlive();\n"
+            "    const token = this.currentToken + '';\n"
+            "    const feed = await this.client.get(`${SunoApi.BASE_URL}/api/feed/v2?ids=${clipId}`);\n"
+            "    const clip = (Array.isArray(feed.data) ? feed.data : feed.data?.clips ?? [])[0];\n"
+            "    if (!clip) throw new Error('clip not found: ' + clipId);\n"
+            "    const media: any[] = Array.isArray(clip.media_urls) ? clip.media_urls : [];\n"
+            "    const item = media.find((m) => m?.url && m.delivery === 'progressive') ?? media.find((m) => m?.url);\n"
+            "    if (!item) throw new Error('clip has no media yet: ' + clipId + ' (status ' + clip.status + ')');\n"
+            "    const raw = Buffer.from((await axios.get(item.url, { responseType: 'arraybuffer' })).data);\n"
+            "    const contentType = String(item.content_type || '').startsWith('webm') ? 'audio/webm' : 'audio/mp4';\n"
+            "    if (!item.encoding) return { bytes: raw, contentType };\n"
+            "    const subtle = globalThis.crypto.subtle;\n"
+            "    const rights = (await this.client.post(`${SunoApi.BASE_URL}/api/mango/rights`,\n"
+            "      { content_params: { content_id: clipId, content_type: 'clip' } },\n"
+            "      { headers: { Authorization: `Bearer ${token}` } })).data;\n"
+            "    const userKey = await subtle.importKey('raw', await subtle.digest('SHA-256', new TextEncoder().encode(token)), { name: 'AES-GCM' }, false, ['decrypt']);\n"
+            "    const unwrap = async (b64: string) => {\n"
+            "      const w = Buffer.from(b64, 'base64');\n"
+            "      return new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: w.subarray(0, 12), additionalData: new TextEncoder().encode(clipId) }, userKey, w.subarray(12)));\n"
+            "    };\n"
+            "    const ctrKey = await subtle.importKey('raw', await unwrap(rights.key), { name: 'AES-CTR' }, false, ['decrypt']);\n"
+            "    const counter = new Uint8Array(16);\n"
+            "    counter.set((await unwrap(rights.iv)).subarray(0, 16));\n"
+            "    const dec = await subtle.decrypt({ name: 'AES-CTR', counter, length: 128 }, ctrKey, raw);\n"
+            "    logger.info(`decrypted ${raw.length} bytes of ${item.content_type} for clip ${clipId}`);\n"
+            "    return { bytes: Buffer.from(dec), contentType };\n"
+            "  }\n"
+            "\n"
+            "  /**\n   * Imitates Cloudflare Turnstile loading error",
         ),
         # wait_audio used to return at "streaming" (audiopipe URL, partial file,
         # 403s without a token). The band wants the finished file, so wait for
@@ -179,4 +222,45 @@ for file, edits in EDITS.items():
         text = text.replace(old, new, 1)
         changed += 1
     file.write_text(text)
+
+# GET /api/audio/<clip id>: the clip's media, decrypted, as audio/mp4 (or
+# audio/webm). pickAudioUrl points the band here for encrypted clips.
+AUDIO_ROUTE = '''import { NextResponse, NextRequest } from "next/server";
+import { cookies } from 'next/headers'
+import { sunoApi } from "@/lib/SunoApi";
+import { corsHeaders } from "@/lib/utils";
+
+export const dynamic = "force-dynamic";
+
+// PHA-3554: serve a clip's media with Suno's playback encryption undone
+// (SunoApi.decryptedAudio), so a plain HTTP client can play the song.
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const id = String(params?.id || '');
+  if (!/^[0-9a-f-]{36}$/i.test(id)) {
+    return new NextResponse(JSON.stringify({ error: 'bad clip id' }), { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
+  }
+  try {
+    const { bytes, contentType } = await (await sunoApi((await cookies()).toString())).decryptedAudio(id);
+    return new NextResponse(bytes, {
+      status: 200,
+      headers: { 'Content-Type': contentType, 'Content-Length': String(bytes.length), 'Cache-Control': 'private, max-age=3600', ...corsHeaders }
+    });
+  } catch (error: any) {
+    console.error('Error serving audio:', error);
+    return new NextResponse(JSON.stringify({ error: 'Internal server error. ' + (error?.message ?? error) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders }
+    });
+  }
+}
+
+export async function OPTIONS(request: Request) {
+  return new Response(null, { status: 200, headers: corsHeaders });
+}
+'''
+route = root / "src/app/api/audio/[id]/route.ts"
+if not route.exists() or route.read_text() != AUDIO_ROUTE:
+    route.parent.mkdir(parents=True, exist_ok=True)
+    route.write_text(AUDIO_ROUTE)
+    changed += 1
 print(f"patch-new-ui: {changed} edit(s) applied")
