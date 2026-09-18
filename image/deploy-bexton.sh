@@ -44,7 +44,11 @@ export WAKE_NAMES=${WAKE_NAMES:-Bexton,band leader,maestro}
 # the other fit if this one reads too flat.
 export TTS_VOICE_ID=${TTS_VOICE_ID:-English_BossyLeader}
 export BAND_ENABLED=1
-export BAND_PROVIDER=${BAND_PROVIDER:-minimax}
+# suno-api since 2026-09-18 (Brandon's pick after MiniMax closed its Music API to
+# the account): the `suno-api` container from image/suno-api/deploy.sh, on the
+# same phattvip network. BAND_PROVIDER=minimax still works for a paying account.
+export BAND_PROVIDER=${BAND_PROVIDER:-suno-api}
+export BAND_SUNO_API_URL=${BAND_SUNO_API_URL:-http://suno-api:3000}
 export BAND_NAME=${BAND_NAME:-The Velvet Vice Lounge Band}
 # Pipe-separated other billings (Brandon, 2026-09-18). Used in a minority of intros.
 export BAND_ALIASES=${BAND_ALIASES-Sgt. Bexton and the Digital Heart Club Band}

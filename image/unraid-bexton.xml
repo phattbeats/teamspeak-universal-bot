@@ -103,13 +103,13 @@
           Mode="" Description="1 = compose_song / band_status are on and the band leader announces and plays generated songs. Generation costs money on every provider that can do it."
           Type="Variable" Display="always" Required="true" Mask="false">1</Config>
 
-  <Config Name="Band generator" Target="SEXTON_BAND_PROVIDER" Default="minimax"
-          Mode="" Description="minimax (its endpoint refuses NEW accounts, status 2153 — works only for an existing paying music customer), suno-api (a self-hosted gcui-art/suno-api; set the URL below), or command (an executable under /config/band/ that writes the file; see the plugin README)."
-          Type="Variable" Display="always" Required="true" Mask="false">minimax</Config>
+  <Config Name="Band generator" Target="SEXTON_BAND_PROVIDER" Default="suno-api"
+          Mode="" Description="suno-api (the self-hosted gcui-art/suno-api container from image/suno-api/deploy.sh; URL below), minimax (its endpoint refuses NEW accounts, status 2153 — works only for an existing paying music customer), or command (an executable under /config/band/ that writes the file; see the plugin README)."
+          Type="Variable" Display="always" Required="true" Mask="false">suno-api</Config>
 
-  <Config Name="suno-api URL" Target="SEXTON_BAND_SUNO_API_URL" Default=""
-          Mode="" Description="Only for the suno-api generator: base URL of the self-hosted suno-api, e.g. http://suno-api:3000."
-          Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="suno-api URL" Target="SEXTON_BAND_SUNO_API_URL" Default="http://suno-api:3000"
+          Mode="" Description="Only for the suno-api generator: base URL of the self-hosted suno-api on the same Docker network."
+          Type="Variable" Display="advanced" Required="false" Mask="false">http://suno-api:3000</Config>
 
   <Config Name="Band command" Target="SEXTON_BAND_COMMAND" Default="/config/band/generate"
           Mode="" Description="Only for the command generator: the executable, inside the container. /config is the Config path above, so /config/band/generate is /mnt/user/appdata/bexton/config/band/generate on the host."
