@@ -209,6 +209,31 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
     expect(harness.sessions.has(9)).toBe(false);
   });
 
+  // PHA-3607: sexton and bexton sit in the same channel and, before this,
+  // each opened a full STT session for the other's TTS audio on every
+  // utterance — doubling whisper decode for zero benefit. `excludeWakeNames`
+  // already carries the other bot's exact nickname for the wake gate
+  // (PHA-3605), so it doubles as the withhold list here at no extra config
+  // cost. The entry still counts as present; only its session is withheld.
+  it("withholds a speaker session for the other bot's nickname, but keeps it in the human count", () => {
+    harness = createHarness({ voice: { excludeWakeNames: ["Bexton"] } });
+    harness.bridge.replay([
+      {
+        type: "state",
+        state: { connected: true, channelId: 1, channelName: "General Shit", ownClientId: 9 },
+      },
+      {
+        type: "roster",
+        roster: [rosterEntry(11, "brandon"), rosterEntry(12, "Bexton")],
+      },
+    ]);
+
+    expect(harness.sessions.has(12)).toBe(false);
+    expect(harness.sessions.has(11)).toBe(true);
+    expect(harness.runtime.snapshot().speakerSessions).toBe(1);
+    expect(harness.runtime.snapshot().humanParticipants).toBe(2);
+  });
+
   it("retires a session opened on itself once the state names its own client", () => {
     // Roster before state: the bridge normally sends state first, but a
     // reconnect mid-roster can invert them, and the wake gate must not stay

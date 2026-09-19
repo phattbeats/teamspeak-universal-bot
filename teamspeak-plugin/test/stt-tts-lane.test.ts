@@ -339,6 +339,34 @@ describe("stt-tts lane over the mock bridge", () => {
     expect(harness.logs.some((line) => line.includes("firstAudioMs="))).toBe(true);
   });
 
+  it("pipelines a multi-sentence reply as separate synthesis calls, not one (PHA-3607)", async () => {
+    const chatty = createHarness({
+      reply:
+        "This is the first full sentence of the reply. Here comes a second full sentence about the plan.",
+    });
+    joinRoom(chatty, [PHATT]);
+    chatty.bridge.clearSent();
+
+    speak(chatty, PHATT);
+    await settle();
+
+    // Two T2A round trips, not one for the whole reply -- that is the whole
+    // point of pipelining: playback of the first sentence can start before
+    // the second sentence has even started synthesizing.
+    expect(chatty.synthesizer.spoken).toEqual([
+      "This is the first full sentence of the reply.",
+      "Here comes a second full sentence about the plan.",
+    ]);
+    // Both chunks land on the wire, in order, and the lane holds the room for
+    // the whole turn rather than releasing it between chunks.
+    const voiceFrames = chatty.bridge.sentOfType(TYPE_VOICE_AUDIO);
+    expect(voiceFrames).toHaveLength(100);
+    expect(Buffer.concat(voiceFrames.map((frame) => frame.payload))).toEqual(
+      Buffer.concat([REPLY_PCM, REPLY_PCM]),
+    );
+    expect(chatty.logs.some((line) => line.includes("ttsChunks=2/2"))).toBe(true);
+  });
+
   it("reports the lane it is running in !sexton status", async () => {
     joinRoom(harness, [PHATT]);
     const snapshot = harness.runtime.snapshot();

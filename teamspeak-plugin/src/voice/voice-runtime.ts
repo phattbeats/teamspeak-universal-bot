@@ -159,6 +159,7 @@ export class TeamSpeakVoiceRuntime {
     this.sessions = new SpeakerSessionManager({
       createSession: (client) => this.params.createSpeakerSession(client, this.playback, this.tools),
       selfClientId: () => this.selfClientId,
+      shouldOpenSession: (client) => !this.isExcludedNickname(client.nickname),
       onRosterEvent: (event) => this.handleRosterEvent(event),
       onSessionError: (clientId, error) =>
         this.params.log?.(
@@ -444,6 +445,21 @@ export class TeamSpeakVoiceRuntime {
    */
   humanParticipantCount(): number {
     return this.sessions.humanParticipantCount();
+  }
+
+  /**
+   * Is this roster nickname the other bot?
+   *
+   * `excludeWakeNames` is already hand-populated with the other bot's exact
+   * TeamSpeak nickname for the wake gate (PHA-3605); a roster nickname never
+   * collides with the non-nickname aliases also listed there ("band leader",
+   * "maestro"), so reusing the same list to withhold a speaker session costs
+   * nothing extra to configure (PHA-3607).
+   */
+  private isExcludedNickname(nickname: string): boolean {
+    const excludeNames = resolveTeamSpeakWakeConfig(this.params.config).excludeWakeNames ?? [];
+    const needle = nickname.trim().toLowerCase();
+    return needle.length > 0 && excludeNames.some((name) => name.trim().toLowerCase() === needle);
   }
 
   /** True while the Sexton is sitting out. */

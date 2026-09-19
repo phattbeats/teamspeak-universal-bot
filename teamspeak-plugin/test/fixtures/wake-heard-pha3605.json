@@ -1,0 +1,121 @@
+[
+  {
+    "bot": "sexton",
+    "at": "2026-09-19T04:25:37",
+    "heard": "Sex and religious.",
+    "before": "decline",
+    "after": "accept(sex and)"
+  },
+  {
+    "bot": "sexton",
+    "at": "2026-09-19T05:19:24",
+    "heard": "sex to",
+    "before": "accept(sex to)",
+    "after": "decline"
+  },
+  {
+    "bot": "sexton",
+    "at": "2026-09-19T05:21:30",
+    "heard": "sections please stop responding.",
+    "before": "decline",
+    "after": "accept(sections)"
+  },
+  {
+    "bot": "sexton",
+    "at": "2026-09-19T05:21:51",
+    "heard": "next one",
+    "before": "accept(next one)",
+    "after": "decline"
+  },
+  {
+    "bot": "sexton",
+    "at": "2026-09-19T05:45:11",
+    "heard": "Sex and infection are at it again, dude.",
+    "before": "decline",
+    "after": "accept(sex and)"
+  },
+  {
+    "bot": "sexton",
+    "at": "2026-09-19T05:45:41",
+    "heard": "- Sex and I'm not on your side, just to be perfectly clear.",
+    "before": "decline",
+    "after": "accept(sex and)"
+  },
+  {
+    "bot": "sexton",
+    "at": "2026-09-19T05:49:44",
+    "heard": "Oh, I'm sorry, I'm so sorry sex and didn't mean to.",
+    "before": "decline",
+    "after": "accept(sex and)"
+  },
+  {
+    "bot": "sexton",
+    "at": "2026-09-19T05:49:45",
+    "heard": "bexton",
+    "before": "accept(bexton)",
+    "after": "decline excludedBy=Bexton"
+  },
+  {
+    "bot": "sexton",
+    "at": "2026-09-19T14:15:11",
+    "heard": "stat on",
+    "before": "accept(stat on)",
+    "after": "decline"
+  },
+  {
+    "bot": "sexton",
+    "at": "2026-09-19T14:21:41",
+    "heard": "sets on",
+    "before": "accept(sets on)",
+    "after": "decline"
+  },
+  {
+    "bot": "sexton",
+    "at": "2026-09-19T14:22:49",
+    "heard": "s bexton",
+    "before": "accept(s bexton)",
+    "after": "decline excludedBy=Bexton"
+  },
+  {
+    "bot": "bexton",
+    "at": "2026-09-19T05:37:45",
+    "heard": "next one",
+    "before": "accept(next one)",
+    "after": "decline"
+  },
+  {
+    "bot": "bexton",
+    "at": "2026-09-19T05:44:53",
+    "heard": "be on",
+    "before": "accept(be on)",
+    "after": "decline"
+  },
+  {
+    "bot": "bexton",
+    "at": "2026-09-19T05:49:22",
+    "heard": "sex to",
+    "before": "accept(sex to)",
+    "after": "decline"
+  },
+  {
+    "bot": "bexton",
+    "at": "2026-09-19T11:55:58",
+    "heard": "sexton",
+    "before": "accept(sexton)",
+    "after": "decline excludedBy=Sexton"
+  },
+  {
+    "bot": "bexton",
+    "at": "2026-09-19T14:21:16",
+    "heard": "sexton",
+    "before": "accept(sexton)",
+    "after": "decline excludedBy=Sexton"
+  },
+  {
+    "bot": "bexton",
+    "at": "2026-09-19T14:22:38",
+    "heard": "sexton",
+    "before": "accept(sexton)",
+    "after": "decline excludedBy=Sexton"
+  }
+]

@@ -32,6 +32,7 @@ import {
   type TeamSpeakTtsRuntime,
 } from "./speech.js";
 import {
+  ConcurrencyLimitedTranscriber,
   TeamSpeakSttTtsSpeakerSession,
   type TeamSpeakVoiceAgentTurn,
 } from "./stt-tts-speaker-session.js";
@@ -146,6 +147,10 @@ export function createSttTtsLane(
   } else if (secondary.reason) {
     params.log?.(`teamspeak voice: secondary transcription disabled - ${secondary.reason}`);
   }
+  // Shared by every speaker session this account opens, so the in-flight cap
+  // is per-bot: whisper.cpp's own decode slot is one process, shared the same
+  // way (PHA-3607).
+  transcriber = new ConcurrencyLimitedTranscriber(transcriber, 1, 1, params.log);
   const synthesizer =
     params.deps?.createSynthesizer?.() ??
     new RuntimeSpeechSynthesizer({

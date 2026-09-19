@@ -11,6 +11,7 @@ import {
   LocalWhisperTranscriber,
   normalizeTranscript,
   readTranscriptText,
+  SPEAKER_CLIENT_ID_HEADER,
   type WhisperFetch,
 } from "../src/voice/whisper-local.js";
 import { toneFrame48k } from "./mock-bridge.js";
@@ -30,10 +31,14 @@ function speech(frames = 50): Buffer {
 function stubFetch(
   body: string,
   options: { ok?: boolean; status?: number } = {},
-): { fetchFn: WhisperFetch; calls: Array<{ url: string; form: FormData }> } {
-  const calls: Array<{ url: string; form: FormData }> = [];
+): {
+  fetchFn: WhisperFetch;
+  calls: Array<{ url: string; form: FormData; headers: Record<string, string> | undefined }>;
+} {
+  const calls: Array<{ url: string; form: FormData; headers: Record<string, string> | undefined }> =
+    [];
   const fetchFn: WhisperFetch = async (url, init) => {
-    calls.push({ url, form: init.body });
+    calls.push({ url, form: init.body, headers: init.headers });
     return {
       ok: options.ok ?? true,
       status: options.status ?? 200,
@@ -65,6 +70,24 @@ describe("LocalWhisperTranscriber", () => {
     // 1000 ms at 48 kHz resampled to 16 kHz: a third of the samples, 2 bytes each.
     expect(wav.readUInt32LE(40)).toBeCloseTo(16_000 * 2, -3);
     expect(calls[0]?.form.get("language")).toBe("en");
+  });
+
+  it("sends the speaker's clientId as a header for a coalescing proxy to key on (PHA-3607)", async () => {
+    const { fetchFn, calls } = stubFetch(JSON.stringify({ text: "hey" }));
+    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, fetchFn });
+
+    await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt", clientId: 42 });
+
+    expect(calls[0]?.headers).toEqual({ [SPEAKER_CLIENT_ID_HEADER]: "42" });
+  });
+
+  it("omits the header when no clientId is known", async () => {
+    const { fetchFn, calls } = stubFetch(JSON.stringify({ text: "hey" }));
+    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, fetchFn });
+
+    await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt" });
+
+    expect(calls[0]?.headers).toBeUndefined();
   });
 
   it("omits the language field when the operator asked for auto-detect", async () => {

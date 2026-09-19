@@ -46,6 +46,10 @@ export type TeamSpeakVoiceRealtimeConfig = {
   requireWakeName?: boolean;
   /** Wake names that allow a response when the gate is active. Defaults to the routed agent name plus OpenClaw. */
   wakeNames?: string[];
+  /** Exact hearings whisper is known to produce for the first wake name, accepted with no edit budget (PHA-3605). */
+  wakeAliases?: string[];
+  /** The other bot's wake names: a hearing at least as close to one of these as to ours is declined (PHA-3605). */
+  excludeWakeNames?: string[];
   /** Agent profile bootstrap files to include in realtime instructions. Defaults to IDENTITY.md, USER.md, SOUL.md; set [] to disable. */
   bootstrapContextFiles?: TeamSpeakVoiceRealtimeBootstrapContextFile[];
   /**
@@ -138,6 +142,10 @@ export type TeamSpeakVoiceConfig = {
   requireWakeName?: boolean;
   /** Wake names that allow a response when the gate is active. */
   wakeNames?: string[];
+  /** Exact hearings whisper is known to produce for the first wake name, accepted with no edit budget (PHA-3605). */
+  wakeAliases?: string[];
+  /** The other bot's wake names: a hearing at least as close to one of these as to ours is declined (PHA-3605). */
+  excludeWakeNames?: string[];
   /** Dead air after our own speech during which a follow-up needs no wake name. Default 0 (off). */
   followUpSilenceMs?: number;
   /** Allow `speaker_start` frames to interrupt active playback. */
@@ -679,11 +687,15 @@ export function resolveTeamSpeakWakeConfig(
   const realtime = voice?.realtime;
   const requireWakeName = voice?.requireWakeName ?? realtime?.requireWakeName;
   const wakeNames = voice?.wakeNames ?? realtime?.wakeNames;
+  const wakeAliases = voice?.wakeAliases ?? realtime?.wakeAliases;
+  const excludeWakeNames = voice?.excludeWakeNames ?? realtime?.excludeWakeNames;
   const bargeIn = voice?.bargeIn ?? realtime?.bargeIn;
   const followUpSilenceMs = voice?.followUpSilenceMs ?? realtime?.followUpSilenceMs;
   return {
     ...(requireWakeName === undefined ? {} : { requireWakeName }),
     ...(wakeNames === undefined ? {} : { wakeNames }),
+    ...(wakeAliases === undefined ? {} : { wakeAliases }),
+    ...(excludeWakeNames === undefined ? {} : { excludeWakeNames }),
     ...(bargeIn === undefined ? {} : { bargeIn }),
     ...(followUpSilenceMs === undefined ? {} : { followUpSilenceMs }),
   };
