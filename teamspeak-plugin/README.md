@@ -293,6 +293,17 @@ starts it on the music lane — the same lane `play_music` uses, so `stop_music`
 stops the band too. A failure is spoken in character and recorded for
 `band_status`.
 
+`song_lyrics` and `replay_song` (PHA-3601) read from a bounded, most-recent-first
+log of what actually finished playing (title, lyrics, singer), kept in step with
+`keepSongs` so it never outlives the audio files on disk. `song_lyrics` hands
+the agent back the full text of a song already played — the most recent one by
+default, or an older one by title (or a fragment of it) — so it can be typed or
+read out verbatim; the tool description tells the agent to give the complete
+lyrics, not a summary. `replay_song` plays a song already recorded again
+without going back through the generator: same title lookup, same one-song-at-
+a-time rule as `compose_song`, and it refuses in character if the recording has
+since been pruned off disk.
+
 ```json5
 "band": {
   "enabled": true,

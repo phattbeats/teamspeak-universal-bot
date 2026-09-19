@@ -11,6 +11,15 @@
  *
  * One song at a time. A second `compose_song` while one is cooking is refused
  * with the state, so the agent can say so rather than queue a set list.
+ *
+ * PHA-3601: the room asked for two more things a jukebox has and a composer
+ * alone does not — the words to what already played, and "that one again"
+ * without a three-minute wait. Both read from `history`, a bounded log of
+ * what actually finished playing (title, lyrics, who sang it), kept in the
+ * same count as `keepSongs` so it never outlives the audio file on disk that
+ * `replay` needs. Replaying reuses the announce-then-play tail of a normal
+ * job instead of the generator, so "play that again" costs a TTS line, not a
+ * render.
  */
 import { readdir, stat, unlink } from "node:fs/promises";
 import os from "node:os";
@@ -42,6 +51,18 @@ export type ComposeRequest = {
 
 export type BandJobStatus = "idle" | "composing" | "announcing" | "playing" | "failed";
 
+/** One song that actually finished playing, kept for `song_lyrics` and `replay_song`. */
+export type PlayedSong = {
+  title: string;
+  audioPath: string;
+  provider: string;
+  durationMs: number | undefined;
+  vocals: boolean;
+  lyrics: string | undefined;
+  singer: BandSinger | undefined;
+  playedAt: number;
+};
+
 export type BandStatus = {
   status: BandJobStatus;
   bandName: string;
@@ -55,8 +76,22 @@ export type BandStatus = {
   mood: string | undefined;
   singer: BandSinger | undefined;
   announcement: string | undefined;
-  lastSong: { title: string; audioPath: string; provider: string } | undefined;
+  lastSong: Pick<PlayedSong, "title" | "audioPath" | "provider" | "vocals" | "lyrics" | "singer"> | undefined;
 };
+
+export type LyricsOutcome =
+  | { ok: true; title: string; singer: BandSinger | undefined; lyrics: string }
+  | { ok: false; error: string };
+
+export type ReplayRequest = {
+  /** Which song, by title or a fragment of it. Omit for the last one played. */
+  titleQuery?: string | undefined;
+  requestedBy?: string | undefined;
+};
+
+export type ReplayOutcome =
+  | { ok: true; title: string; singer: BandSinger | undefined }
+  | { ok: false; error: string };
 
 export type ComposeOutcome =
   | {
@@ -74,6 +109,10 @@ export type ComposeOutcome =
 export type BandController = {
   compose(request: ComposeRequest): ComposeOutcome;
   status(): BandStatus;
+  /** The words to a song already played. Omit `titleQuery` for the last one. */
+  lyrics(titleQuery?: string): LyricsOutcome;
+  /** Play an already-recorded song again instead of writing a new one. */
+  replay(request: ReplayRequest): ReplayOutcome;
   close(): void;
 };
 
@@ -109,13 +148,18 @@ type Job = {
   dedicatedTo: string | undefined;
   controller: AbortController;
   announcement: string | undefined;
+  /** Set on a `replay` job: skip the generator and reuse this recording. */
+  replayOf: PlayedSong | undefined;
 };
 
 export class BandLeader implements BandController {
   private job: Job | undefined;
   private state: BandJobStatus = "idle";
   private lastError: string | undefined;
-  private lastSong: GeneratedSong | undefined;
+  /** Which song `lastError` is about — `status()` has no job to read the title from once a job fails. */
+  private lastFailedTitle: string | undefined;
+  /** Newest first, bounded to `keepSongs` so it never outlives the files on disk. */
+  private history: PlayedSong[] = [];
   private closed = false;
   private readonly rng: Rng;
   private readonly now: () => number;
@@ -172,6 +216,7 @@ export class BandLeader implements BandController {
       dedicatedTo: request.dedicatedTo?.trim() || undefined,
       controller: new AbortController(),
       announcement: undefined,
+      replayOf: undefined,
     };
     this.job = job;
     this.state = "composing";
@@ -191,13 +236,67 @@ export class BandLeader implements BandController {
     };
   }
 
+  lyrics(titleQuery?: string): LyricsOutcome {
+    const found = this.findPlayed(titleQuery);
+    if (!found) {
+      return {
+        ok: false,
+        error: titleQuery
+          ? `No song called "${titleQuery}" in what I remember playing.`
+          : "Nothing's been played yet tonight.",
+      };
+    }
+    if (!found.vocals || !found.lyrics) {
+      return { ok: false, error: `"${found.title}" was instrumental. No lyrics — just the band.` };
+    }
+    return { ok: true, title: found.title, singer: found.singer, lyrics: found.lyrics };
+  }
+
+  replay(request: ReplayRequest): ReplayOutcome {
+    if (this.closed) {
+      return { ok: false, error: "The band has gone home." };
+    }
+    if (this.job) {
+      return { ok: false, error: `The band is already working on "${this.job.title}". One song at a time.` };
+    }
+    const found = this.findPlayed(request.titleQuery);
+    if (!found) {
+      return {
+        ok: false,
+        error: request.titleQuery
+          ? `No song called "${request.titleQuery}" in what I remember playing.`
+          : "Nothing's been played yet tonight, so there's nothing to bring back.",
+      };
+    }
+    const job: Job = {
+      title: found.title,
+      spec: { title: found.title, style: "", styleTags: "", vocals: found.vocals, lyrics: found.lyrics },
+      mood: "replay",
+      keywords: [],
+      singer: found.singer,
+      startedAt: this.now(),
+      requestedBy: request.requestedBy?.trim() || undefined,
+      dedicatedTo: undefined,
+      controller: new AbortController(),
+      announcement: undefined,
+      replayOf: found,
+    };
+    this.job = job;
+    this.state = "composing";
+    this.lastError = undefined;
+    this.params.log?.(`teamspeak band: replaying "${found.title}" provider=${found.provider}`);
+    void this.run(job);
+    return { ok: true, title: found.title, singer: found.singer };
+  }
+
   status(): BandStatus {
     const job = this.job;
+    const last = this.history[0];
     return {
       status: this.state,
       bandName: this.bandName,
       provider: this.params.generator.id,
-      title: job?.title ?? this.lastSong?.title,
+      title: job?.title ?? last?.title ?? this.lastFailedTitle,
       startedAt: job?.startedAt,
       elapsedMs: job ? this.now() - job.startedAt : undefined,
       error: this.lastError,
@@ -205,8 +304,15 @@ export class BandLeader implements BandController {
       mood: job?.mood,
       singer: job?.singer,
       announcement: job?.announcement,
-      lastSong: this.lastSong
-        ? { title: this.lastSong.title, audioPath: this.lastSong.audioPath, provider: this.lastSong.provider }
+      lastSong: last
+        ? {
+            title: last.title,
+            audioPath: last.audioPath,
+            provider: last.provider,
+            vocals: last.vocals,
+            lyrics: last.lyrics,
+            singer: last.singer,
+          }
         : undefined,
     };
   }
@@ -218,30 +324,76 @@ export class BandLeader implements BandController {
     this.state = "idle";
   }
 
+  /** Exact title match first, then a substring; newest match wins either way. */
+  private findPlayed(titleQuery: string | undefined): PlayedSong | undefined {
+    const wanted = titleQuery?.trim().toLowerCase();
+    if (!wanted) {
+      return this.history[0];
+    }
+    const exact = this.history.find((song) => song.title.toLowerCase() === wanted);
+    if (exact) {
+      return exact;
+    }
+    return this.history.find((song) => song.title.toLowerCase().includes(wanted));
+  }
+
+  /** Newest first, deduplicated by title, bounded to `keepSongs`. */
+  private recordPlayed(played: PlayedSong): void {
+    this.history = this.history.filter((song) => song.title.toLowerCase() !== played.title.toLowerCase());
+    this.history.unshift(played);
+    this.history.length = Math.min(this.history.length, Math.max(1, this.params.config.keepSongs));
+  }
+
   // --- the job -----------------------------------------------------------------
 
   private async run(job: Job): Promise<void> {
-    const timeout = setTimeout(() => job.controller.abort(), this.params.config.generateTimeoutMs);
     let song: GeneratedSong;
-    try {
-      song = await this.params.generator.generate(job.spec, {
-        outDir: this.songsDir,
-        signal: job.controller.signal,
-        fileStem: fileStem(job.title, job.startedAt),
-      });
-    } catch (error) {
+    if (job.replayOf) {
+      const onDisk = await stat(job.replayOf.audioPath).then(
+        () => true,
+        () => false,
+      );
+      if (!onDisk) {
+        await this.fail(job, `the recording for "${job.replayOf.title}" is gone. Ask me to write a new one.`);
+        return;
+      }
+      song = {
+        title: job.replayOf.title,
+        audioPath: job.replayOf.audioPath,
+        provider: job.replayOf.provider,
+        durationMs: job.replayOf.durationMs,
+      };
+    } else {
+      const timeout = setTimeout(() => job.controller.abort(), this.params.config.generateTimeoutMs);
+      try {
+        song = await this.params.generator.generate(job.spec, {
+          outDir: this.songsDir,
+          signal: job.controller.signal,
+          fileStem: fileStem(job.title, job.startedAt),
+        });
+      } catch (error) {
+        clearTimeout(timeout);
+        const message = job.controller.signal.aborted
+          ? `generation timed out after ${this.params.config.generateTimeoutMs}ms`
+          : describe(error);
+        await this.fail(job, message);
+        return;
+      }
       clearTimeout(timeout);
-      const message = job.controller.signal.aborted
-        ? `generation timed out after ${this.params.config.generateTimeoutMs}ms`
-        : describe(error);
-      await this.fail(job, message);
-      return;
     }
-    clearTimeout(timeout);
     if (this.job !== job || this.closed) {
       return;
     }
-    this.lastSong = song;
+    this.recordPlayed({
+      title: song.title,
+      audioPath: song.audioPath,
+      provider: song.provider,
+      durationMs: song.durationMs,
+      vocals: job.spec.vocals,
+      lyrics: job.spec.vocals ? job.spec.lyrics : undefined,
+      singer: job.singer,
+      playedAt: this.now(),
+    });
     this.params.log?.(
       `teamspeak band: generated "${song.title}" provider=${song.provider} in ${this.now() - job.startedAt}ms file=${song.audioPath}${song.durationMs ? ` durationMs=${song.durationMs}` : ""}`,
     );
@@ -299,6 +451,7 @@ export class BandLeader implements BandController {
     this.job = undefined;
     this.state = "failed";
     this.lastError = message;
+    this.lastFailedTitle = job.title;
     this.params.log?.(`teamspeak band: "${job.title}" failed after ${this.now() - job.startedAt}ms: ${message}`);
     if (!this.closed && this.params.config.announce && this.params.speak) {
       try {
