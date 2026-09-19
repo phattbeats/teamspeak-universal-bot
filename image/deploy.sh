@@ -100,10 +100,14 @@ fi
 
 log "stopping the old stack"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-# The sidecars this image absorbs. Removing them here is the whole point of the
-# issue: leaving `whisper` up would mean two transcribers and a stale one that
-# the plugin might still be pointed at.
-for old in ts-bridge whisper; do
+# ts-bridge is a sidecar this image fully absorbed (PHA-3342) and is always
+# safe to remove. `whisper` used to be in this list too, back when it was a
+# leftover in-container sidecar this image superseded — but since PHA-3598 it
+# is the shared whisper-server pool BOTH sexton and bexton call over the
+# network (whisper/deploy.sh), so removing it here as "superseded" was a live
+# STT outage waiting to happen on every redeploy. Do not add it back; redeploy
+# it separately via whisper/deploy.sh if it ever actually needs replacing.
+for old in ts-bridge; do
   if docker ps -a --format '{{.Names}}' | grep -qx "$old"; then
     echo "removing superseded container: $old"
     docker rm -f "$old" >/dev/null 2>&1 || true
