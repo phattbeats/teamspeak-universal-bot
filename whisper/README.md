@@ -5,16 +5,33 @@
 > inside each bot. With two bots in one channel that was two decoders doing the
 > same work; `deploy.sh` here now runs that same image as a third container
 > named `whisper` with `run-whisper-pool.sh` as the entrypoint: N
-> `whisper-server` processes on consecutive ports (`:8080` sexton, `:8081`
-> bexton) plus silero VAD in front of the decoder. `image/deploy.sh` points each
-> bot at its port (`SEXTON_WHISPER_URL`) and leaves the in-container server
-> down (`WHISPER_ENABLED=0`). `whisper-compose.yml` is the old single-server
-> sidecar and is kept only as a record. `verify.sh` still works against
-> `whisper:8080`. See `image/README.md`, "The shared whisper pool".
+> `whisper-server` processes on consecutive ports (`:8080`, `:8081`, ...) plus
+> silero VAD in front of the decoder. `whisper-compose.yml` is the old
+> single-server sidecar and is kept only as a record. `verify.sh` still works
+> against `whisper:8080`. See `image/README.md`, "The shared whisper pool".
 >
 > whisper.cpp's server has no request-level parallelism: it serialises behind
-> one mutex. That is why the pool is one process per bot and not one server
-> with a flag.
+> one mutex. That is why the pool is one process per worker and not one
+> server with a flag.
+>
+> **PHA-3607: a coalescing proxy sits in front of the pool, one port past the
+> workers (`:8082` for the default 2-worker pool).** Sexton and bexton each
+> hear the exact same channel audio and independently segment it, so their
+> speaker sessions close on the same utterance within a few hundred ms of each
+> other — before this, that meant two whisper decodes of identical speech.
+> `coalescing-proxy.mjs` keys on the `x-speaker-client-id` header the plugin
+> sends (the TS6 roster clientId, which TeamSpeak assigns once and both bots
+> see identically) and answers a near-simultaneous second request from the
+> first request's result instead of opening a second decode. `image/deploy.sh`
+> / `image/deploy-bexton.sh` now point **both** bots at `:8082`
+> (`SEXTON_WHISPER_URL`) instead of one worker port each; the proxy
+> round-robins across the real workers exactly as pinning each bot to its own
+> port used to, so a coalescing miss (no header, window expired, only one bot
+> ever asked) costs nothing extra. Set `WHISPER_COALESCE_ENABLED=0` on the
+> `whisper` container to go back to running bare workers with no proxy in
+> front, and point the bots at `:8080`/`:8081` directly again.
+> `whisper/coalescing-proxy.test.mjs` (`node --test`) covers the proxy in
+> isolation against two fake backends.
 
 The `voice.mode=stt-tts` lane transcribes speaker audio here, on the TS6 host's
 own Docker network, and nowhere else.
@@ -89,5 +106,10 @@ container instead if you want to prove the *network path* the plugin uses:
 
 ```bash
 docker exec openclaw-sexton curl -sS -F file=@/tmp/probe.wav \
-  -F response_format=json http://whisper:8080/inference
+  -F response_format=json http://whisper:8082/inference
 ```
+
+To verify the coalescing proxy specifically (`URL=http://127.0.0.1:8082/inference bash verify.sh`
+against the same worker twice with the same `-H 'x-speaker-client-id: 1'` should
+answer the second call near-instantly instead of paying for a second decode),
+or run its own isolated test: `node --test whisper/coalescing-proxy.test.mjs`.

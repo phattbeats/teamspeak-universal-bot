@@ -159,6 +159,28 @@ describe("SpeakerSessionManager", () => {
     }
   });
 
+  it("withholds a session for a roster entry shouldOpenSession declines, but still tracks it as roster (PHA-3607)", () => {
+    const factory = createFactory();
+    const onRosterEvent = vi.fn();
+    const manager = new SpeakerSessionManager({
+      createSession: factory.createSession,
+      shouldOpenSession: (client) => client.nickname !== "Bexton",
+      onRosterEvent,
+    });
+
+    manager.applyRoster([rosterEntry(11, "brandon"), rosterEntry(12, "Bexton")]);
+
+    expect(manager.sessionKeys()).toEqual([11]);
+    expect(factory.created.map((session) => session.clientId)).toEqual([11]);
+    // The excluded entry still counts as roster/human-present and still fires
+    // its join event; only the provider/STT session is withheld.
+    expect(manager.humanParticipantCount()).toBe(2);
+    expect(onRosterEvent.mock.calls.map(([event]) => [event.kind, event.client.nickname])).toEqual([
+      ["joined", "brandon"],
+      ["joined", "Bexton"],
+    ]);
+  });
+
   it("reopens sessions from the next roster after a disconnect", () => {
     const factory = createFactory();
     const manager = new SpeakerSessionManager({ createSession: factory.createSession });

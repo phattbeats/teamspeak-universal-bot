@@ -67,7 +67,7 @@ things different, all env:
 | `SEXTON_WAKE_ALIASES` | `section,sections,sex and,sexin,saxton,sex ton,sex done` (exact whisper hearings, PHA-3605) | (empty) |
 | `SEXTON_EXCLUDE_WAKE_NAMES` | `Bexton,band leader,maestro` (never answer the other bot's name) | `Sexton,Henchman` |
 | `SEXTON_BAND_ENABLED` | `0` | `1` — writes `tools.band` into the channel block, reusing the TTS block's MiniMax key |
-| `SEXTON_WHISPER_URL` | `http://whisper:8080/inference` | `http://whisper:8081/inference` — one worker port each in the shared pool (PHA-3598); first-boot only, the mounted `openclaw.json` wins afterwards |
+| `SEXTON_WHISPER_URL` | `http://whisper:8082/inference` | `http://whisper:8082/inference` — both bots share the pool's coalescing proxy (PHA-3607), which fans one decode out to both when they segment the same utterance and otherwise round-robins across the two workers; first-boot only, the mounted `openclaw.json` wins afterwards |
 | `WHISPER_ENABLED` | `0` | `0` — the in-container whisper-server stays down while the pool is the transcriber |
 
 ### The shared whisper pool (PHA-3598)
@@ -80,8 +80,15 @@ processes on consecutive ports (whisper.cpp's server has **no** request-level
 parallelism flag; it serialises behind one mutex, so "parallel" means one
 process per bot) and silero VAD in front of the decoder, which turns a
 silence/noise segment into a ~200 ms empty answer instead of a 4-12 s decode.
-Each bot is pointed at its own port. Health: the pool container runs with
+Each bot was pointed at its own port. Health: the pool container runs with
 `--no-healthcheck` because the image's healthcheck is the bot's, not whisper's.
+
+**PHA-3607** found the next layer of the same waste: even with each bot on
+its own worker, the two bots still decoded the *same* speech separately —
+one worker each, but the same audio twice. `whisper/coalescing-proxy.mjs`
+sits in front of the pool (`:8082` by default) and both bots now point at it
+instead of at a worker directly; see `whisper/README.md` for how the
+coalescing key works and `whisper/coalescing-proxy.test.mjs` for its tests.
 
 Cutover on a live bot, in this order, or the edit is lost: `supervisorctl stop
 gateway`, edit the URL in the mounted `openclaw.json` (`docker exec -i` if you

@@ -6,7 +6,7 @@
  * lifecycle, audio routing, barge-in, and chat commands are all exercised
  * through the real frame codec.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   TYPE_CLEAR_VOICE,
   TYPE_JOIN,
@@ -19,6 +19,7 @@ import type { TeamSpeakAccountConfig } from "../src/config.js";
 import type { RoomPlaybackQueue } from "../src/voice/room-playback.js";
 import {
   TeamSpeakVoiceRuntime,
+  type TeamSpeakToolOverrides,
   type VoiceSpeakerSession,
 } from "../src/voice/voice-runtime.js";
 import { MockBridge, rosterEntry, toneFrame48k } from "./mock-bridge.js";
@@ -79,7 +80,10 @@ class FakeSpeakerSession implements VoiceSpeakerSession {
   }
 }
 
-function createHarness(config: Partial<TeamSpeakAccountConfig> = {}): Harness {
+function createHarness(
+  config: Partial<TeamSpeakAccountConfig> = {},
+  toolOverrides?: TeamSpeakToolOverrides,
+): Harness {
   const bridge = new MockBridge();
   const sessions = new Map<number, FakeSpeakerSession>();
   const silentEvents: string[] = [];
@@ -89,6 +93,7 @@ function createHarness(config: Partial<TeamSpeakAccountConfig> = {}): Harness {
     createSocket: bridge.createSocket,
     minBargeInAudioEndMs: 0,
     deliverSilentEvent: (text) => silentEvents.push(text),
+    ...(toolOverrides ? { toolOverrides } : {}),
     createSpeakerSession: (client: RosterEntry, playback) => {
       const session = new FakeSpeakerSession(client.clientId, client.nickname, playback);
       sessions.set(client.clientId, session);
@@ -202,6 +207,31 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
     expect(harness.runtime.snapshot().humanParticipants).toBe(1);
     expect(harness.runtime.snapshot().speakerSessions).toBe(1);
     expect(harness.sessions.has(9)).toBe(false);
+  });
+
+  // PHA-3607: sexton and bexton sit in the same channel and, before this,
+  // each opened a full STT session for the other's TTS audio on every
+  // utterance — doubling whisper decode for zero benefit. `excludeWakeNames`
+  // already carries the other bot's exact nickname for the wake gate
+  // (PHA-3605), so it doubles as the withhold list here at no extra config
+  // cost. The entry still counts as present; only its session is withheld.
+  it("withholds a speaker session for the other bot's nickname, but keeps it in the human count", () => {
+    harness = createHarness({ voice: { excludeWakeNames: ["Bexton"] } });
+    harness.bridge.replay([
+      {
+        type: "state",
+        state: { connected: true, channelId: 1, channelName: "General Shit", ownClientId: 9 },
+      },
+      {
+        type: "roster",
+        roster: [rosterEntry(11, "brandon"), rosterEntry(12, "Bexton")],
+      },
+    ]);
+
+    expect(harness.sessions.has(12)).toBe(false);
+    expect(harness.sessions.has(11)).toBe(true);
+    expect(harness.runtime.snapshot().speakerSessions).toBe(1);
+    expect(harness.runtime.snapshot().humanParticipants).toBe(2);
   });
 
   it("retires a session opened on itself once the state names its own client", () => {
@@ -378,5 +408,91 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
       expect(header.text).toContain("not allowed");
       expect(restricted.bridge.sentOfType(TYPE_MUTE)).toHaveLength(0);
     });
+  });
+});
+
+/**
+ * PHA-3601: the room hears the announcement, or the failure line, but until
+ * now the agent itself was never told either happened — only `deliverSilentEvent`
+ * (already used for roster join/leave) closes that gap. These exercise the real
+ * `BandLeader` through a `command` generator, with only the music sink faked,
+ * so the wiring in `createBandController`'s `onSettled` is what's under test.
+ */
+describe("the house band tells the agent when it settles (PHA-3601)", () => {
+  function fakeMusicOverrides(): TeamSpeakToolOverrides {
+    return {
+      createMusic: () => ({
+        isPlaying: false,
+        nowPlaying: undefined,
+        queueLength: 0,
+        volume: 0.6,
+        play: async (request) => ({
+          title: request.title ?? "song",
+          streamUrl: request.file ?? "",
+          request: request.title ?? "",
+          isFile: Boolean(request.file),
+        }),
+        stop: () => false,
+        setVolume: (volume) => volume,
+        close: () => undefined,
+      }),
+    };
+  }
+
+  it("delivers a silent event when a song starts playing", async () => {
+    const harness = createHarness(
+      {
+        tools: {
+          band: {
+            enabled: true,
+            provider: "command",
+            announce: false,
+            command: {
+              path: "node",
+              args: ["-e", "console.log(JSON.stringify({audioPath:'/tmp/pha-3601-fake.mp3'}))"],
+            },
+          },
+        },
+      },
+      fakeMusicOverrides(),
+    );
+
+    const outcome = harness.runtime.bandController?.compose({
+      title: "Last Man in the Rough",
+      brief: "anything",
+      vocals: false,
+    });
+    expect(outcome?.ok).toBe(true);
+
+    await vi.waitFor(() => expect(harness.silentEvents.length).toBeGreaterThan(0));
+    expect(harness.silentEvents.at(-1)).toBe('[band] "Last Man in the Rough" is playing now.');
+  });
+
+  it("delivers a silent event when the recording fails, instead of leaving the agent guessing", async () => {
+    const harness = createHarness(
+      {
+        tools: {
+          band: {
+            enabled: true,
+            provider: "command",
+            announce: false,
+            command: { path: "/bin/true", args: [] },
+          },
+        },
+      },
+      fakeMusicOverrides(),
+    );
+
+    const outcome = harness.runtime.bandController?.compose({
+      title: "Last Man in the Rough",
+      brief: "anything",
+      vocals: false,
+    });
+    expect(outcome?.ok).toBe(true);
+
+    await vi.waitFor(() => expect(harness.silentEvents.length).toBeGreaterThan(0));
+    expect(harness.silentEvents.at(-1)).toContain('[band] "Last Man in the Rough" failed to record:');
+    expect(harness.silentEvents.at(-1)).toContain("returned neither audioPath nor audioUrl");
+    expect(harness.silentEvents.at(-1)).toContain("Nothing played.");
   });
 });

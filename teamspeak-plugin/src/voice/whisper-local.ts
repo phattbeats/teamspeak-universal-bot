@@ -24,6 +24,18 @@ export type TranscriptionRequest = {
   /** Speaker label, for logs only; the transcriber is per-segment, not per-person. */
   label: string;
   /**
+   * The TS6 roster clientId of the speaker, when known. TeamSpeak assigns
+   * this per session on its own server, so sexton and bexton — two
+   * independent bridge connections into the same channel — see the identical
+   * value for the identical human. Sent as a header so a coalescing whisper
+   * front end (PHA-3607: "one transcription per utterance fanned out to both
+   * bots") can recognize that two nearly-simultaneous requests are the same
+   * utterance and decode it once instead of twice. Purely advisory: a plain
+   * whisper.cpp server ignores unknown headers, so this is a no-op unless the
+   * transcriber URL actually points at the coalescing proxy.
+   */
+  clientId?: number | undefined;
+  /**
    * Segment length. Optional because a plain transcriber has no use for it;
    * `RoutingTranscriber` reads it to decide whether a long segment, or an
    * unexpected empty, is worth a second opinion (PHA-3428 item 3).
@@ -47,8 +59,11 @@ export type SegmentTranscriber = {
 /** Injectable for tests; production uses the global fetch. */
 export type WhisperFetch = (
   url: string,
-  init: { method: string; body: FormData; signal: AbortSignal },
+  init: { method: string; body: FormData; signal: AbortSignal; headers?: Record<string, string> },
 ) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+
+/** Header the coalescing whisper proxy keys on (PHA-3607). */
+export const SPEAKER_CLIENT_ID_HEADER = "x-speaker-client-id";
 
 export type LocalWhisperTranscriberParams = {
   config: ResolvedTeamSpeakTranscriptionConfig;
@@ -118,6 +133,9 @@ export class LocalWhisperTranscriber implements SegmentTranscriber {
         method: "POST",
         body: form,
         signal: controller.signal,
+        ...(request.clientId !== undefined
+          ? { headers: { [SPEAKER_CLIENT_ID_HEADER]: String(request.clientId) } }
+          : {}),
       });
       const body = await response.text();
       if (!response.ok) {

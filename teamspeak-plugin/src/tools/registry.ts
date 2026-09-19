@@ -40,6 +40,8 @@ export const LEAVE_VOICE_TOOL = "leave_voice";
 export const JOIN_VOICE_TOOL = "join_voice";
 export const COMPOSE_SONG_TOOL = "compose_song";
 export const BAND_STATUS_TOOL = "band_status";
+export const SONG_LYRICS_TOOL = "song_lyrics";
+export const REPLAY_SONG_TOOL = "replay_song";
 
 const MAX_CATCH_UP_MINUTES = 720;
 
@@ -96,7 +98,7 @@ export function buildTeamSpeakTools(options: {
         type: "function",
         name: PLAY_MUSIC_TOOL,
         description:
-          "Play music into the TeamSpeak channel. Give either a search phrase or a direct URL. Music ducks automatically while anyone speaks. Confirm in a few words.",
+          "Play music into the TeamSpeak channel. Give either a search phrase or a direct URL. Music ducks automatically while anyone speaks. If something is already playing, this queues the request instead of interrupting it — the result tells you the queue position, so confirm with that (e.g. \"queued, you're third\") instead of announcing it as playing now. Confirm in a few words.",
         parameters: {
           type: "object",
           properties: {
@@ -114,7 +116,8 @@ export function buildTeamSpeakTools(options: {
       {
         type: "function",
         name: STOP_MUSIC_TOOL,
-        description: "Stop the music playing in the channel. Confirm in a few words.",
+        description:
+          "Stop the music playing in the channel and clear anything queued behind it. Confirm in a few words.",
         parameters: { type: "object", properties: {} },
       },
       {
@@ -242,6 +245,36 @@ export function buildTeamSpeakTools(options: {
           "Where the band is: idle, still recording, what it last played, or why the last song failed. Use it when someone asks what is taking so long.",
         parameters: { type: "object", properties: {} },
       },
+      {
+        type: "function",
+        name: SONG_LYRICS_TOOL,
+        description:
+          "Get the full lyrics of a song the band already played, so you can paste them into the chat or read them out verbatim. Defaults to the most recently played song; give a title, or part of one, to look up an older one. These are your own lyrics — when someone asks for them, use this tool and give back the complete text, not a summary or a paraphrase.",
+        parameters: {
+          type: "object",
+          properties: {
+            title: {
+              type: "string",
+              description: "Optional. Which song, by title or part of the title. Omit for the last one played.",
+            },
+          },
+        },
+      },
+      {
+        type: "function",
+        name: REPLAY_SONG_TOOL,
+        description:
+          "Play a song the band already recorded again, instead of writing a new one — for \"play that again\" or a request for something you played earlier tonight. Defaults to the most recently played song; give a title, or part of one, to bring back an older one. Refuses if the band is busy on something else or the recording is gone. After calling it, say one short line that you're bringing it back, then stop — the band leader announces and starts it himself.",
+        parameters: {
+          type: "object",
+          properties: {
+            title: {
+              type: "string",
+              description: "Optional. Which song to bring back, by title or part of the title. Omit for the last one played.",
+            },
+          },
+        },
+      },
     );
   }
   return tools;
@@ -295,6 +328,10 @@ async function dispatch(
       return composeSong(deps, args, context);
     case BAND_STATUS_TOOL:
       return bandStatus(deps);
+    case SONG_LYRICS_TOOL:
+      return songLyrics(deps, args);
+    case REPLAY_SONG_TOOL:
+      return replaySong(deps, args, context);
     default:
       return { ok: false, error: `Unknown TeamSpeak tool "${name}".` };
   }
@@ -348,6 +385,39 @@ function bandStatus(deps: TeamSpeakToolDeps): ToolResult {
   return { ok: true, ...band.status() };
 }
 
+function songLyrics(deps: TeamSpeakToolDeps, args: Record<string, unknown>): ToolResult {
+  const band = deps.band;
+  if (!band) {
+    return { ok: false, error: "There is no house band on this account." };
+  }
+  const outcome = band.lyrics(readString(args.title));
+  if (!outcome.ok) {
+    return { ok: false, error: outcome.error };
+  }
+  return { ok: true, title: outcome.title, singer: outcome.singer, lyrics: outcome.lyrics };
+}
+
+function replaySong(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  const band = deps.band;
+  if (!band) {
+    return { ok: false, error: "There is no house band on this account." };
+  }
+  const outcome = band.replay({ titleQuery: readString(args.title), requestedBy: context.nickname });
+  if (!outcome.ok) {
+    return { ok: false, error: outcome.error };
+  }
+  return {
+    ok: true,
+    status: "announcing",
+    title: outcome.title,
+    next: "Say one short line that you're bringing it back, then stop. The band leader will announce and start it himself.",
+  };
+}
+
 async function playMusic(
   deps: TeamSpeakToolDeps,
   args: Record<string, unknown>,
@@ -364,7 +434,18 @@ async function playMusic(
   const track = await music.play({
     ...(query ? { query } : {}),
     ...(url ? { url } : {}),
+    enqueue: true,
   });
+  if (track.queuedPosition !== undefined) {
+    return {
+      ok: true,
+      queued: true,
+      position: track.queuedPosition,
+      title: track.title,
+      request: track.request,
+      volume: music.volume,
+    };
+  }
   return { ok: true, title: track.title, request: track.request, volume: music.volume };
 }
 
@@ -373,8 +454,14 @@ function stopMusic(deps: TeamSpeakToolDeps): ToolResult {
   if (!music) {
     return { ok: false, error: "Music playback is not enabled on this Sexton." };
   }
+  const queuedBefore = music.queueLength;
   const wasPlaying = music.stop("stop_music");
-  return { ok: true, stopped: wasPlaying, wasPlaying };
+  return {
+    ok: true,
+    stopped: wasPlaying,
+    wasPlaying,
+    ...(queuedBefore > 0 ? { queueCleared: queuedBefore } : {}),
+  };
 }
 
 function setVolume(deps: TeamSpeakToolDeps, args: Record<string, unknown>): ToolResult {

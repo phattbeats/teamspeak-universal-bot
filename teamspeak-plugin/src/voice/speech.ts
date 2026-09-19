@@ -260,3 +260,51 @@ function lastLine(text: string): string {
   const lines = text.trim().split("\n");
   return lines[lines.length - 1]?.slice(0, 200) ?? "";
 }
+
+const SENTENCE_SPLIT_RE = /(?<=[.!?])\s+(?=\S)/;
+
+/**
+ * Split a reply into per-sentence pieces so the stt-tts lane can synthesize
+ * and play them as a pipeline instead of one T2A call for the whole reply
+ * (PHA-3607: "streaming TTS", the ~7s -> ~4s first-audio path).
+ *
+ * There is no host SDK support for token-level streaming synthesis — `tts`
+ * only ever returns a finished file (see the module doc above) — so this is
+ * the honest version of streaming reachable without forking MiniMax's auth
+ * plumbing: play sentence one while sentence two is still being synthesized.
+ * The tradeoff is real and stated rather than hidden: N T2A round trips
+ * instead of one adds a little to the *total* time a long reply takes to
+ * finish, in exchange for a much shorter wait before anything is heard.
+ *
+ * The first sentence is never merged with anything after it — its only job
+ * is to be as short as whatever the model actually said first, so synthesis
+ * of it starts (and finishes) as fast as possible. Short fragments *after*
+ * the first are merged forward so a two-word sentence doesn't cost its own
+ * full round trip for no perceptible latency benefit.
+ */
+export function splitIntoSpeechChunks(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const sentences = trimmed
+    .split(SENTENCE_SPLIT_RE)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 0);
+  if (sentences.length <= 1) {
+    return [trimmed];
+  }
+  const [first, ...rest] = sentences;
+  const chunks: string[] = [first as string];
+  for (const sentence of rest) {
+    const last = chunks[chunks.length - 1] as string;
+    if (chunks.length > 1 && last.length < MIN_TRAILING_CHUNK_CHARS) {
+      chunks[chunks.length - 1] = `${last} ${sentence}`;
+    } else {
+      chunks.push(sentence);
+    }
+  }
+  return chunks;
+}
+
+const MIN_TRAILING_CHUNK_CHARS = 40;

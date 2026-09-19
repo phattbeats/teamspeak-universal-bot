@@ -31,10 +31,10 @@ import type {
   TeamSpeakVoiceRealtimeConfig,
 } from "../config.js";
 import { bridgePcmDurationMs, chunkBridgePcm } from "./audio.js";
-import { matchFuzzyWakeName } from "./fuzzy-wake.js";
+import { evaluateFuzzyWakeName } from "./fuzzy-wake.js";
 import type { RoomPlaybackQueue } from "./room-playback.js";
 import { SpeakerSegmenter, type SpeakerSegment } from "./segmenter.js";
-import type { SpeechSynthesizer } from "./speech.js";
+import { splitIntoSpeechChunks, type SpeechSynthesizer } from "./speech.js";
 import type { SegmentTranscriber, TranscriptionRequest } from "./whisper-local.js";
 import { WakeGate } from "./wake-gate.js";
 
@@ -110,6 +110,8 @@ export class TeamSpeakSttTtsSpeakerSession {
   private conversationIdleFrom: number | undefined;
   /** What whisper called the wake name on the last fuzzy match, for the log. */
   private lastFuzzyHearing: string | undefined;
+  /** The other bot's name that claimed the last declined hearing, for the log (PHA-3605). */
+  private lastExcludedBy: string | undefined;
 
   constructor(private readonly params: TeamSpeakSttTtsSessionParams) {
     this.clientId = params.client.clientId;
@@ -179,6 +181,7 @@ export class TeamSpeakSttTtsSpeakerSession {
       `teamspeak voice: stt-tts session ready clientId=${this.clientId} nickname=${this.nickname} ` +
         `transcription=${this.params.transcriber.id} speech=${this.params.synthesizer.id} ` +
         `requireWakeName=${this.wakeNameRequired} wakeNames=${this.params.wakeNames.join(",") || "none"} ` +
+        `wakeAliases=${this.params.wakeConfig.wakeAliases?.join(",") || "none"} excludeWakeNames=${this.params.wakeConfig.excludeWakeNames?.join(",") || "none"} ` +
         `bargeIn=${this.bargeInEnabled} humanParticipants=${this.params.humanParticipantCount()}`,
     );
   }
@@ -268,6 +271,7 @@ export class TeamSpeakSttTtsSpeakerSession {
       pcm48kMono: segment.pcm48kMono,
       label: this.nickname,
       durationMs: segment.durationMs,
+      clientId: this.clientId,
     });
     const transcript = heard.text;
     const sttProvider = heard.provider;
@@ -285,7 +289,7 @@ export class TeamSpeakSttTtsSpeakerSession {
     const gated = this.applyWakeGate(transcript, segment);
     if (!gated) {
       this.params.log?.(
-        `teamspeak voice: wake gate declined clientId=${this.clientId} humanParticipants=${this.params.humanParticipantCount()} wakeNames=${this.params.wakeNames.join(",") || "none"} heard=${JSON.stringify(transcript.slice(0, 160))}`,
+        `teamspeak voice: wake gate declined clientId=${this.clientId} humanParticipants=${this.params.humanParticipantCount()} wakeNames=${this.params.wakeNames.join(",") || "none"}${this.lastExcludedBy ? ` excludedBy=${JSON.stringify(this.lastExcludedBy)}` : ""} heard=${JSON.stringify(transcript.slice(0, 160))}`,
       );
       return;
     }
@@ -308,42 +312,80 @@ export class TeamSpeakSttTtsSpeakerSession {
       return;
     }
 
-    const ttsStartedAt = this.now();
-    const speech = await this.params.synthesizer.synthesize(reply);
-    const ttsMs = this.now() - ttsStartedAt;
-    if (this.isStopped() || generation !== this.generation) {
-      return;
-    }
-    if (speech.status === "empty") {
-      return;
-    }
-    if (speech.status === "failed") {
-      throw new Error(`speech synthesis failed: ${speech.error}`);
-    }
+    // Pipelined synthesis (PHA-3607, "streaming TTS"): one T2A call per
+    // sentence instead of one for the whole reply, so playback of sentence one
+    // starts while sentence two is still being synthesized. There is no host
+    // support for token-level streaming synthesis (see speech.ts), so this is
+    // the honest version of it -- real first-audio win, at the cost of a
+    // little more *total* synthesis time on a multi-sentence reply.
+    const chunks = splitIntoSpeechChunks(reply);
+    let firstChunkTtsMs: number | undefined;
+    let firstAudioMs: number | undefined;
+    let speechProvider: string | undefined;
+    let totalAudioMs = 0;
+    let spokenChunks = 0;
 
-    for (const frame of chunkBridgePcm(speech.pcm48kMono)) {
-      this.params.playback.enqueue(this.playbackOwnerKey, frame);
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunkStartedAt = this.now();
+      const chunkSpeech = await this.params.synthesizer.synthesize(chunks[index] as string);
+      const chunkTtsMs = this.now() - chunkStartedAt;
+      if (index === 0) {
+        firstChunkTtsMs = chunkTtsMs;
+      }
+      if (this.isStopped() || generation !== this.generation) {
+        return;
+      }
+      if (chunkSpeech.status === "empty") {
+        continue;
+      }
+      if (chunkSpeech.status === "failed") {
+        // The first chunk failing fails the turn, same as the old one-call
+        // behavior. A later chunk failing does not retroactively fail a turn
+        // that already spoke something -- stop here and keep what played.
+        if (spokenChunks === 0) {
+          throw new Error(`speech synthesis failed: ${chunkSpeech.error}`);
+        }
+        this.params.log?.(
+          `teamspeak voice: speech chunk failed clientId=${this.clientId} chunk=${index + 1}/${chunks.length}: ${chunkSpeech.error}`,
+        );
+        break;
+      }
+      for (const frame of chunkBridgePcm(chunkSpeech.pcm48kMono)) {
+        this.params.playback.enqueue(this.playbackOwnerKey, frame);
+      }
+      spokenChunks += 1;
+      totalAudioMs += bridgePcmDurationMs(chunkSpeech.pcm48kMono);
+      speechProvider ??= chunkSpeech.provider;
+      // The moment this fires is the real "first audio" instant: the bridge
+      // starts streaming these frames out while later chunks are still being
+      // synthesized, so this must be stamped here, not after the whole loop.
+      firstAudioMs ??= Math.round(this.now() - segment.closedAt);
     }
-    // The utterance is complete the moment it is queued: unlike a realtime
-    // provider there is no later "response done" event to wait for, and holding
-    // the lane past the last frame would block the next speaker for nothing.
+    // The utterance is complete the moment the last chunk is queued: unlike a
+    // realtime provider there is no later "response done" event to wait for,
+    // and holding the lane past the last frame would block the next speaker
+    // for nothing.
     this.params.playback.release(this.playbackOwnerKey);
+    if (spokenChunks === 0) {
+      return;
+    }
 
     // Stamped at the *end* of our own speech, not the start: the speaker is
     // silent while the answer plays, and that silence is not dead air.
-    this.conversationIdleFrom = this.now() + bridgePcmDurationMs(speech.pcm48kMono);
+    this.conversationIdleFrom = this.now() + totalAudioMs;
     this.lastTimings = {
       segmentMs: Math.round(segment.durationMs),
       sttMs: Math.round(sttMs),
       agentMs: Math.round(agentMs),
-      ttsMs: Math.round(ttsMs),
-      firstAudioMs: Math.round(this.now() - segment.closedAt),
+      ttsMs: Math.round(firstChunkTtsMs ?? 0),
+      firstAudioMs: firstAudioMs ?? Math.round(this.now() - segment.closedAt),
     };
     this.params.log?.(
       `teamspeak voice: stt-tts turn clientId=${this.clientId} nickname=${this.nickname} ` +
         `segmentMs=${this.lastTimings.segmentMs} sttMs=${this.lastTimings.sttMs} ` +
         `agentMs=${this.lastTimings.agentMs} ttsMs=${this.lastTimings.ttsMs} ` +
-        `firstAudioMs=${this.lastTimings.firstAudioMs} sttProvider=${sttProvider} speechProvider=${speech.provider ?? this.params.synthesizer.id}${this.lastFuzzyHearing ? ` wakeHeardAs=${JSON.stringify(this.lastFuzzyHearing)}` : ""}`,
+        `firstAudioMs=${this.lastTimings.firstAudioMs} ttsChunks=${spokenChunks}/${chunks.length} ` +
+        `sttProvider=${sttProvider} speechProvider=${speechProvider ?? this.params.synthesizer.id}${this.lastFuzzyHearing ? ` wakeHeardAs=${JSON.stringify(this.lastFuzzyHearing)}` : ""}`,
     );
   }
 
@@ -369,6 +411,7 @@ export class TeamSpeakSttTtsSpeakerSession {
       // the alternative answers everyone in a room that asked for a gate.
       return undefined;
     }
+    this.lastExcludedBy = undefined;
     const matched = matchRealtimeVoiceActivationName(transcript, wakeNames);
     if (matched) {
       this.lastFuzzyHearing = undefined;
@@ -378,13 +421,23 @@ export class TeamSpeakSttTtsSpeakerSession {
     // The SDK matcher wants the name at the head or tail, spelled as configured.
     // Local whisper gives neither reliably, so try a normalized edit-distance
     // match over every word and adjacent word pair before declining.
-    const fuzzy = matchFuzzyWakeName(transcript, wakeNames);
+    const evaluated = evaluateFuzzyWakeName(transcript, wakeNames, {
+      aliases: this.params.wakeConfig.wakeAliases,
+      excludeNames: this.params.wakeConfig.excludeWakeNames,
+    });
+    const fuzzy = evaluated.match;
     if (fuzzy) {
       this.lastFuzzyHearing = fuzzy.heardAs;
       const message = fuzzy.text.trim() || transcript.trim();
       return { message, wakeName: fuzzy.activationName };
     }
     this.lastFuzzyHearing = undefined;
+    // The other bot's name, or close enough to it: theirs to answer, not ours,
+    // and not a follow-up either -- they said who they meant.
+    if (evaluated.excludedBy) {
+      this.lastExcludedBy = evaluated.excludedBy;
+      return undefined;
+    }
     // Follow-up: they said the name a moment ago, we answered, and they came
     // straight back. Dead air is measured from the end of our answer to the
     // start of their burst -- not to now(), which would also charge them for
@@ -431,7 +484,7 @@ export function resolveSttTtsWakeNamePolicy(
  * when routing is on, and the plain transcriber's own id when it is off —
  * without forcing every implementation to carry the richer method.
  */
-async function transcribeSegment(
+export async function transcribeSegment(
   transcriber: SegmentTranscriber,
   request: TranscriptionRequest,
 ): Promise<{ text: string; provider: string }> {
@@ -446,4 +499,67 @@ async function transcribeSegment(
     return await detailed.call(transcriber, request);
   }
   return { text: await transcriber.transcribe(request), provider: transcriber.id };
+}
+
+/**
+ * Caps whisper requests to what the server can actually run at once (PHA-3607).
+ *
+ * whisper.cpp's server has no request-level parallelism — one process, one
+ * mutex, one decode slot per bot (see the pool doc) — so letting every
+ * concurrent speaker submit independently does not run them in parallel, it
+ * only stacks each one behind a full `timeoutMs` wait apiece (the PHA-3597
+ * decode/abort/resubmit livelock: several people talking at once queue up
+ * requests that each eventually time out in turn instead of finishing sooner).
+ *
+ * One instance is shared by every `TeamSpeakSttTtsSpeakerSession` on an
+ * account (wired in `stt-tts-lane.ts`), so the limit is per-bot, not
+ * per-speaker. A segment that arrives while the queue is already full evicts
+ * whichever segment was waiting longest: it can only be staler than the new
+ * one, and evicting it immediately (an empty transcript, same as silence)
+ * costs nothing next to leaving it to time out on its own turn.
+ */
+export class ConcurrencyLimitedTranscriber implements SegmentTranscriber {
+  readonly id: string;
+  private inFlight = 0;
+  private readonly waiting: Array<(proceed: boolean) => void> = [];
+
+  constructor(
+    private readonly inner: SegmentTranscriber,
+    private readonly maxInFlight = 1,
+    private readonly maxQueueDepth = 1,
+    private readonly log?: (message: string) => void,
+  ) {
+    this.id = inner.id;
+  }
+
+  async transcribe(request: TranscriptionRequest): Promise<string> {
+    const { text } = await this.transcribeDetailed(request);
+    return text;
+  }
+
+  async transcribeDetailed(request: TranscriptionRequest): Promise<{ text: string; provider: string }> {
+    if (this.inFlight >= this.maxInFlight) {
+      if (this.waiting.length >= this.maxQueueDepth) {
+        const evicted = this.waiting.shift();
+        this.log?.(
+          `teamspeak voice: stt queue full, dropping oldest queued segment label=${request.label} inFlight=${this.inFlight} queueDepth=${this.waiting.length}`,
+        );
+        evicted?.(false);
+      }
+      const proceed = await new Promise<boolean>((resolve) => {
+        this.waiting.push(resolve);
+      });
+      if (!proceed) {
+        return { text: "", provider: this.id };
+      }
+    }
+    this.inFlight += 1;
+    try {
+      return await transcribeSegment(this.inner, request);
+    } finally {
+      this.inFlight -= 1;
+      const next = this.waiting.shift();
+      next?.(true);
+    }
+  }
 }

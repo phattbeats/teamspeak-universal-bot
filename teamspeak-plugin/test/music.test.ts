@@ -327,6 +327,81 @@ describe("MusicPlayer streaming", () => {
   });
 });
 
+describe("MusicPlayer queueing (PHA-3635)", () => {
+  it("stacks an enqueued request behind what's already playing instead of interrupting it", async () => {
+    const harness = createHarness();
+    const first = await harness.player.play({ query: "first", enqueue: true });
+    expect(first.queuedPosition).toBeUndefined();
+    expect(harness.children).toHaveLength(1);
+
+    const second = await harness.player.play({ query: "second", enqueue: true });
+    expect(second.queuedPosition).toBe(1);
+    expect(harness.player.queueLength).toBe(1);
+    // No second ffmpeg spawned, and the first track keeps streaming.
+    expect(harness.children).toHaveLength(1);
+    expect(harness.player.nowPlaying?.request).toBe("first");
+
+    const third = await harness.player.play({ query: "third", enqueue: true });
+    expect(third.queuedPosition).toBe(2);
+    expect(harness.player.queueLength).toBe(2);
+  });
+
+  it("an enqueued request starts immediately when nothing is playing", async () => {
+    const harness = createHarness();
+    const track = await harness.player.play({ query: "first", enqueue: true });
+    expect(track.queuedPosition).toBeUndefined();
+    expect(harness.player.isPlaying).toBe(true);
+    expect(harness.player.queueLength).toBe(0);
+  });
+
+  it("advances to the next queued track on its own once the current one finishes", async () => {
+    const harness = createHarness({ prebufferMs: 20 });
+    await harness.player.play({ query: "first", enqueue: true });
+    await harness.player.play({ query: "second", enqueue: true });
+    expect(harness.player.queueLength).toBe(1);
+
+    const child = harness.children[0];
+    child?.emitFrames(1);
+    child?.end(0);
+    harness.advance(5 * MUSIC_FRAME_MS);
+    harness.tick();
+    harness.tick();
+
+    expect(harness.player.isPlaying).toBe(true);
+    expect(harness.player.queueLength).toBe(0);
+    expect(harness.player.nowPlaying?.request).toBe("second");
+    expect(harness.children).toHaveLength(2);
+    expect(harness.logs.join("\n")).toContain('advancing to queued "Smooth Jazz Radio"');
+  });
+
+  it("stop() clears the queue as well as the current track", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "first", enqueue: true });
+    await harness.player.play({ query: "second", enqueue: true });
+    expect(harness.player.queueLength).toBe(1);
+
+    expect(harness.player.stop("stop_music")).toBe(true);
+    expect(harness.player.queueLength).toBe(0);
+
+    harness.advance(500);
+    harness.tick();
+    // Nothing advances from the cleared queue.
+    expect(harness.player.isPlaying).toBe(false);
+  });
+
+  it("a plain (non-enqueue) play still interrupts immediately and drops anything queued", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "first", enqueue: true });
+    await harness.player.play({ query: "second", enqueue: true });
+    expect(harness.player.queueLength).toBe(1);
+
+    await harness.player.play({ query: "interrupt" });
+    expect(harness.children[0]?.signals).toEqual(["SIGKILL"]);
+    expect(harness.player.queueLength).toBe(0);
+    expect(harness.player.nowPlaying?.request).toBe("interrupt");
+  });
+});
+
 describe("MusicPlayer files (PHA-3554)", () => {
   it("plays a local file without yt-dlp, without the reconnect flags, and holds the downbeat", async () => {
     const harness = createHarness({ prebufferMs: 40 });

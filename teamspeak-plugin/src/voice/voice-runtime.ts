@@ -21,7 +21,7 @@ import {
   resolveTeamSpeakWakeConfig,
   type TeamSpeakAccountConfig,
 } from "../config.js";
-import { BandLeader, type BandController, type BandSpeak } from "../tools/band.js";
+import { BandLeader, type BandController, type BandSpeak, type BandStatus } from "../tools/band.js";
 import { createSongGenerator } from "../tools/band-generators.js";
 import { bridgePcmDurationMs, chunkBridgePcm } from "./audio.js";
 import type { SpeechSynthesisOutcome } from "./speech.js";
@@ -159,6 +159,7 @@ export class TeamSpeakVoiceRuntime {
     this.sessions = new SpeakerSessionManager({
       createSession: (client) => this.params.createSpeakerSession(client, this.playback, this.tools),
       selfClientId: () => this.selfClientId,
+      shouldOpenSession: (client) => !this.isExcludedNickname(client.nickname),
       onRosterEvent: (event) => this.handleRosterEvent(event),
       onSessionError: (clientId, error) =>
         this.params.log?.(
@@ -376,8 +377,33 @@ export class TeamSpeakVoiceRuntime {
       }),
       music,
       speak,
+      onSettled: (status) => this.handleBandSettled(status),
       ...(this.params.log ? { log: this.params.log } : {}),
     });
+  }
+
+  /**
+   * PHA-3601: the room hears the announcement, or the in-character line when a
+   * song fails, but the agent itself was never told either happened — only the
+   * room did. So the next time someone asked for the words or to hear it
+   * again, the agent had nothing to check and improvised in character instead
+   * (e.g. claiming a song that had actually failed to record was "still
+   * coming"). A silent event costs no speech, but puts the real outcome in the
+   * agent's own context for the next turn.
+   */
+  private handleBandSettled(status: BandStatus): void {
+    const deliver = this.params.deliverSilentEvent;
+    if (!deliver) {
+      return;
+    }
+    const title = status.title ?? "the song";
+    if (status.status === "failed") {
+      deliver(`[band] "${title}" failed to record: ${status.error ?? "unknown error"}. Nothing played.`);
+      return;
+    }
+    if (status.status === "playing") {
+      deliver(`[band] "${title}" is playing now.`);
+    }
   }
 
   /**
@@ -419,6 +445,21 @@ export class TeamSpeakVoiceRuntime {
    */
   humanParticipantCount(): number {
     return this.sessions.humanParticipantCount();
+  }
+
+  /**
+   * Is this roster nickname the other bot?
+   *
+   * `excludeWakeNames` is already hand-populated with the other bot's exact
+   * TeamSpeak nickname for the wake gate (PHA-3605); a roster nickname never
+   * collides with the non-nickname aliases also listed there ("band leader",
+   * "maestro"), so reusing the same list to withhold a speaker session costs
+   * nothing extra to configure (PHA-3607).
+   */
+  private isExcludedNickname(nickname: string): boolean {
+    const excludeNames = resolveTeamSpeakWakeConfig(this.params.config).excludeWakeNames ?? [];
+    const needle = nickname.trim().toLowerCase();
+    return needle.length > 0 && excludeNames.some((name) => name.trim().toLowerCase() === needle);
   }
 
   /** True while the Sexton is sitting out. */

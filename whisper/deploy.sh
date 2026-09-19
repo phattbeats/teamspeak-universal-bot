@@ -32,11 +32,15 @@ mkdir -p "$APPDATA/models"
 
 # The pool script is mounted, not baked: it is the one file a live tuning pass
 # (threads, VAD threshold, worker count) has to edit, and the image is the
-# bot's image, rebuilt on the bot's schedule, not this one's.
+# bot's image, rebuilt on the bot's schedule, not this one's. The coalescing
+# proxy (PHA-3607) travels the same way, for the same reason.
 if [ "$HERE/run-whisper-pool.sh" != "$APPDATA/run-whisper-pool.sh" ]; then
   cp "$HERE/run-whisper-pool.sh" "$APPDATA/run-whisper-pool.sh"
 fi
 chmod +x "$APPDATA/run-whisper-pool.sh"
+if [ "$HERE/coalescing-proxy.mjs" != "$APPDATA/coalescing-proxy.mjs" ]; then
+  cp "$HERE/coalescing-proxy.mjs" "$APPDATA/coalescing-proxy.mjs"
+fi
 
 if [ ! -s "$APPDATA/models/ggml-silero-v5.1.2.bin" ]; then
   echo "deploy: fetching the silero VAD model"
@@ -64,5 +68,6 @@ for _ in $(seq 1 30); do
     break
   fi
 done
-docker logs "$NAME" 2>&1 | grep -E "run-whisper-pool|VAD is enabled" | head -4
-echo "deploy: $NAME up on $NETWORK — sexton -> http://$NAME:8080/inference, bexton -> http://$NAME:8081/inference"
+docker logs "$NAME" 2>&1 | grep -E "run-whisper-pool|coalescing-proxy|VAD is enabled" | head -6
+echo "deploy: $NAME up on $NETWORK — both bots -> http://$NAME:8082/inference (coalescing proxy, PHA-3607)"
+echo "deploy: workers still reachable directly at :8080 (sexton) / :8081 (bexton) if WHISPER_COALESCE_ENABLED=0"

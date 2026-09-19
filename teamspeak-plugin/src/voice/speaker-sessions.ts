@@ -24,6 +24,16 @@ export type SpeakerSessionManagerParams = {
   createSession: (client: RosterEntry) => SpeakerSession;
   /** The bridge's own client id, so the Sexton never opens a session on itself. */
   selfClientId?: (() => TeamSpeakClientId | undefined) | undefined;
+  /**
+   * Withhold a speaker session for a roster entry — the other bot sharing the
+   * channel, most often (PHA-3607: each bot was independently transcribing the
+   * other's TTS audio on every utterance, doubling whisper load for zero
+   * benefit; whisper has no cooperative cancellation, so that decode always ran
+   * to completion). The entry still joins the roster and fires the usual
+   * join/left/renamed events; only the STT/provider pipeline is withheld.
+   * Default: open a session for everyone.
+   */
+  shouldOpenSession?: ((client: RosterEntry) => boolean) | undefined;
   /** Roster changes are also surfaced as silent events into the agent session. */
   onRosterEvent?: ((event: RosterEvent) => void) | undefined;
   onSessionError?: ((clientId: TeamSpeakClientId, error: Error) => void) | undefined;
@@ -127,6 +137,12 @@ export class SpeakerSessionManager {
 
   private openSession(client: RosterEntry): void {
     if (this.sessions.has(client.clientId)) {
+      return;
+    }
+    if (this.params.shouldOpenSession?.(client) === false) {
+      this.params.log?.(
+        `teamspeak voice: speaker session skipped clientId=${client.clientId} nickname=${client.nickname} reason=excluded-nickname`,
+      );
       return;
     }
     let session: SpeakerSession;

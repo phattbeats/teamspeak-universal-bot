@@ -21,7 +21,9 @@ import {
   LEAVE_VOICE_TOOL,
   PLAY_MUSIC_TOOL,
   POKE_TOOL,
+  REPLAY_SONG_TOOL,
   SET_VOLUME_TOOL,
+  SONG_LYRICS_TOOL,
   STOP_MUSIC_TOOL,
   WHAT_DID_I_MISS_TOOL,
   WHO_IS_HERE_TOOL,
@@ -31,12 +33,13 @@ import {
 class FakeMusic implements MusicController {
   isPlaying = false;
   nowPlaying: MusicTrack | undefined;
+  queueLength = 0;
   volume = 0.6;
-  readonly requests: { query?: string; url?: string }[] = [];
+  readonly requests: { query?: string; url?: string; enqueue?: boolean }[] = [];
   readonly stops: string[] = [];
   failWith: Error | undefined;
 
-  async play(request: { query?: string; url?: string }): Promise<MusicTrack> {
+  async play(request: { query?: string; url?: string; enqueue?: boolean }): Promise<MusicTrack> {
     this.requests.push(request);
     if (this.failWith) {
       throw this.failWith;
@@ -46,6 +49,10 @@ class FakeMusic implements MusicController {
       streamUrl: "https://cdn.example/a.webm",
       request: request.query ?? request.url ?? "",
     };
+    if (request.enqueue && this.isPlaying) {
+      this.queueLength += 1;
+      return { ...track, queuedPosition: this.queueLength };
+    }
     this.isPlaying = true;
     this.nowPlaying = track;
     return track;
@@ -54,6 +61,7 @@ class FakeMusic implements MusicController {
   stop(reason: string): boolean {
     this.stops.push(reason);
     const wasPlaying = this.isPlaying;
+    this.queueLength = 0;
     this.isPlaying = false;
     this.nowPlaying = undefined;
     return wasPlaying;
@@ -180,7 +188,12 @@ describe("tool definitions", () => {
 describe("the house band (PHA-3554)", () => {
   it("adds compose_song and band_status only when an account has a band", () => {
     const names = buildTeamSpeakTools({ music: true, band: true }).map((tool) => tool.name);
-    expect(names.slice(-2)).toEqual([COMPOSE_SONG_TOOL, BAND_STATUS_TOOL]);
+    expect(names.slice(-4)).toEqual([
+      COMPOSE_SONG_TOOL,
+      BAND_STATUS_TOOL,
+      SONG_LYRICS_TOOL,
+      REPLAY_SONG_TOOL,
+    ]);
     expect(buildTeamSpeakTools({ music: true }).map((tool) => tool.name)).not.toContain(
       COMPOSE_SONG_TOOL,
     );
@@ -212,6 +225,11 @@ describe("the house band (PHA-3554)", () => {
         announcement: undefined,
         lastSong: undefined,
       }),
+      lyrics: (title) =>
+        title
+          ? { ok: false, error: `No song called "${title}" in what I remember playing.` }
+          : { ok: true, title: "Tuesday Again", singer: "bexton", lyrics: "[Verse]\ntest lyric line" },
+      replay: (request) => ({ ok: true, title: request.titleQuery ?? "Tuesday Again", singer: "bexton" }),
       close: () => undefined,
     };
     const deps = { ...createHarness().deps, band };
@@ -258,6 +276,18 @@ describe("the house band (PHA-3554)", () => {
       { clientId: 4, nickname: "Brandon" },
     ) as Promise<Record<string, unknown> & { ok: boolean }>);
     expect(noBand.ok).toBe(false);
+
+    const lyrics = await call(SONG_LYRICS_TOOL, {});
+    expect(lyrics).toMatchObject({ ok: true, title: "Tuesday Again", singer: "bexton" });
+    expect(String(lyrics.lyrics)).toContain("test lyric line");
+
+    const missingLyrics = await call(SONG_LYRICS_TOOL, { title: "Nope" });
+    expect(missingLyrics.ok).toBe(false);
+    expect(String(missingLyrics.error)).toContain("Nope");
+
+    const replayed = await call(REPLAY_SONG_TOOL, { title: "Tuesday Again" });
+    expect(replayed).toMatchObject({ ok: true, status: "announcing", title: "Tuesday Again" });
+    expect(String(replayed.next)).toContain("bringing it back");
   });
 });
 
@@ -267,7 +297,7 @@ describe("play_music / stop_music / set_volume", () => {
     const result = await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
 
     expect(result).toMatchObject({ ok: true, title: "Smooth Jazz Radio", request: "smooth jazz" });
-    expect(harness.music.requests).toEqual([{ query: "smooth jazz" }]);
+    expect(harness.music.requests).toEqual([{ query: "smooth jazz", enqueue: true }]);
   });
 
   it("accepts arguments as a JSON string, which some providers send", async () => {
@@ -275,7 +305,7 @@ describe("play_music / stop_music / set_volume", () => {
     const result = await harness.call(PLAY_MUSIC_TOOL, '{"url":"https://youtu.be/abc"}');
 
     expect(result.ok).toBe(true);
-    expect(harness.music.requests).toEqual([{ url: "https://youtu.be/abc" }]);
+    expect(harness.music.requests).toEqual([{ url: "https://youtu.be/abc", enqueue: true }]);
   });
 
   it("settles a failed play as ok:false instead of leaving the turn hanging", async () => {
@@ -293,6 +323,31 @@ describe("play_music / stop_music / set_volume", () => {
     await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
     expect(await harness.call(STOP_MUSIC_TOOL)).toMatchObject({ ok: true, wasPlaying: true });
     expect(harness.music.stops).toEqual(["stop_music", "stop_music"]);
+  });
+
+  it("queues a request instead of interrupting what's already playing (PHA-3635)", async () => {
+    const harness = createHarness();
+    const first = await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
+    expect(first).toMatchObject({ ok: true, title: "Smooth Jazz Radio" });
+    expect(first.queued).toBeUndefined();
+
+    const second = await harness.call(PLAY_MUSIC_TOOL, { query: "some death metal" });
+    expect(second).toMatchObject({ ok: true, queued: true, position: 1 });
+
+    const third = await harness.call(PLAY_MUSIC_TOOL, { query: "polka" });
+    expect(third).toMatchObject({ ok: true, queued: true, position: 2 });
+
+    // Nothing was interrupted: only the first request's play() started a track.
+    expect(harness.music.isPlaying).toBe(true);
+  });
+
+  it("reports how many queued songs stop_music clears along with the current track", async () => {
+    const harness = createHarness();
+    await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
+    await harness.call(PLAY_MUSIC_TOOL, { query: "some death metal" });
+
+    const stopped = await harness.call(STOP_MUSIC_TOOL);
+    expect(stopped).toMatchObject({ ok: true, wasPlaying: true, queueCleared: 1 });
   });
 
   it("reads a bare number over 1 as a percentage", async () => {

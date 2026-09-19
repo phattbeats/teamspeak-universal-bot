@@ -12,6 +12,7 @@ import { resolveTeamSpeakSpeechConfig } from "../src/config.js";
 import {
   buildTtsOverride,
   RuntimeSpeechSynthesizer,
+  splitIntoSpeechChunks,
   type AudioDecodeChildProcess,
   type AudioDecodeSpawn,
   type TeamSpeakTtsRuntime,
@@ -185,5 +186,50 @@ describe("RuntimeSpeechSynthesizer", () => {
 
     expect(await synthesizer.synthesize("   ")).toEqual({ status: "empty" });
     expect(calls.some((call) => call.kind === "synthesize")).toBe(false);
+  });
+});
+
+describe("splitIntoSpeechChunks", () => {
+  it("keeps a single-sentence reply as one chunk", () => {
+    expect(splitIntoSpeechChunks("Yeah, that's right.")).toEqual(["Yeah, that's right."]);
+  });
+
+  it("returns nothing for a blank reply", () => {
+    expect(splitIntoSpeechChunks("   ")).toEqual([]);
+  });
+
+  it("splits a multi-sentence reply so the first sentence stands alone", () => {
+    // Each of these clears the trailing-merge threshold on its own, so all
+    // three come back as separate chunks rather than folding together.
+    expect(
+      splitIntoSpeechChunks(
+        "This is the first full sentence of the reply. Here comes a second full sentence about the plan. And then a third one closes the whole thing out.",
+      ),
+    ).toEqual([
+      "This is the first full sentence of the reply.",
+      "Here comes a second full sentence about the plan.",
+      "And then a third one closes the whole thing out.",
+    ]);
+  });
+
+  it("never grows the first chunk, however short, so it stays fast to synthesize", () => {
+    const chunks = splitIntoSpeechChunks(
+      "Yes. That is a much longer follow-up sentence that goes well past the merge threshold on its own.",
+    );
+    expect(chunks[0]).toBe("Yes.");
+  });
+
+  it("merges short trailing fragments together instead of costing a round trip each", () => {
+    const chunks = splitIntoSpeechChunks(
+      "Here is the long first sentence that explains the whole plan in detail. Yeah. Right. Okay then.",
+    );
+    expect(chunks).toHaveLength(2);
+    expect(chunks[1]).toBe("Yeah. Right. Okay then.");
+  });
+
+  it("handles a reply with no sentence-ending punctuation as one chunk", () => {
+    expect(splitIntoSpeechChunks("just vibing in the channel")).toEqual([
+      "just vibing in the channel",
+    ]);
   });
 });
