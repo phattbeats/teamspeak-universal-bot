@@ -57,6 +57,8 @@ export BAND_NAME=${BAND_NAME:-The Velvet Vice Lounge Band}
 # Pipe-separated other billings (Brandon, 2026-09-18). Used in a minority of intros.
 export BAND_ALIASES=${BAND_ALIASES-Sgt. Bexton and the Digital Heart Club Band}
 export WHISPER_THREADS=${WHISPER_THREADS:-2}
+# PHA-3598: bexton's worker in the shared whisper pool is the second port.
+export SEXTON_WHISPER_URL=${SEXTON_WHISPER_URL-http://whisper:8081/inference}
 # Baked into the image from image/bexton/avatar/bexton.png (Brandon, 2026-09-18).
 # A PNG at $APPDATA/config/avatar.png overrides it: AVATAR=/config/avatar.png.
 export AVATAR=${AVATAR:-/usr/local/share/sexton-avatar/bexton.png}
