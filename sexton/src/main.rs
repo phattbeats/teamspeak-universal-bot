@@ -243,11 +243,18 @@ struct ChannelState {
     channel_id: ChannelId,
     channel_name: String,
     history: VecDeque<LoggedMessage>,
-    last_pm: HashMap<ClientId, tokio::time::Instant>,
+    /// Last catch-up PM sent to each client, keyed by their TeamSpeak uid (the
+    /// same key `welcomed` uses). `ClientId` is session-bound — the server
+    /// hands out a fresh one every reconnect — so keying off it would re-PM
+    /// the same person every login. We do not persist this map: a bot restart
+    /// inside the rate-limit window is rare, and the welcome-then-catch-up
+    /// blast on a fresh process is the lesser evil compared to growing the
+    /// `.welcomed` format.
+    last_pm: HashMap<String, tokio::time::Instant>,
     /// Clients that have already had the one-time welcome PM, keyed by
     /// TeamSpeak uid (stable across reconnects and restarts) and persisted to
-    /// disk. Deliberately *not* the `last_pm` map: that one expires every ten
-    /// minutes, and the welcome goes out once and stays out.
+    /// disk. Welcomes are durable; catch-ups just suppress within the
+    /// `PM_RATE_LIMIT` window so a quick hop in and out is not re-broadcast.
     welcomed: HashSet<String>,
     log_dir: PathBuf,
     /// Clients that were already connected when the bot came up — never PM'd
@@ -1290,26 +1297,27 @@ fn maybe_send_catchup(
     if now_in_channel != Some(state.channel_id) {
         return;
     }
+    // The announced notice (PHA-3305): before this client's *first* catch-up,
+    // and only ever before the first, say what the Sexton is doing. We need
+    // the durable key first so the rate-limit map below can suppress a quick
+    // reconnect with the same intent.
+    let (key, durable) = welcome_key(con, client_id);
     let now = tokio::time::Instant::now();
-    let should_send = match state.last_pm.get(&client_id) {
+    let should_send = match state.last_pm.get(&key) {
         Some(last) => now.duration_since(*last) >= PM_RATE_LIMIT,
         None => true,
     };
     if !should_send {
         return;
     }
-    state.last_pm.insert(client_id, now);
+    state.last_pm.insert(key.clone(), now);
 
-    // The announced notice (PHA-3305): before this client's *first* catch-up,
-    // and only ever before the first, say what the Sexton is doing. The
-    // rate-limit map above expires after ten minutes; this one never does.
-    let (key, durable) = welcome_key(con, client_id);
     if !state.welcomed.contains(&key) {
         match send_pm(con, client_id, WELCOME_PM) {
             Ok(handle) => {
                 info!(?client_id, %key, durable, "welcome PM sent");
                 state.pending_cmds.insert(handle.0, format!("welcome PM to {client_id:?}"));
-                state.remember_welcomed(key, durable);
+                state.remember_welcomed(key.clone(), durable);
             }
             // Not fatal, and deliberately not remembered: an unsent welcome
             // should be retried on their next join, not marked as delivered.
@@ -1709,6 +1717,39 @@ mod tests {
         let mut restarted = state_in(&dir, channel);
         restarted.load_welcomed_from_disk();
         assert!(restarted.welcomed.is_empty(), "a runtime client id was persisted");
+    }
+
+    /// Regression: PHA-3340. The rate-limit map was previously keyed by
+    /// session-bound `ClientId`, so a logout/login cycle — which the server
+    /// signals as a fresh client — wiped the entry and re-broadcast the
+    /// welcome + last 15 messages every single time. The map is now keyed
+    /// by the durable uid (the same key `welcomed` uses), so a reconnect
+    /// within `PM_RATE_LIMIT` is suppressed, and one outside the window
+    /// can fire without colliding with a different human.
+    #[test]
+    fn last_pm_is_keyed_by_uid_not_session_client_id() {
+        let mut state = state_in(&scratch("last-pm-uid"), "chan");
+
+        let uid = "aQm5FQ0RfBBBhP0Cw0S1FCxjnbg=".to_string();
+        // First connect for this uid: no entry, no prior welcome.
+        assert!(state.last_pm.get(&uid).is_none());
+        assert!(!state.welcomed.contains(&uid));
+
+        // Simulate the bot recording that it just PM'd this uid.
+        state.last_pm.insert(uid.clone(), tokio::time::Instant::now());
+
+        // Same uid, fresh `ClientId` after a reconnect — must still hit the
+        // rate-limit entry. Pre-fix this was two separate keys and the
+        // catch-up + welcome re-fired every login.
+        assert!(
+            state.last_pm.get(&uid).is_some(),
+            "reconnect must hit the same rate-limit entry"
+        );
+
+        // A second, distinct uid has its own slot and is not suppressed by
+        // the first one's entry.
+        let other = "bbbbFQ0RfBBBhP0Cw0S1FCxjnbg=".to_string();
+        assert!(state.last_pm.get(&other).is_none());
     }
 
     #[test]
