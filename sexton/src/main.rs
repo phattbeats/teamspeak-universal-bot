@@ -76,15 +76,14 @@ use mixer::Mixer;
 /// First-contact PM: sent once per client, ever, immediately before their first
 /// catch-up (PHA-3305). Not the catch-up PM — see `catchup_text_from`.
 ///
-/// Stage 2 adds the voice paragraph and the "your voice doesn't leave the house"
-/// line. Do not add either early: the second one is the $0-ceiling constraint
-/// from PHA-3228 restated as a wording rule, and a hosted metered STT anywhere
-/// in the path would make it a lie.
-const WELCOME_PM: &str = "Evening. I'm the Sexton — I keep the records for this hall.\n\n\
-                          One thing worth knowing before you settle in: everything typed in \
-                          the channel goes into the log, and I'll send you the last of it \
-                          whenever you walk in.\n\n\
-                          Ask me for something out of the log and I'll go down and find it.";
+/// One line, by Brandon's call on PHA-3428 item 5. The staged wording this
+/// replaces explained the log and trailed a stage 2 that would describe the
+/// voice path; both are gone. Anything added back here is a promise the Sexton
+/// has to keep, so the bar for a second sentence is a behaviour that already
+/// ships — in particular, nothing may claim a transcript stays on the box while
+/// a hosted STT sits anywhere in the path (the PHA-3228 constraint, restated as
+/// a wording rule).
+const WELCOME_PM: &str = "The Sexton keeps this hall.";
 /// How many messages the catch-up PM includes, and the cap on how much of a
 /// delta it will ever show — a uid who has been away for a week still gets
 /// the last `CATCHUP_PM_COUNT`, not the whole gap (PHA-3573).
@@ -1817,18 +1816,12 @@ mod tests {
         ChannelState::new(ChannelId(0), channel.to_string(), dir.to_path_buf(), HashSet::new(), false)
     }
 
-    /// The welcome PM ships in two stages (PHA-3177). Stage 2's sentences are
-    /// promises the text-only Sexton cannot keep, so this test is the guard
-    /// against them arriving early by way of a well-meaning edit.
+    /// The welcome PM is one line, by Brandon's call on PHA-3428 item 5. The
+    /// staging guards below outlive the staged wording: they exist so a
+    /// well-meaning edit cannot quietly add a promise the Sexton does not keep.
     #[test]
     fn the_welcome_pm_is_stage_one_and_carries_nothing_from_stage_two() {
-        assert_eq!(
-            WELCOME_PM,
-            "Evening. I'm the Sexton — I keep the records for this hall.\n\n\
-             One thing worth knowing before you settle in: everything typed in the channel goes \
-             into the log, and I'll send you the last of it whenever you walk in.\n\n\
-             Ask me for something out of the log and I'll go down and find it."
-        );
+        assert_eq!(WELCOME_PM, "The Sexton keeps this hall.");
 
         // PHA-3424 removed the rolling channel description; the welcome must
         // not keep pointing people at it.
