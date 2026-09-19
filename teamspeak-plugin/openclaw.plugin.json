@@ -1,0 +1,57 @@
+{
+  "id": "teamspeak",
+  "name": "TeamSpeak",
+  "description": "OpenClaw TeamSpeak channel plugin: realtime voice in a TeamSpeak channel over the plnt-ts-bridge sidecar.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "teamspeak"
+  ],
+  "channelConfigs": {
+    "teamspeak": {
+      "label": "TeamSpeak",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bridgeUrl": { "type": "string" },
+          "channel": { "type": "string" },
+          "commandPrefix": { "type": "string" },
+          "commandAllowFrom": { "type": "array", "items": { "type": "number" } },
+          "voice": { "type": "object", "additionalProperties": true },
+          "tools": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "uiHints": {
+        "bridgeUrl": {
+          "label": "Bridge URL",
+          "placeholder": "ws://ts-bridge:9099"
+        },
+        "channel": {
+          "label": "Channel",
+          "placeholder": "General"
+        }
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "contracts": {
+    "tools": [
+      "play_music",
+      "stop_music",
+      "set_volume",
+      "what_did_i_miss",
+      "who_is_here",
+      "poke",
+      "leave_voice",
+      "join_voice",
+      "compose_song",
+      "band_status"
+    ]
+  }
+}

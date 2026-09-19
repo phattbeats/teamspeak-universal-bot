@@ -27,12 +27,6 @@ WHISPER_MODEL=${WHISPER_MODEL:-ggml-base.en.bin}
 # upgrade hazard PHA-3326 named, and pinning is the cheapest guard against it.
 #   docker exec OpenClaw openclaw --version
 OPENCLAW_VERSION=${OPENCLAW_VERSION:-2026.9.3}
-# Where to get the teamspeak channel plugin. It has lived in its own repo since
-# 2026-09-07, and that repo is private, so the default is the copy already
-# staged on this box by install/stage-teamspeak-link.sh: no credential needed
-# in the build, and it is by definition the tree the main gateway has been
-# running successfully.
-PLUGIN_SRC=${PLUGIN_SRC:-/mnt/cache/appdata/openclaw/plugins/teamspeak}
 # The weights are ~148 MB, the Rust build tree is large, the whisper.cpp source
 # image alone is 1.14 GB, and the gateway base image adds ~2 GB on top of what
 # this used to need. 92%-full is the normal state of this box.
@@ -49,6 +43,16 @@ if [ "${free_gb:-0}" -lt "$MIN_FREE_GB" ]; then
   exit 1
 fi
 [ -f "$REPO_ROOT/image/Dockerfile" ] || { echo "no image/Dockerfile under $REPO_ROOT" >&2; exit 1; }
+# PHA-3580: the plugin used to be staged here from a separate private repo
+# (openclaw-teamspeak-plugin, split out by PHA-3220) via
+# install/stage-teamspeak-link.sh. It now lives in this repo at
+# teamspeak-plugin/, so the Dockerfile COPYs it straight from the build
+# context (.dockerignore strips the test-only scaffolding) — there is nothing
+# left to stage or clean up here.
+[ -f "$REPO_ROOT/teamspeak-plugin/openclaw.plugin.json" ] || {
+  echo "no teamspeak-plugin/openclaw.plugin.json under $REPO_ROOT" >&2
+  exit 1
+}
 
 # Parse the gateway seed here, on the host, where the quoting is sane. A
 # malformed seed does not fail the build — it fails at first boot, as a gateway
@@ -57,42 +61,6 @@ docker run --rm -v "$REPO_ROOT/image/gateway":/g:ro --entrypoint node \
   "ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION}" \
   -e 'JSON.parse(require("fs").readFileSync("/g/openclaw.seed.json","utf8")); console.log("gateway seed config parses")' \
   || { echo "image/gateway/openclaw.seed.json is not valid JSON" >&2; exit 1; }
-
-# --------------------------------------------------------------------------
-# Stage the teamspeak channel plugin into the build context.
-#
-# The Dockerfile COPYs `plugin/` rather than cloning, deliberately: the plugin
-# repo is private and a clone inside the build would need a credential baked
-# into a layer. Staging it here keeps the secret on the box.
-#
-# The staged copy is removed again on exit so a repeat build never silently
-# uses a stale tree, and so `git status` in the checkout stays clean.
-# --------------------------------------------------------------------------
-log "stage the teamspeak plugin from ${PLUGIN_SRC}"
-[ -f "$PLUGIN_SRC/openclaw.plugin.json" ] || {
-  echo "no plugin at $PLUGIN_SRC (want openclaw.plugin.json there)." >&2
-  echo "Set PLUGIN_SRC=<path to a checkout of openclaw-teamspeak-plugin>, or run" >&2
-  echo "install/stage-teamspeak-link.sh first to put one on the box." >&2
-  exit 1
-}
-rm -rf "$REPO_ROOT/plugin"
-cp -a "$PLUGIN_SRC" "$REPO_ROOT/plugin"
-# Strip HERE rather than in the Dockerfile. node_modules comes back in the
-# plugin-builder stage against the gateway image's own npm (the host's copy
-# could be a tree resolved by a different node), and the standalone-only
-# scaffolding — the SDK stubs and the standalone vitest config — exists so the
-# plugin can be tested outside a gateway; in a runtime install the stubs shadow
-# the real SDK. stage-teamspeak-link.sh strips exactly this set, for exactly
-# this reason.
-#
-# Doing it on the host also sidesteps the thing that broke the first build of
-# this: the gateway image does not run as root, COPY lands files owned by root,
-# and the unprivileged user cannot rm them.
-rm -rf "$REPO_ROOT/plugin/node_modules" \
-       "$REPO_ROOT/plugin/.git" \
-       "$REPO_ROOT/plugin/test/sdk-stubs" \
-       "$REPO_ROOT/plugin/vitest.standalone.config.ts"
-trap 'rm -rf "$REPO_ROOT/plugin"' EXIT
 
 log "build ${IMAGE}:${TAG}  (openclaw ${OPENCLAW_VERSION})"
 docker build \

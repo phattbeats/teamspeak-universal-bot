@@ -185,15 +185,17 @@ RUN set -eu; \
 #    dependency (`ws`), installed with the gateway image's own node/npm so the
 #    resolved tree is the one that gateway will actually load.
 #
-#    The source comes from the build CONTEXT at plugin/, not from a git clone:
-#    the plugin repo is private, and a clone inside the build would need a
-#    credential in the image. image/build.sh stages it — from the plugin repo
-#    or from the copy already on the box — before calling docker build.
+#    PHA-3580: the source is teamspeak-plugin/ in THIS repo, not a staged copy
+#    of a separate `openclaw-teamspeak-plugin` repo — that split (PHA-3220)
+#    existed to let the plugin and the chat logger ship on independent
+#    cadences, a reason that evaporated once PHA-3341/3342 folded them onto
+#    one tsclientlib connection and PHA-3428 put them in one image. One git
+#    tree, one PR, one CI run.
 #
-#    The standalone-only scaffolding is stripped for the same reason
-#    stage-teamspeak-link.sh strips it: the SDK stubs exist so the plugin can
-#    be tested outside a gateway, and in a runtime install they shadow the real
-#    thing.
+#    The standalone-only scaffolding (SDK stubs, the standalone vitest config)
+#    is stripped by .dockerignore rather than by a build step: the SDK stubs
+#    exist so the plugin can be tested outside a gateway, and in a runtime
+#    install they would shadow the real thing.
 # --------------------------------------------------------------------------
 FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION} AS plugin-builder
 # The gateway image does not run as root, and COPY lands files owned by root,
@@ -202,11 +204,7 @@ FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION} AS plugin-builder
 # so root here costs nothing. The runtime stage keeps the base image's user.
 USER root
 WORKDIR /plugin
-# The standalone-only scaffolding (SDK stubs, the standalone vitest config) is
-# already stripped by image/build.sh, on the host, before the context is built.
-# Doing it there rather than here means this stage needs no write access to
-# anything it did not create.
-COPY plugin/ /plugin/
+COPY teamspeak-plugin/ /plugin/
 RUN npm install --omit=dev --no-audit --no-fund \
     && test -f /plugin/openclaw.plugin.json \
     && test -f /plugin/index.ts \

@@ -29,8 +29,11 @@ rather than moving in here.
   WebSocket.
 - **Realtime voice channel plugin** (PHA-3175): OpenClaw channel plugin
   putting a realtime voice runtime in the channel, with Discord config
-  parity. Split out of this repo into its own (PHA-3220):
-  [phattbeats/openclaw-teamspeak-plugin](https://github.com/phattbeats/openclaw-teamspeak-plugin).
+  parity. Lives at [`teamspeak-plugin/`](teamspeak-plugin/) in this repo.
+  Split out into its own repo at PHA-3220 so the plugin and the chat logger
+  could ship independently; PHA-3580 moved it back once PHA-3341/3342 folded
+  them onto one tsclientlib connection and PHA-3428 put them in one image —
+  the repo, `phattbeats/openclaw-teamspeak-plugin`, is now archived.
 - **Voice tools v1** (PHA-3176): `play_music` (ducked lane), `stop`,
   `what_did_i_miss`, `who_is_here`, `poke`.
 

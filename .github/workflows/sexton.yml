@@ -1,21 +1,28 @@
 name: sexton
 
-# PHA-3173 verification pipeline. The dev sandbox that writes this code has
-# no C toolchain (no cc/gcc), so it cannot compile tsclientlib locally —
-# this workflow, on a real Ubuntu runner, is the actual compile check for
-# the chat-memory bot. (The runtime image itself was built and deployed via
-# a direct docker build on PHATT-RAID — see PHA-3173 for that transcript.)
+# PHA-3173 verification pipeline, extended by PHA-3580 to cover the
+# teamspeak-plugin/ tree that used to be the separate openclaw-teamspeak-plugin
+# repo's own workflow. The dev sandbox that writes this code has no C
+# toolchain (no cc/gcc), so it cannot compile tsclientlib locally — the
+# `build`/`docker` jobs, on a real Ubuntu runner, are the actual compile
+# check for the chat-memory bot. (The runtime image itself is built and
+# deployed via `image/build.sh` on PHATT-RAID, not by this workflow — see
+# PHA-3173 and PHA-3428 for those transcripts.)
 
 on:
   push:
     branches: [main]
     paths:
       - "sexton/**"
+      - "teamspeak-plugin/**"
+      - "image/**"
       - ".github/workflows/sexton.yml"
   pull_request:
     branches: [main]
     paths:
       - "sexton/**"
+      - "teamspeak-plugin/**"
+      - "image/**"
   workflow_dispatch:
 
 jobs:
@@ -77,3 +84,82 @@ jobs:
       # split.
       - name: Build image (no push — no registry credentials wired yet)
         run: docker build -t phattbeats/sexton:ci -f sexton/Dockerfile .
+
+  combined-image:
+    # PHA-3580: the `docker` job above only ever compile-checked the old
+    # standalone sexton/Dockerfile — it never covered image/Dockerfile, the
+    # one-container image (PHA-3428) that is actually deployed, and that is
+    # what this PR changes (the plugin-builder stage now COPYs
+    # teamspeak-plugin/ from this repo instead of a build.sh-staged copy of
+    # a separate one). PHATT-RAID is the normal build host, and per
+    # image/README.md it runs at ~90%+ disk usage most of the time, so this
+    # job exists to give that specific change real CI coverage that doesn't
+    # depend on the box having headroom on any given day.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Multi-stage build here pulls the rust, whisper-src, model-fetch,
+      # pot-builder and openclaw base images on top of whatever the runner
+      # already carries. Reclaim the preinstalled toolchains this job does
+      # not use rather than risk ENOSPC mid-build.
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      # No push (no registry credentials wired yet, same as the `docker` job
+      # above) and WITH_POT=0 (music still works without the POT token; the
+      # bgutil-ytdlp-pot-provider clone/npm-install is the slowest optional
+      # stage and buys nothing for this check).
+      - name: Build image/Dockerfile (no push)
+        run: |
+          docker build \
+            -f image/Dockerfile \
+            --build-arg WITH_POT=0 \
+            -t phattbeats/sexton:ci-combined \
+            .
+
+      - name: Verify the plugin actually landed in the image
+        run: |
+          docker run --rm --entrypoint sh phattbeats/sexton:ci-combined -c '
+            set -e
+            test -f /opt/openclaw-teamspeak-plugin/openclaw.plugin.json
+            test -f /opt/openclaw-teamspeak-plugin/index.ts
+            test -d /opt/openclaw-teamspeak-plugin/node_modules/ws
+            echo ok
+          '
+
+  plugin:
+    # PHA-3580: folded in from openclaw-teamspeak-plugin's own `test` workflow
+    # now that the plugin lives in this repo at teamspeak-plugin/ instead of
+    # a separate repo. Runs the plugin's standalone suite: the mock bridge
+    # replays recorded frames, so no TeamSpeak server is needed. The live
+    # provider path and the SDK-dependent files (src/channel.ts,
+    # src/accounts.ts, src/bridge/ws-socket.ts) are excluded here and need a
+    # real gateway.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: teamspeak-plugin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install
+        run: npm install --include=dev --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

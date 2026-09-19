@@ -23,7 +23,7 @@ image/gateway/            the in-container OpenClaw gateway's seed config + note
 | whisper.cpp + `ggml-base.en.bin` (PHA-3228) | `whisper` container, model on a host mount | `/opt/whisper`, weights **baked into the image** — and since PHA-3598 run as the shared `whisper` pool container again (same image, `whisper/deploy.sh`), with the in-container copy left down (`WHISPER_ENABLED=0`) |
 | ffmpeg, yt-dlp (PHA-3176) | nowhere — never installed | `/usr/local/bin`, on PATH for the plugin |
 | bgutil POT provider | nowhere | `/opt/bgutil-pot`, served on `:4416` |
-| OpenClaw gateway + `teamspeak` plugin | the main `OpenClaw` container | the base image, plus `/opt/openclaw-teamspeak-plugin` |
+| OpenClaw gateway + `teamspeak` plugin | the main `OpenClaw` container, plugin source in its own repo | the base image, plugin baked in from [`teamspeak-plugin/`](../teamspeak-plugin/) (PHA-3580) at `/opt/openclaw-teamspeak-plugin` |
 | supervisor | n/a (one process per container) | `supervisord` as PID 1 |
 
 Three containers become one, and the channel comes with it.
@@ -256,8 +256,10 @@ if you actually want a second Control UI, and put auth on it if you do.
 - The multi-container deploy steps in PHA-3220 and PHA-3306.
 - The `teamspeak` channel on the main `OpenClaw` gateway, and the
   `/opt/sexton-tools` + `/etc/yt-dlp/plugins` path mappings it needed there.
-  `install/stage-teamspeak-link.sh` in the plugin repo still describes that
-  install; it is now the *rollback* path, not the deploy path.
+  [`teamspeak-plugin/install/stage-teamspeak-link.sh`](../teamspeak-plugin/install/stage-teamspeak-link.sh)
+  (PHA-3580: moved here with the rest of the plugin, still named for its own
+  now-private repo in its comments) still describes that install; it is now
+  the *rollback* path, not the deploy path.
 
 ## A note on whisper, since PHA-3458
 

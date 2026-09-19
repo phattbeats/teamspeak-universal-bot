@@ -1,0 +1,14 @@
+# PHA-3580: the plugin-builder stage COPYs teamspeak-plugin/ straight from
+# the repo (it used to COPY a staged copy that image/build.sh had already
+# stripped by hand). These are the same exclusions build.sh used to apply:
+# node_modules is rebuilt in the stage against the gateway image's own npm,
+# and the standalone-only scaffolding (SDK stubs, the standalone vitest
+# config) exists for testing the plugin outside a gateway and would shadow
+# the real SDK in a runtime install.
+teamspeak-plugin/node_modules
+teamspeak-plugin/test/sdk-stubs
+teamspeak-plugin/vitest.standalone.config.ts
+
+sexton/target
+target
+*.log
