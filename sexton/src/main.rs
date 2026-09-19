@@ -2,9 +2,12 @@
 //! and — as of PHA-3342 — the audio/voice bridge too.
 //!
 //! Behaviour (see PHA-3099 for the full spec):
-//! 1. Catch-up PM to any client that joins/hops into the watched channel
-//!    (rate-limited per client), preceded — once per client, ever — by the
-//!    welcome PM that says out loud what the Sexton does (PHA-3305).
+//! 1. Catch-up PM to any client that joins/hops into the watched channel,
+//!    preceded — once per client, ever — by the welcome PM that says out
+//!    loud what the Sexton does (PHA-3305). The catch-up is delta-rendered
+//!    per uid and the delta position is persisted to disk (PHA-3573): a uid
+//!    that has already seen everything gets no PM at all, and a bot restart
+//!    does not re-blast the whole window the way an in-memory rate limit did.
 //! 2. Full markdown log on disk, one file per channel per day.
 //!
 //! PHA-3424 removed the per-message channel description rewrite (PHA-3173) and
@@ -71,7 +74,7 @@ use audio::AudioState;
 use mixer::Mixer;
 
 /// First-contact PM: sent once per client, ever, immediately before their first
-/// catch-up (PHA-3305). Not the catch-up PM — see `catchup_text`.
+/// catch-up (PHA-3305). Not the catch-up PM — see `catchup_text_from`.
 ///
 /// Stage 2 adds the voice paragraph and the "your voice doesn't leave the house"
 /// line. Do not add either early: the second one is the $0-ceiling constraint
@@ -82,12 +85,15 @@ const WELCOME_PM: &str = "Evening. I'm the Sexton — I keep the records for thi
                           the channel goes into the log, and I'll send you the last of it \
                           whenever you walk in.\n\n\
                           Ask me for something out of the log and I'll go down and find it.";
-/// How many messages the catch-up PM includes.
+/// How many messages the catch-up PM includes, and the cap on how much of a
+/// delta it will ever show — a uid who has been away for a week still gets
+/// the last `CATCHUP_PM_COUNT`, not the whole gap (PHA-3573).
 const CATCHUP_PM_COUNT: usize = 15;
-/// One catch-up PM per client per this long.
-const PM_RATE_LIMIT: Duration = Duration::from_secs(10 * 60);
 /// Where the welcomed-client list lives, inside the channel's log directory.
 const WELCOMED_FILE: &str = ".welcomed";
+/// Where the per-uid catch-up delta index lives (PHA-3573), alongside
+/// `WELCOMED_FILE`.
+const CAUGHT_UP_FILE: &str = ".caught_up";
 /// How many messages we keep in memory (comfortably covers the catch-up PM
 /// window).
 const HISTORY_CAP: usize = 200;
@@ -170,6 +176,15 @@ struct Args {
     #[arg(long, default_value = "")]
     on_connected: String,
 
+    /// Suppress the catch-up recap PM entirely; the one-time welcome PM
+    /// still fires. For a second bot instance sitting in the same channel as
+    /// the primary Sexton (Bexton) — without this, a joiner gets the same
+    /// recap twice, once from each bot (PHA-3573). Also settable with the
+    /// `SEXTON_NO_CATCHUP` env var (any of `1`/`true`/`yes`, case-insensitive)
+    /// so a deploy script can flip it without touching the command line.
+    #[arg(long, default_value_t = false)]
+    no_catchup: bool,
+
     /// PHA-3342: bind address for the audio/voice bridge's WebSocket server
     /// (`PROTOCOL.md`) — the realtime voice runtime and `bridge-test` are
     /// its only consumers. Formerly `ts-bridge`'s `WS_BIND` env var, now a
@@ -243,19 +258,26 @@ struct ChannelState {
     channel_id: ChannelId,
     channel_name: String,
     history: VecDeque<LoggedMessage>,
-    /// Last catch-up PM sent to each client, keyed by their TeamSpeak uid (the
-    /// same key `welcomed` uses). `ClientId` is session-bound — the server
-    /// hands out a fresh one every reconnect — so keying off it would re-PM
-    /// the same person every login. We do not persist this map: a bot restart
-    /// inside the rate-limit window is rare, and the welcome-then-catch-up
-    /// blast on a fresh process is the lesser evil compared to growing the
-    /// `.welcomed` format.
-    last_pm: HashMap<String, tokio::time::Instant>,
     /// Clients that have already had the one-time welcome PM, keyed by
     /// TeamSpeak uid (stable across reconnects and restarts) and persisted to
-    /// disk. Welcomes are durable; catch-ups just suppress within the
-    /// `PM_RATE_LIMIT` window so a quick hop in and out is not re-broadcast.
+    /// disk.
     welcomed: HashSet<String>,
+    /// Per-uid catch-up delta index (PHA-3573): `history.len()` at the uid's
+    /// last catch-up, persisted to disk alongside `welcomed`. A uid absent
+    /// from this map has never been caught up (equivalent to `0`). See
+    /// `catchup_text_from` for how a stale or clamped value degrades — never
+    /// a crash, at worst a restart re-sends up to `CATCHUP_PM_COUNT` messages
+    /// a uid already saw, which is strictly better than the whole-window
+    /// re-blast an in-memory rate limit used to cause on every restart.
+    caught_up: HashMap<String, usize>,
+    /// Clients whose join/move event fired before tsclientlib had populated
+    /// their uid. `maybe_send_catchup` defers rather than falling back to a
+    /// session-bound key; `handle_event`'s generic `PropertyChanged` arm
+    /// retries everyone here on the next event.
+    pending_catchup: HashSet<ClientId>,
+    /// PHA-3573: suppress the catch-up recap for this bot instance (the
+    /// welcome PM still fires). Set from `--no-catchup` / `SEXTON_NO_CATCHUP`.
+    no_catchup: bool,
     log_dir: PathBuf,
     /// Clients that were already connected when the bot came up — never PM'd
     /// on account of our own connect.
@@ -275,13 +297,16 @@ impl ChannelState {
         channel_name: String,
         log_dir: PathBuf,
         preexisting: HashSet<ClientId>,
+        no_catchup: bool,
     ) -> Self {
         Self {
             channel_id,
             channel_name,
             history: VecDeque::with_capacity(HISTORY_CAP),
-            last_pm: HashMap::new(),
             welcomed: HashSet::new(),
+            caught_up: HashMap::new(),
+            pending_catchup: HashSet::new(),
+            no_catchup,
             log_dir,
             preexisting,
             quiet_until: tokio::time::Instant::now() + STARTUP_GRACE,
@@ -416,16 +441,103 @@ impl ChannelState {
         Ok(())
     }
 
-    fn catchup_text(&self) -> String {
-        if self.history.is_empty() {
-            return format!("Nothing logged yet in \"{}\".", self.channel_name);
+    fn caught_up_path(&self) -> PathBuf {
+        self.log_dir.join(&self.channel_name).join(CAUGHT_UP_FILE)
+    }
+
+    /// Read back each uid's catch-up delta position (PHA-3573). Fail-open by
+    /// contract, like `load_welcomed_from_disk`: a missing or unreadable
+    /// index costs everyone one full recap, never a failed connect.
+    fn load_caught_up_from_disk(&mut self) {
+        let path = self.caught_up_path();
+        match std::fs::read_to_string(&path) {
+            Ok(body) => {
+                for line in body.lines() {
+                    let Some((uid, count)) = line.split_once('\t') else { continue };
+                    let uid = uid.trim();
+                    if uid.is_empty() {
+                        continue;
+                    }
+                    if let Ok(count) = count.trim().parse::<usize>() {
+                        self.caught_up.insert(uid.to_string(), count);
+                    }
+                }
+                info!(
+                    known = self.caught_up.len(),
+                    path = %path.display(),
+                    "loaded the catch-up delta index"
+                );
+            }
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    warn!(
+                        error = %e,
+                        path = %path.display(),
+                        "reading the catch-up delta index failed; everyone may get a full recap once"
+                    );
+                }
+            }
         }
-        let start = self.history.len().saturating_sub(CATCHUP_PM_COUNT);
+    }
+
+    /// Record that `uid` has been shown the history through `count` entries,
+    /// and persist the whole index — a value map, unlike the append-only
+    /// `.welcomed` list, since a uid's position changes on every catch-up
+    /// rather than only ever being added once.
+    fn remember_caught_up(&mut self, uid: String, count: usize) {
+        self.caught_up.insert(uid, count);
+        if let Err(e) = self.save_caught_up() {
+            warn!(
+                error = %e,
+                "saving the catch-up delta index failed; a restart may re-send up to the last {CATCHUP_PM_COUNT} messages"
+            );
+        }
+    }
+
+    /// Sorted by uid so the file is deterministic across writes (diffable,
+    /// and trivial to assert against in tests) — the map's own iteration
+    /// order is not.
+    fn save_caught_up(&self) -> Result<()> {
+        let dir = self.log_dir.join(&self.channel_name);
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating log dir {}", dir.display()))?;
+        let mut entries: Vec<(&String, &usize)> = self.caught_up.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        let mut body = String::new();
+        for (uid, count) in entries {
+            body.push_str(&format!("{uid}\t{count}\n"));
+        }
+        std::fs::write(self.caught_up_path(), body)
+            .with_context(|| format!("writing catch-up delta index {}", self.caught_up_path().display()))?;
+        Ok(())
+    }
+
+    /// Delta-rendered catch-up: only the messages not already covered by
+    /// `start` (a prior `history.len()`, `0` for a uid never caught up),
+    /// capped at the last `CATCHUP_PM_COUNT` regardless of how large the gap
+    /// is. Returns `None` when there is nothing new to send — the caller
+    /// sends no PM at all rather than an empty one (PHA-3573).
+    ///
+    /// `history` is rebuilt fresh from the on-disk log on every restart
+    /// (never persisted itself, see `seed_history_from_disk`), so a `start`
+    /// saved before a restart is a lower bound at best against the rebuilt
+    /// ring. That is fine: worst case a restart re-sends up to
+    /// `CATCHUP_PM_COUNT` already-seen messages — never more, and strictly
+    /// better than the whole-window re-blast this replaces.
+    fn catchup_text_from(&self, start: usize) -> Option<String> {
+        let n = self.history.len();
+        if n == 0 {
+            return (start == 0).then(|| format!("Nothing logged yet in \"{}\".", self.channel_name));
+        }
+        let floor = n.saturating_sub(CATCHUP_PM_COUNT);
+        let effective_start = start.max(floor).min(n);
+        if effective_start >= n {
+            return None;
+        }
         let mut out = String::new();
-        for entry in self.history.iter().skip(start) {
+        for entry in self.history.iter().skip(effective_start) {
             out.push_str(&entry.render_line());
         }
-        out
+        Some(out)
     }
 
     fn append_disk_log(&self, entry: &LoggedMessage) -> Result<()> {
@@ -775,6 +887,16 @@ fn sanitize_message(input: &str) -> String {
     out
 }
 
+/// A boolean env var, tolerant of the handful of truthy spellings a deploy
+/// script actually exports (`1`, `true`, `yes`, any case) rather than
+/// `bool::from_str`, which only accepts the literal `"true"` — `1` is the
+/// form the Bexton deploy config uses for `SEXTON_NO_CATCHUP`.
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -1005,8 +1127,17 @@ async fn run_once(
     .send(&mut con)
     .map_err(|e| anyhow!("joining channel: {e}"))?;
 
-    let mut state =
-        ChannelState::new(channel_id, args.channel.clone(), args.log_dir.clone(), preexisting);
+    let no_catchup = args.no_catchup || env_flag("SEXTON_NO_CATCHUP");
+    if no_catchup {
+        info!("SEXTON_NO_CATCHUP / --no-catchup set: catch-up recap PMs suppressed, welcome still fires");
+    }
+    let mut state = ChannelState::new(
+        channel_id,
+        args.channel.clone(),
+        args.log_dir.clone(),
+        preexisting,
+        no_catchup,
+    );
 
     // Rehydrate the ring from disk so a restart still has history to catch
     // joiners up with (PHA-3217). The description is gone, but the catch-up PM
@@ -1016,6 +1147,9 @@ async fn run_once(
     // And who has already been introduced to the Sexton, so a restart does not
     // re-welcome the room (PHA-3305).
     state.load_welcomed_from_disk();
+    // And each uid's catch-up delta position, so a restart does not re-blast
+    // the whole window either (PHA-3573).
+    state.load_caught_up_from_disk();
 
     // Kick off the avatar upload (if configured). We track the handle and
     // finish the two-step process (upload, then set_avatar_hash) once the
@@ -1262,10 +1396,16 @@ fn handle_event(
             maybe_send_catchup(con, state, own_client_id, client_id);
         }
         // A client moved. If they moved INTO the watched channel (and it's
-        // not us), send the rate-limited catch-up PM. This is a plain move
-        // event, never a join/leave/mute/away — those don't touch this path.
+        // not us), send the catch-up PM. This is a plain move event, never a
+        // join/leave/mute/away — those don't touch this path.
         Event::PropertyChanged { id: PropertyId::ClientChannel(client_id), .. } => {
             maybe_send_catchup(con, state, own_client_id, client_id);
+        }
+        // Any other property change is a nudge to retry whoever is still
+        // waiting on their uid (PHA-3573) — tsclientlib does not always have
+        // it populated by the time the join/move event above fires.
+        Event::PropertyChanged { .. } => {
+            retry_pending_catchups(con, state, own_client_id);
         }
         _ => {}
     }
@@ -1273,8 +1413,7 @@ fn handle_event(
 }
 
 /// Send the catch-up PM to `client_id` if they are now sitting in the watched
-/// channel, are not us, were not already here when we connected, and have not
-/// been PM'd inside the rate-limit window.
+/// channel, are not us, and were not already here when we connected.
 fn maybe_send_catchup(
     con: &mut Connection,
     state: &mut ChannelState,
@@ -1295,29 +1434,35 @@ fn maybe_send_catchup(
         .ok()
         .and_then(|s| s.clients.get(&client_id).map(|c| c.channel));
     if now_in_channel != Some(state.channel_id) {
+        // Not here any more (or the event is stale) — nothing pending for
+        // them is still worth retrying.
+        state.pending_catchup.remove(&client_id);
         return;
     }
-    // The announced notice (PHA-3305): before this client's *first* catch-up,
-    // and only ever before the first, say what the Sexton is doing. We need
-    // the durable key first so the rate-limit map below can suppress a quick
-    // reconnect with the same intent.
-    let (key, durable) = welcome_key(con, client_id);
-    let now = tokio::time::Instant::now();
-    let should_send = match state.last_pm.get(&key) {
-        Some(last) => now.duration_since(*last) >= PM_RATE_LIMIT,
-        None => true,
-    };
-    if !should_send {
-        return;
-    }
-    state.last_pm.insert(key.clone(), now);
 
-    if !state.welcomed.contains(&key) {
+    // PHA-3573: the uid is the only key both the welcome and the catch-up
+    // delta index trust. If the server has not handed tsclientlib one for
+    // this client yet, defer instead of falling back to a session-bound key
+    // that would orphan the index on every reconnect — `retry_pending_catchups`
+    // tries again on the next event.
+    let uid = con
+        .get_state()
+        .ok()
+        .and_then(|s| s.clients.get(&client_id).and_then(|c| c.uid.as_ref().map(|u| u.to_string())));
+    let Some(uid) = uid else {
+        state.pending_catchup.insert(client_id);
+        return;
+    };
+    state.pending_catchup.remove(&client_id);
+
+    // The announced notice (PHA-3305): before this client's *first* catch-up,
+    // and only ever before the first, say what the Sexton is doing.
+    if !state.welcomed.contains(&uid) {
         match send_pm(con, client_id, WELCOME_PM) {
             Ok(handle) => {
-                info!(?client_id, %key, durable, "welcome PM sent");
+                info!(?client_id, %uid, "welcome PM sent");
                 state.pending_cmds.insert(handle.0, format!("welcome PM to {client_id:?}"));
-                state.remember_welcomed(key.clone(), durable);
+                state.remember_welcomed(uid.clone(), true);
             }
             // Not fatal, and deliberately not remembered: an unsent welcome
             // should be retried on their next join, not marked as delivered.
@@ -1325,32 +1470,47 @@ fn maybe_send_catchup(
         }
     }
 
-    let text = state.catchup_text();
-    match send_pm(con, client_id, &text) {
-        Ok(handle) => {
-            info!(?client_id, "catch-up PM sent");
-            state.pending_cmds.insert(handle.0, format!("catch-up PM to {client_id:?}"));
+    // PHA-3573: a second bot instance in the same channel (Bexton) still
+    // sends the welcome above, but never the recap — otherwise a joiner gets
+    // the same recap twice, once from each bot.
+    if state.no_catchup {
+        return;
+    }
+
+    let start = state.caught_up.get(&uid).copied().unwrap_or(0);
+    match state.catchup_text_from(start) {
+        Some(text) => match send_pm(con, client_id, &text) {
+            Ok(handle) => {
+                info!(?client_id, "catch-up PM sent");
+                state.pending_cmds.insert(handle.0, format!("catch-up PM to {client_id:?}"));
+                // Only advance the index on a confirmed send: same rule the
+                // welcome PM above follows, and for the same reason — an
+                // unsent catch-up must be retried on the next join, not
+                // marked as delivered.
+                state.remember_caught_up(uid, state.history.len());
+            }
+            Err(e) => warn!(error = %e, ?client_id, "catch-up PM failed"),
+        },
+        // Nothing to send, so nothing to retry either — still worth
+        // normalising the stored position in case it predates a log
+        // rotation that shrank `history.len()`.
+        None => {
+            info!(?client_id, %uid, "nothing new since their last catch-up; skipping the PM");
+            state.remember_caught_up(uid, state.history.len());
         }
-        Err(e) => warn!(error = %e, ?client_id, "catch-up PM failed"),
     }
 }
 
-/// The key a welcomed client is remembered under, and whether it is worth
-/// writing down.
-///
-/// Their TeamSpeak uid is the durable one: it survives reconnects, nickname
-/// changes and bot restarts, which is what "once, and it stays out" needs. If
-/// the server has not handed us a uid for this client, fall back to the runtime
-/// `ClientId` — good enough to stop a channel hop re-welcoming them inside this
-/// session, and never persisted, where it would only collide with a stranger.
-fn welcome_key(con: &mut Connection, client_id: ClientId) -> (String, bool) {
-    let uid = con
-        .get_state()
-        .ok()
-        .and_then(|s| s.clients.get(&client_id).and_then(|c| c.uid.as_ref().map(|u| u.to_string())));
-    match uid {
-        Some(uid) => (uid, true),
-        None => (format!("client-id:{client_id}"), false),
+/// Retry catch-ups deferred because the server had not yet told us the
+/// client's uid (PHA-3573). Cheap when `pending_catchup` is empty, which is
+/// the overwhelmingly common case.
+fn retry_pending_catchups(con: &mut Connection, state: &mut ChannelState, own_client_id: ClientId) {
+    if state.pending_catchup.is_empty() {
+        return;
+    }
+    let pending: Vec<ClientId> = state.pending_catchup.iter().copied().collect();
+    for client_id in pending {
+        maybe_send_catchup(con, state, own_client_id, client_id);
     }
 }
 
@@ -1574,6 +1734,7 @@ mod tests {
             channel.to_string(),
             dir.to_path_buf(),
             HashSet::new(),
+            false,
         );
         state.seed_history_from_disk();
         state.history.into_iter().collect()
@@ -1653,7 +1814,7 @@ mod tests {
     }
 
     fn state_in(dir: &std::path::Path, channel: &str) -> ChannelState {
-        ChannelState::new(ChannelId(0), channel.to_string(), dir.to_path_buf(), HashSet::new())
+        ChannelState::new(ChannelId(0), channel.to_string(), dir.to_path_buf(), HashSet::new(), false)
     }
 
     /// The welcome PM ships in two stages (PHA-3177). Stage 2's sentences are
@@ -1719,37 +1880,126 @@ mod tests {
         assert!(restarted.welcomed.is_empty(), "a runtime client id was persisted");
     }
 
-    /// Regression: PHA-3340. The rate-limit map was previously keyed by
-    /// session-bound `ClientId`, so a logout/login cycle — which the server
-    /// signals as a fresh client — wiped the entry and re-broadcast the
-    /// welcome + last 15 messages every single time. The map is now keyed
-    /// by the durable uid (the same key `welcomed` uses), so a reconnect
-    /// within `PM_RATE_LIMIT` is suppressed, and one outside the window
-    /// can fire without colliding with a different human.
+    /// `start` at (or past) the current history length means the uid has
+    /// already seen everything: no PM at all, not an empty one (PHA-3573,
+    /// replacing the old in-memory rate limit's job).
     #[test]
-    fn last_pm_is_keyed_by_uid_not_session_client_id() {
-        let mut state = state_in(&scratch("last-pm-uid"), "chan");
+    fn catchup_text_from_with_full_coverage_is_empty() {
+        let mut state = state_in(&scratch("catchup-full-coverage"), "chan");
+        for i in 0..5 {
+            state.push("nick".to_string(), &format!("message {i}"));
+        }
+        let n = state.history.len();
+        assert!(state.catchup_text_from(n).is_none(), "full coverage must skip the PM entirely");
+    }
 
+    /// The normal case: a uid rejoins after missing a handful of messages and
+    /// gets exactly those, not the last 15 and not the ones it already saw.
+    #[test]
+    fn catchup_text_from_sends_only_new_messages_since_start() {
+        let mut state = state_in(&scratch("catchup-delta"), "chan");
+        for i in 0..5 {
+            state.push("nick".to_string(), &format!("message {i}"));
+        }
+        let text = state.catchup_text_from(3).expect("2 new messages exist");
+        for already_seen in ["message 0", "message 1", "message 2"] {
+            assert!(!text.contains(already_seen), "{already_seen:?} was already seen");
+        }
+        for new in ["message 3", "message 4"] {
+            assert!(text.contains(new), "{new:?} is new and must be included");
+        }
+    }
+
+    /// A uid never caught up (`start == 0`) gets the same last-15 window the
+    /// old unconditional `catchup_text` always sent — the "brand new joiner"
+    /// case must not regress into an unbounded dump of the whole channel.
+    #[test]
+    fn catchup_text_from_zero_returns_last_15() {
+        let mut state = state_in(&scratch("catchup-zero"), "chan");
+        for i in 0..40 {
+            state.push("nick".to_string(), &format!("message {i:03}"));
+        }
+        let text = state.catchup_text_from(0).expect("history is not empty");
+        assert_eq!(text.lines().count(), CATCHUP_PM_COUNT);
+        assert!(text.contains("message 039"), "must include the newest message");
+        assert!(text.contains("message 025"), "must include exactly the last 15");
+        assert!(!text.contains("message 024"), "must not include more than the last 15");
+    }
+
+    /// Regression target for PHA-3573: the whole point of persisting the
+    /// index is that a bot restart does not forget a uid's position and
+    /// re-blast the window, the way the in-memory-only rate limit used to.
+    #[test]
+    fn caught_up_survives_restart() {
+        let dir = scratch("caught-up-restart");
+        let channel = "chan";
         let uid = "aQm5FQ0RfBBBhP0Cw0S1FCxjnbg=".to_string();
-        // First connect for this uid: no entry, no prior welcome.
-        assert!(state.last_pm.get(&uid).is_none());
-        assert!(!state.welcomed.contains(&uid));
 
-        // Simulate the bot recording that it just PM'd this uid.
-        state.last_pm.insert(uid.clone(), tokio::time::Instant::now());
+        let mut state = state_in(&dir, channel);
+        for i in 0..5 {
+            state.push("nick".to_string(), &format!("message {i}"));
+        }
+        assert!(state.caught_up.get(&uid).is_none(), "nothing caught up on a cold start");
+        state.remember_caught_up(uid.clone(), state.history.len());
+        assert_eq!(state.caught_up.get(&uid), Some(&5));
 
-        // Same uid, fresh `ClientId` after a reconnect — must still hit the
-        // rate-limit entry. Pre-fix this was two separate keys and the
-        // catch-up + welcome re-fired every login.
-        assert!(
-            state.last_pm.get(&uid).is_some(),
-            "reconnect must hit the same rate-limit entry"
-        );
+        // A restart: fresh state, same log dir.
+        let mut restarted = state_in(&dir, channel);
+        restarted.load_caught_up_from_disk();
+        assert_eq!(restarted.caught_up.get(&uid), Some(&5), "restart forgot the uid's position");
+    }
 
-        // A second, distinct uid has its own slot and is not suppressed by
-        // the first one's entry.
-        let other = "bbbbFQ0RfBBBhP0Cw0S1FCxjnbg=".to_string();
-        assert!(state.last_pm.get(&other).is_none());
+    #[test]
+    fn an_unreadable_caught_up_file_is_fail_open() {
+        // A directory where the index file should be: read_to_string errors
+        // and the bot must still connect, at the cost of one repeated recap.
+        let dir = scratch("caught-up-unreadable");
+        let channel = "chan";
+        std::fs::create_dir_all(dir.join(channel).join(CAUGHT_UP_FILE)).unwrap();
+        let mut state = state_in(&dir, channel);
+        state.load_caught_up_from_disk();
+        assert!(state.caught_up.is_empty());
+    }
+
+    #[test]
+    fn missing_caught_up_file_is_fail_open() {
+        let dir = scratch("caught-up-missing");
+        let mut state = state_in(&dir, "chan");
+        state.load_caught_up_from_disk();
+        assert!(state.caught_up.is_empty());
+    }
+
+    #[test]
+    fn caught_up_save_is_sorted_by_uid() {
+        let dir = scratch("caught-up-sorted");
+        let channel = "chan";
+        let mut state = state_in(&dir, channel);
+        state.remember_caught_up("zzz-last".to_string(), 3);
+        state.remember_caught_up("aaa-first".to_string(), 7);
+        state.remember_caught_up("mmm-middle".to_string(), 1);
+
+        let body = std::fs::read_to_string(dir.join(channel).join(CAUGHT_UP_FILE)).unwrap();
+        let uids: Vec<&str> = body.lines().map(|l| l.split('\t').next().unwrap()).collect();
+        assert_eq!(uids, vec!["aaa-first", "mmm-middle", "zzz-last"]);
+    }
+
+    /// `SEXTON_NO_CATCHUP` is exported by the Bexton deploy config as `1`,
+    /// not Rust's `bool::from_str`-only `"true"` — this is the whole reason
+    /// `--no-catchup` reads it through `env_flag` instead of clap's own env
+    /// binding.
+    #[test]
+    fn env_flag_accepts_common_truthy_spellings() {
+        const VAR: &str = "SEXTON_TEST_NO_CATCHUP_FLAG";
+        for v in ["1", "true", "TRUE", "yes", "YES"] {
+            std::env::set_var(VAR, v);
+            assert!(env_flag(VAR), "{v:?} should be truthy");
+        }
+        for v in ["0", "false", "", "no"] {
+            std::env::set_var(VAR, v);
+            assert!(!env_flag(VAR), "{v:?} should not be truthy");
+        }
+        std::env::remove_var(VAR);
+        assert!(!env_flag(VAR), "unset should not be truthy");
     }
 
     #[test]

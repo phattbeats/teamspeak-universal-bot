@@ -58,6 +58,10 @@ TTS_VOICE_ID=${TTS_VOICE_ID:-}
 BAND_ENABLED=${BAND_ENABLED:-0}
 BAND_PROVIDER=${BAND_PROVIDER:-minimax}
 AVATAR=${AVATAR:-/usr/local/share/sexton-avatar/brandon.png}
+# PHA-3573: suppress the catch-up recap for a second persona sharing the
+# Sexton's channel (image/deploy-bexton.sh sets this) — the welcome PM still
+# fires. Default off, so the Sexton itself is unaffected.
+SEXTON_NO_CATCHUP=${SEXTON_NO_CATCHUP:-0}
 
 log() { printf '\n== %s\n' "$*"; }
 
@@ -177,6 +181,7 @@ docker run -d \
   -e SEXTON_GATEWAY_PORT="$GATEWAY_PORT" \
   -e SEXTON_AGENT_ID="$AGENT_ID" \
   -e SEXTON_WAKE_NAMES="$WAKE_NAMES" \
+  -e SEXTON_NO_CATCHUP="$SEXTON_NO_CATCHUP" \
   ${TTS_VOICE_ID:+-e SEXTON_TTS_VOICE_ID="$TTS_VOICE_ID"} \
   -e SEXTON_BAND_ENABLED="$BAND_ENABLED" \
   -e SEXTON_BAND_PROVIDER="$BAND_PROVIDER" \

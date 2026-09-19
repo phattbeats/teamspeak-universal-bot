@@ -9,24 +9,31 @@ fact — and tells the room he is doing it.
 ## Behaviour
 
 1. **Catch-up PM.** When a client arrives in the watched channel — either by connecting straight
-   into it or by moving in from elsewhere — it gets a private message with the last 15 messages
-   (or a "nothing logged yet" note). The message ring behind it is in memory only (last 200), so
-   on connect it is **rehydrated from the disk log below** — yesterday's file then today's,
-   newest lines kept (PHA-3217). Without that the first catch-up after every container restart
-   is empty. The disk format *is* the wire format, so this is a parse of
-   `HH:MM  nickname: message`, not a second serialisation, and it is fail-open: a missing,
-   unreadable or malformed log is skipped and never stops the bot connecting. Rate-limited to one PM per client per 10 minutes so
-   channel-hopping does not spam, and suppressed for the first five seconds after the bot itself
-   connects so a restart does not PM everyone already in the room.
+   into it or by moving in from elsewhere — it gets a private message with whatever it missed
+   since its *last* catch-up (or the last 15 messages / a "nothing logged yet" note, for a uid
+   never caught up before), capped at 15 messages either way. The message ring behind it is in
+   memory only (last 200), so on connect it is **rehydrated from the disk log below** —
+   yesterday's file then today's, newest lines kept (PHA-3217). Without that the first catch-up
+   after every container restart is empty. The disk format *is* the wire format, so this is a
+   parse of `HH:MM  nickname: message`, not a second serialisation, and it is fail-open: a
+   missing, unreadable or malformed log is skipped and never stops the bot connecting.
+   Each uid's catch-up position is persisted to `<log-dir>/<channel-name>/.caught_up`
+   (PHA-3573), so a container restart does not forget who has seen what and re-blast the whole
+   window — a uid that has seen everything gets no PM at all, not an empty one. tsclientlib does
+   not always have a client's uid populated the instant it joins/moves; the catch-up defers
+   until the uid shows up rather than falling back to a session-bound key that would orphan the
+   index on every reconnect. Suppressed for the first five seconds after the bot itself connects
+   so a restart does not PM everyone already in the room. A second bot instance sitting in the
+   same channel (Bexton) runs with `--no-catchup` / `SEXTON_NO_CATCHUP=1` to suppress this PM
+   entirely — otherwise a joiner gets the same recap twice, once from each bot — while its
+   welcome PM (below) still fires.
 2. **Welcome PM.** The first time a client is ever caught up, and only the first time, the
    catch-up is preceded by a one-time notice saying what the Sexton does — that the channel is
    logged, and that he will fetch older ones on request. Announced, not discovered (PHA-3177
-   draft B, PHA-3305). This is *not* the catch-up PM and does not share its 10-minute window: it
-   is keyed on the client's TeamSpeak uid, which survives reconnects, and the list of welcomed
-   uids is written to `<log-dir>/<channel-name>/.welcomed` so a container restart does not
-   re-introduce the Sexton to the whole room. Fail-open: a lost list costs one repeated welcome,
-   never a failed connect. Clients whose uid the server has not given us fall back to a
-   session-only key, which is never written down.
+   draft B, PHA-3305). This is *not* the catch-up PM: it is keyed on the client's TeamSpeak uid,
+   which survives reconnects, and the list of welcomed uids is written to
+   `<log-dir>/<channel-name>/.welcomed` so a container restart does not re-introduce the Sexton
+   to the whole room. Fail-open: a lost list costs one repeated welcome, never a failed connect.
 3. **Full log on disk.** Every message is appended to `<log-dir>/<channel-name>/YYYY-MM-DD.md`
    as markdown, one line per message, same format.
 
