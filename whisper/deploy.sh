@@ -1,74 +1,68 @@
 #!/bin/bash
-# PHA-3228 deploy for the local STT sidecar on PHATT-RAID.
+# PHA-3598: the shared whisper pool for sexton + bexton on PHATT-RAID.
 #
-# SUPERSEDED by image/deploy.sh (PHA-3428): the whole stack is one container
-# now. Do NOT run this alongside it — two bots on one identity is a UID
-# collision and the server drops one of them. Kept as the record of the
-# settings this deploy proved; image/deploy.sh carries them forward.
+# Runs the `phattbeats/sexton` image (whisper.cpp + base.en are baked into it,
+# PHA-3428) as a third container named `whisper`, with run-whisper-pool.sh as
+# the entrypoint instead of supervisord: N whisper-server processes on
+# consecutive ports, one per bot, silero VAD in front of each. The bots are
+# pointed at it by image/deploy.sh (SEXTON_WHISPER_URL) and leave their own
+# in-container server down (WHISPER_ENABLED=0).
 #
-# PHATT-RAID has no docker compose plugin, so this is the `docker run` form of
-# whisper-compose.yml. Keep the two in step.
+# Port 8080/8081 are deliberately NOT published to the host: the point of a
+# local transcriber is that channel audio never leaves the box.
 #
-# Connect by container name on the TS6 server's own Docker network, the same as
-# ts-bridge and sexton. Port 8080 is deliberately NOT published to the host:
-# the point of this container is that the channel's audio does not leave the
-# box, and an exposed port is the easiest way to lose that by accident.
+# PHATT-RAID has no docker compose plugin, hence `docker run`. Idempotent:
+# re-running replaces the container in place (the bots reconnect per request,
+# so a pool restart costs one dropped segment, not a bot restart).
 #
 # Lives on the box at /mnt/user/appdata/whisper/deploy.sh.
 set -eu
 
-IMG=${IMG:-ghcr.io/ggml-org/whisper.cpp:main}
-MODEL=${MODEL:-ggml-base.en.bin}
-MODEL_DIR=${MODEL_DIR:-/mnt/user/appdata/whisper/models}
-THREADS=${THREADS:-4}
+IMAGE=${IMAGE:-phattbeats/sexton:latest}
+NAME=${NAME:-whisper}
 NETWORK=${NETWORK:-phattvip}
+APPDATA=${APPDATA:-/mnt/user/appdata/whisper}
+WORKERS=${WORKERS:-2}
+THREADS=${THREADS:-4}
+MEMORY=${MEMORY:-1500m}
+VAD_MODEL_URL=${VAD_MODEL_URL:-https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin}
 
-mkdir -p "$MODEL_DIR"
+HERE=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$APPDATA/models"
 
-# The image ships the binaries, not the weights. Fetch once; a partial download
-# is written to a temp name so a failed run cannot leave a truncated model that
-# whisper-server then refuses at startup with an unhelpful error.
-if [ ! -s "$MODEL_DIR/$MODEL" ]; then
-  echo "== fetching $MODEL"
-  curl -fL --retry 3 -o "$MODEL_DIR/$MODEL.part" \
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$MODEL"
-  mv "$MODEL_DIR/$MODEL.part" "$MODEL_DIR/$MODEL"
+# The pool script is mounted, not baked: it is the one file a live tuning pass
+# (threads, VAD threshold, worker count) has to edit, and the image is the
+# bot's image, rebuilt on the bot's schedule, not this one's.
+if [ "$HERE/run-whisper-pool.sh" != "$APPDATA/run-whisper-pool.sh" ]; then
+  cp "$HERE/run-whisper-pool.sh" "$APPDATA/run-whisper-pool.sh"
 fi
-echo "model: $MODEL_DIR/$MODEL ($(du -h "$MODEL_DIR/$MODEL" | cut -f1))"
+chmod +x "$APPDATA/run-whisper-pool.sh"
 
-docker rm -f whisper >/dev/null 2>&1 || true
-docker run -d --name whisper --network "$NETWORK" --restart unless-stopped \
-  -v "$MODEL_DIR:/models:ro" \
-  --health-cmd "curl -fsS http://127.0.0.1:8080/ >/dev/null || exit 1" \
-  --health-interval 30s --health-timeout 5s --health-retries 3 \
-  --health-start-period 60s \
-  "$IMG" \
-  "whisper-server --model /models/$MODEL --host 0.0.0.0 --port 8080 \
-     --threads $THREADS --language en --no-timestamps --convert"
+if [ ! -s "$APPDATA/models/ggml-silero-v5.1.2.bin" ]; then
+  echo "deploy: fetching the silero VAD model"
+  curl -fsSL --max-time 120 -o "$APPDATA/models/ggml-silero-v5.1.2.bin" "$VAD_MODEL_URL"
+fi
 
-echo "== waiting for the model to load"
+docker rm -f "$NAME" >/dev/null 2>&1 || true
+docker run -d \
+  --name "$NAME" \
+  --network "$NETWORK" \
+  --restart unless-stopped \
+  --no-healthcheck \
+  --memory "$MEMORY" \
+  -e LD_LIBRARY_PATH=/opt/whisper/bin \
+  -e WHISPER_WORKERS="$WORKERS" \
+  -e WHISPER_THREADS="$THREADS" \
+  -v "$APPDATA:/whisper-data" \
+  --entrypoint /whisper-data/run-whisper-pool.sh \
+  "$IMAGE"
+
+echo "deploy: waiting for the workers to load base.en"
 for _ in $(seq 1 30); do
-  status=$(docker inspect -f '{{.State.Health.Status}}' whisper 2>/dev/null || echo unknown)
-  [ "$status" = "healthy" ] && break
-  sleep 5
+  sleep 2
+  if docker logs "$NAME" 2>&1 | grep -q "whisper_init_state: compute buffer (decode)"; then
+    break
+  fi
 done
-docker inspect -f 'whisper: {{.State.Status}} health={{.State.Health.Status}}' whisper
-
-cat <<'NEXT'
-
-Next: point the plugin at it. In the gateway's config,
-
-  "channels": { "teamspeak": { "voice": {
-    "mode": "stt-tts",
-    "wakeNames": ["Sexton"],
-    "requireWakeName": true,
-    "streaming": {
-      "transcription": { "provider": "whisper-local" },
-      "speech": { "provider": "minimax", "model": "speech-2.8-hd" }
-    }
-  } } }
-
-The transcription url defaults to http://whisper:8080/inference, which is this
-container on this network. Override with voice.streaming.transcription.url or
-TEAMSPEAK_WHISPER_URL only if you moved it.
-NEXT
+docker logs "$NAME" 2>&1 | grep -E "run-whisper-pool|VAD is enabled" | head -4
+echo "deploy: $NAME up on $NETWORK — sexton -> http://$NAME:8080/inference, bexton -> http://$NAME:8081/inference"

@@ -10,6 +10,16 @@
 # EXPOSE note in the Dockerfile.
 set -eu
 
+# PHA-3598: the ears moved back out to a shared `whisper` pool container
+# (whisper/deploy.sh) so sexton and bexton stop running one decoder each. When
+# the bot is pointed there (SEXTON_WHISPER_URL), this in-container server is
+# dead weight: ~250 MB resident for nothing. Exit 0 and stay down — supervisord
+# treats a clean exit here as "deliberately absent" (autorestart=unexpected).
+if [ "${WHISPER_ENABLED:-1}" = "0" ]; then
+  echo "run-whisper: disabled by WHISPER_ENABLED=0 — STT comes from ${SEXTON_WHISPER_URL:-the shared whisper pool}."
+  exit 0
+fi
+
 : "${WHISPER_MODEL_PATH:=/opt/whisper/models/ggml-base.en.bin}"
 : "${WHISPER_PORT:=8080}"
 : "${WHISPER_THREADS:=4}"

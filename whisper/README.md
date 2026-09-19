@@ -1,17 +1,20 @@
 # whisper — the local STT lane (PHA-3228)
 
-> **SUPERSEDED as a container by PHA-3428.** whisper.cpp and `ggml-base.en.bin`
-> are now baked into the single `phattbeats/sexton` image and run under
-> supervisord beside the bot — there is no `whisper` container any more, and
-> `deploy.sh` / `whisper-compose.yml` below are kept only as the record of how
-> the sidecar was configured. The flags they pass are the flags
-> `image/run-whisper.sh` still passes; keep the two in step. The rest of this
-> file — why the lane is local at all, what the plugin requires, how to probe
-> it — is unchanged and still correct, except that the hostname is now
-> `sexton` rather than `whisper`:
-> `http://sexton:8080/inference`.
+> **Back as a container since PHA-3598, as a pool.** PHA-3428 baked whisper.cpp
+> and `ggml-base.en.bin` into the `phattbeats/sexton` image and ran one server
+> inside each bot. With two bots in one channel that was two decoders doing the
+> same work; `deploy.sh` here now runs that same image as a third container
+> named `whisper` with `run-whisper-pool.sh` as the entrypoint: N
+> `whisper-server` processes on consecutive ports (`:8080` sexton, `:8081`
+> bexton) plus silero VAD in front of the decoder. `image/deploy.sh` points each
+> bot at its port (`SEXTON_WHISPER_URL`) and leaves the in-container server
+> down (`WHISPER_ENABLED=0`). `whisper-compose.yml` is the old single-server
+> sidecar and is kept only as a record. `verify.sh` still works against
+> `whisper:8080`. See `image/README.md`, "The shared whisper pool".
 >
-> See `image/README.md`.
+> whisper.cpp's server has no request-level parallelism: it serialises behind
+> one mutex. That is why the pool is one process per bot and not one server
+> with a flag.
 
 The `voice.mode=stt-tts` lane transcribes speaker audio here, on the TS6 host's
 own Docker network, and nowhere else.

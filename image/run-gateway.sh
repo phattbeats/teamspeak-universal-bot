@@ -239,8 +239,13 @@ if ! node -e '
     ).channels.teamspeak;
     ts.channel = env.SEXTON_CHANNEL || ts.channel;
     ts.bridgeUrl = `ws://127.0.0.1:${(env.SEXTON_WS_BIND || "0.0.0.0:9099").split(":").pop()}`;
+    // PHA-3598: SEXTON_WHISPER_URL points at the shared `whisper` pool
+    // container (one worker port per bot); unset means the in-container
+    // server. First boot only, like everything in this block — on a live bot
+    // edit channels.teamspeak.voice.streaming.transcription.url in the mounted
+    // openclaw.json by hand (with the gateway STOPPED) and restart the gateway.
     ts.voice.streaming.transcription.url =
-      `http://127.0.0.1:${env.WHISPER_PORT || 8080}/inference`;
+      env.SEXTON_WHISPER_URL || `http://127.0.0.1:${env.WHISPER_PORT || 8080}/inference`;
     ts.tools.music.extraYtdlpArgs = [
       "--extractor-args",
       `youtubepot-bgutilhttp:base_url=http://127.0.0.1:${env.POT_PORT || 4416}`,

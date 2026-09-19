@@ -28,6 +28,15 @@ NICK=${NICK:-Sexton}
 TS_HOST=${TS_HOST:-teamspeak6-server}
 TS_PORT=${TS_PORT:-9987}
 WHISPER_THREADS=${WHISPER_THREADS:-4}
+# PHA-3598: STT comes from the shared `whisper` pool container (whisper/deploy.sh),
+# one worker port per bot: sexton :8080, bexton :8081. The in-container
+# whisper-server is left down (WHISPER_ENABLED=0) so each bot stops paying
+# ~250 MB and 2-3 cores for a decoder the other bot is duplicating. Set
+# WHISPER_ENABLED=1 and SEXTON_WHISPER_URL= (empty) to go back to in-container.
+# Both are first-boot-only for the URL: on an existing appdata the mounted
+# openclaw.json already carries the URL and is what wins (see run-gateway.sh).
+WHISPER_ENABLED=${WHISPER_ENABLED:-0}
+SEXTON_WHISPER_URL=${SEXTON_WHISPER_URL-http://whisper:8080/inference}
 # PHA-3428 option (a): this container runs its OWN gateway. MAIN_GATEWAY is the
 # other one — we read model credentials out of it once, and we disable its
 # teamspeak channel at cutover, because two gateways on one bridge socket is
@@ -182,6 +191,8 @@ docker run -d \
   -e SEXTON_IDENTITY_FILE=/config/sexton-id.txt \
   -e SEXTON_AVATAR="$AVATAR" \
   -e WHISPER_THREADS="$WHISPER_THREADS" \
+  -e WHISPER_ENABLED="$WHISPER_ENABLED" \
+  ${SEXTON_WHISPER_URL:+-e SEXTON_WHISPER_URL="$SEXTON_WHISPER_URL"} \
   -e SEXTON_GATEWAY_ENABLED="$GATEWAY_ENABLED" \
   -e SEXTON_GATEWAY_PORT="$GATEWAY_PORT" \
   -e SEXTON_AGENT_ID="$AGENT_ID" \

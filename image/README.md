@@ -20,7 +20,7 @@ image/gateway/            the in-container OpenClaw gateway's seed config + note
 | --- | --- | --- |
 | Sexton bot | `sexton` container | the `sexton` binary |
 | audio bridge (PHA-3174) | `ts-bridge` container | same binary — folded in by PHA-3342 |
-| whisper.cpp + `ggml-base.en.bin` (PHA-3228) | `whisper` container, model on a host mount | `/opt/whisper`, weights **baked into the image** |
+| whisper.cpp + `ggml-base.en.bin` (PHA-3228) | `whisper` container, model on a host mount | `/opt/whisper`, weights **baked into the image** — and since PHA-3598 run as the shared `whisper` pool container again (same image, `whisper/deploy.sh`), with the in-container copy left down (`WHISPER_ENABLED=0`) |
 | ffmpeg, yt-dlp (PHA-3176) | nowhere — never installed | `/usr/local/bin`, on PATH for the plugin |
 | bgutil POT provider | nowhere | `/opt/bgutil-pot`, served on `:4416` |
 | OpenClaw gateway + `teamspeak` plugin | the main `OpenClaw` container | the base image, plus `/opt/openclaw-teamspeak-plugin` |
@@ -67,6 +67,27 @@ things different, all env:
 | `SEXTON_WAKE_ALIASES` | `section,sections,sex and,sexin,saxton,sex ton,sex done` (exact whisper hearings, PHA-3605) | (empty) |
 | `SEXTON_EXCLUDE_WAKE_NAMES` | `Bexton,band leader,maestro` (never answer the other bot's name) | `Sexton,Henchman` |
 | `SEXTON_BAND_ENABLED` | `0` | `1` — writes `tools.band` into the channel block, reusing the TTS block's MiniMax key |
+| `SEXTON_WHISPER_URL` | `http://whisper:8080/inference` | `http://whisper:8081/inference` — one worker port each in the shared pool (PHA-3598); first-boot only, the mounted `openclaw.json` wins afterwards |
+| `WHISPER_ENABLED` | `0` | `0` — the in-container whisper-server stays down while the pool is the transcriber |
+
+### The shared whisper pool (PHA-3598)
+
+Two bots in one channel each ran their own `whisper-server` and each decoded
+every speaker, including the other bot, so a busy room cost 2-3 cores per bot
+and bexton's 2-thread decoder fell minutes behind. `whisper/deploy.sh` now runs
+the same image as a third container named `whisper` with N `whisper-server`
+processes on consecutive ports (whisper.cpp's server has **no** request-level
+parallelism flag; it serialises behind one mutex, so "parallel" means one
+process per bot) and silero VAD in front of the decoder, which turns a
+silence/noise segment into a ~200 ms empty answer instead of a 4-12 s decode.
+Each bot is pointed at its own port. Health: the pool container runs with
+`--no-healthcheck` because the image's healthcheck is the bot's, not whisper's.
+
+Cutover on a live bot, in this order, or the edit is lost: `supervisorctl stop
+gateway`, edit the URL in the mounted `openclaw.json` (`docker exec -i` if you
+pipe a script in — without `-i` python gets an empty stdin and writes nothing),
+`supervisorctl stop whisper`, `supervisorctl start gateway`, then confirm the URL
+in the file after boot and `fetch failed` stays at zero.
 
 `image/deploy-bexton.sh` sets those and calls `image/deploy.sh` with its own
 `NAME`/`APPDATA` (`/mnt/user/appdata/bexton`), `IMPORT_FROM=sexton` (the
