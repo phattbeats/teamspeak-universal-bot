@@ -85,6 +85,54 @@ jobs:
       - name: Build image (no push — no registry credentials wired yet)
         run: docker build -t phattbeats/sexton:ci -f sexton/Dockerfile .
 
+  combined-image:
+    # PHA-3580: the `docker` job above only ever compile-checked the old
+    # standalone sexton/Dockerfile — it never covered image/Dockerfile, the
+    # one-container image (PHA-3428) that is actually deployed, and that is
+    # what this PR changes (the plugin-builder stage now COPYs
+    # teamspeak-plugin/ from this repo instead of a build.sh-staged copy of
+    # a separate one). PHATT-RAID is the normal build host, and per
+    # image/README.md it runs at ~90%+ disk usage most of the time, so this
+    # job exists to give that specific change real CI coverage that doesn't
+    # depend on the box having headroom on any given day.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Multi-stage build here pulls the rust, whisper-src, model-fetch,
+      # pot-builder and openclaw base images on top of whatever the runner
+      # already carries. Reclaim the preinstalled toolchains this job does
+      # not use rather than risk ENOSPC mid-build.
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      # No push (no registry credentials wired yet, same as the `docker` job
+      # above) and WITH_POT=0 (music still works without the POT token; the
+      # bgutil-ytdlp-pot-provider clone/npm-install is the slowest optional
+      # stage and buys nothing for this check).
+      - name: Build image/Dockerfile (no push)
+        run: |
+          docker build \
+            -f image/Dockerfile \
+            --build-arg WITH_POT=0 \
+            -t phattbeats/sexton:ci-combined \
+            .
+
+      - name: Verify the plugin actually landed in the image
+        run: |
+          docker run --rm --entrypoint sh phattbeats/sexton:ci-combined -c '
+            set -e
+            test -f /opt/openclaw-teamspeak-plugin/openclaw.plugin.json
+            test -f /opt/openclaw-teamspeak-plugin/index.ts
+            test -d /opt/openclaw-teamspeak-plugin/node_modules/ws
+            echo ok
+          '
+
   plugin:
     # PHA-3580: folded in from openclaw-teamspeak-plugin's own `test` workflow
     # now that the plugin lives in this repo at teamspeak-plugin/ instead of
