@@ -53,9 +53,9 @@ afterEach(() => {
 });
 
 describe("teamspeak agent tools", () => {
-  it("registers exactly the ten tools the manifest declares", () => {
+  it("registers exactly the twelve tools the manifest declares", () => {
     // The host refuses the whole registration when a registered name is not in
-    // `contracts.tools`, so this list and package.json must not drift.
+    // `contracts.tools`, so this list and openclaw.plugin.json must not drift.
     expect(TEAMSPEAK_AGENT_TOOL_NAMES).toEqual([
       "play_music",
       "stop_music",
@@ -67,6 +67,8 @@ describe("teamspeak agent tools", () => {
       "join_voice",
       "compose_song",
       "band_status",
+      "song_lyrics",
+      "replay_song",
     ]);
   });
 

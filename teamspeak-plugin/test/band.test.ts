@@ -182,6 +182,9 @@ describe("BandLeader.compose", () => {
       title: "Kai's Truck",
       audioPath: "/songs/kais-truck.mp3",
       provider: "fake",
+      vocals: true,
+      lyrics: "[Verse]\nthe truck is dead\n[Chorus]\nagain, again",
+      singer: "bexton",
     });
     expect(h.settled.map((status) => status.status)).toEqual(["playing"]);
     expect(h.logs.some((line) => line.includes('composing "Kai\'s Truck"') && line.includes("mood=mournful"))).toBe(true);
@@ -229,6 +232,9 @@ describe("BandLeader.compose", () => {
     const status = h.band.status();
     expect(status.status).toBe("failed");
     expect(status.error).toContain("2153");
+    // PHA-3601: band_status (and the silent event built from it) must still
+    // name which song failed — there is no job left to read the title from.
+    expect(status.title).toBe("Anything");
     expect(h.settled.map((s) => s.status)).toEqual(["failed"]);
     // And the band is free again.
     expect(h.band.compose({ brief: "again", vocals: false }).ok).toBe(true);
@@ -296,5 +302,159 @@ describe("BandLeader.compose", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     const left = await readdir(dir);
     expect(left).toHaveLength(2);
+  });
+});
+
+describe("BandLeader.lyrics (PHA-3601)", () => {
+  it("gives back the last song's lyrics, and refuses before anything has played", async () => {
+    const h = harness();
+    expect(h.band.lyrics()).toEqual({
+      ok: false,
+      error: "Nothing's been played yet tonight.",
+    });
+    h.band.compose({
+      title: "Kai's Truck",
+      brief: "a sad one about Kai's truck",
+      vocals: true,
+      lyrics: "[Verse]\ntest line one\n[Chorus]\ntest line two",
+    });
+    h.generator.finish({ audioPath: "/songs/kais-truck.mp3" });
+    await h.settle();
+    await h.settle();
+    expect(h.band.lyrics()).toEqual({
+      ok: true,
+      title: "Kai's Truck",
+      singer: "bexton",
+      lyrics: "[Verse]\ntest line one\n[Chorus]\ntest line two",
+    });
+    expect(h.band.lyrics("truck")).toMatchObject({ ok: true, title: "Kai's Truck" });
+    expect(h.band.lyrics("nope")).toEqual({
+      ok: false,
+      error: 'No song called "nope" in what I remember playing.',
+    });
+  });
+
+  it("refuses lyrics for an instrumental", async () => {
+    const h = harness();
+    h.band.compose({ title: "Just Horns", brief: "instrumental", vocals: false });
+    h.generator.finish({ audioPath: "/songs/just-horns.mp3" });
+    await h.settle();
+    await h.settle();
+    expect(h.band.lyrics()).toEqual({
+      ok: false,
+      error: '"Just Horns" was instrumental. No lyrics — just the band.',
+    });
+  });
+});
+
+describe("BandLeader.replay (PHA-3601)", () => {
+  it("plays the last song again without calling the generator", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "band-replay-"));
+    const audioPath = path.join(dir, "kais-truck.mp3");
+    await writeFile(audioPath, "x");
+    const h = harness({ config: { songsDir: dir } });
+    h.band.compose({ title: "Kai's Truck", brief: "anything", vocals: false });
+    h.generator.finish({ audioPath });
+    await h.settle();
+    await h.settle();
+    expect(h.generator.specs).toHaveLength(1);
+
+    const outcome = h.band.replay({ requestedBy: "Brandon" });
+    expect(outcome).toEqual({ ok: true, title: "Kai's Truck", singer: undefined });
+    expect(h.band.status().status).toBe("composing");
+    await h.settle();
+    await h.settle();
+
+    // No second generator call: the replay reused the file on disk.
+    expect(h.generator.specs).toHaveLength(1);
+    expect(h.music.plays).toEqual([
+      { file: audioPath, title: "Kai's Truck", startDelayMs: 2_300 + 700 },
+      { file: audioPath, title: "Kai's Truck", startDelayMs: 2_300 + 700 },
+    ]);
+    expect(h.band.status().status).toBe("idle");
+  });
+
+  it("finds an older song by a fragment of its title", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "band-replay-"));
+    const pathA = path.join(dir, "a.mp3");
+    const pathB = path.join(dir, "b.mp3");
+    await writeFile(pathA, "x");
+    await writeFile(pathB, "x");
+    const h = harness({ config: { songsDir: dir } });
+    h.band.compose({ title: "Kai's Truck", brief: "one", vocals: false });
+    h.generator.finish({ audioPath: pathA });
+    await h.settle();
+    await h.settle();
+    h.band.compose({ title: "Tuesday Blues", brief: "two", vocals: false });
+    h.generator.finish({ audioPath: pathB });
+    await h.settle();
+    await h.settle();
+
+    const outcome = h.band.replay({ titleQuery: "truck" });
+    expect(outcome).toEqual({ ok: true, title: "Kai's Truck", singer: undefined });
+    await h.settle();
+    await h.settle();
+    expect(h.music.plays.at(-1)).toMatchObject({ file: pathA, title: "Kai's Truck" });
+  });
+
+  it("refuses to replay while a song is cooking, and when nothing matches", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "band-replay-"));
+    const pathA = path.join(dir, "a.mp3");
+    const pathB = path.join(dir, "b.mp3");
+    await writeFile(pathA, "x");
+    await writeFile(pathB, "x");
+    const h = harness({ config: { songsDir: dir } });
+    expect(h.band.replay({})).toEqual({
+      ok: false,
+      error: "Nothing's been played yet tonight, so there's nothing to bring back.",
+    });
+
+    h.band.compose({ title: "Kai's Truck", brief: "one", vocals: false });
+    h.generator.finish({ audioPath: pathA });
+    await h.settle();
+    await h.settle();
+
+    h.band.compose({ title: "Tuesday Blues", brief: "two", vocals: false });
+    const busy = h.band.replay({});
+    expect(busy).toEqual({
+      ok: false,
+      error: 'The band is already working on "Tuesday Blues". One song at a time.',
+    });
+
+    h.generator.finish({ audioPath: pathB });
+    await h.settle();
+    await h.settle();
+    expect(h.band.replay({ titleQuery: "nope" })).toEqual({
+      ok: false,
+      error: 'No song called "nope" in what I remember playing.',
+    });
+  });
+
+  it("fails in character when the recording has been pruned off disk", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "band-replay-"));
+    const generator = new FakeGenerator();
+    const music = new FakeMusic();
+    const spoken: string[] = [];
+    const band = new BandLeader({
+      config: config({ songsDir: dir, keepSongs: 20 }),
+      generator,
+      music,
+      speak: async (text) => {
+        spoken.push(text);
+        return { durationMs: 100 };
+      },
+      rng: seeded(1),
+    });
+    band.compose({ title: "Gone Song", brief: "anything", vocals: false });
+    generator.finish({ audioPath: path.join(dir, "missing.mp3") });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const outcome = band.replay({});
+    expect(outcome.ok).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(band.status().status).toBe("failed");
+    expect(band.status().error).toContain("Gone Song");
   });
 });

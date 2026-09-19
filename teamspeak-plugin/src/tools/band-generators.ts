@@ -224,7 +224,11 @@ export class SunoApiSongGenerator implements SongGenerator {
 // --- an executable --------------------------------------------------------------
 
 export type CommandChild = {
-  stdin: { write(chunk: string): unknown; end(): void } | null;
+  stdin: {
+    write(chunk: string): unknown;
+    end(): void;
+    on(event: string, listener: (...args: never[]) => void): unknown;
+  } | null;
   stdout: { on(event: string, listener: (...args: never[]) => void): unknown } | null;
   stderr: { on(event: string, listener: (...args: never[]) => void): unknown } | null;
   on(event: string, listener: (...args: never[]) => void): unknown;
@@ -278,6 +282,12 @@ export class CommandSongGenerator implements SongGenerator {
           options.signal.removeEventListener("abort", onAbort);
           resolve({ code, stdout, stderr });
         }) as (...args: never[]) => void);
+        // A command that exits before reading stdin (e.g. it never gets past
+        // its own arg validation) closes the pipe under us; without a
+        // listener here that EPIPE is unhandled and takes the gateway down
+        // with it. The exit code, read from "close" above, is what actually
+        // decides success or failure.
+        child.stdin?.on("error", (() => undefined) as (...args: never[]) => void);
         child.stdin?.write(
           JSON.stringify({
             ...spec,

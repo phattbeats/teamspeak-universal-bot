@@ -21,7 +21,9 @@ import {
   LEAVE_VOICE_TOOL,
   PLAY_MUSIC_TOOL,
   POKE_TOOL,
+  REPLAY_SONG_TOOL,
   SET_VOLUME_TOOL,
+  SONG_LYRICS_TOOL,
   STOP_MUSIC_TOOL,
   WHAT_DID_I_MISS_TOOL,
   WHO_IS_HERE_TOOL,
@@ -186,7 +188,12 @@ describe("tool definitions", () => {
 describe("the house band (PHA-3554)", () => {
   it("adds compose_song and band_status only when an account has a band", () => {
     const names = buildTeamSpeakTools({ music: true, band: true }).map((tool) => tool.name);
-    expect(names.slice(-2)).toEqual([COMPOSE_SONG_TOOL, BAND_STATUS_TOOL]);
+    expect(names.slice(-4)).toEqual([
+      COMPOSE_SONG_TOOL,
+      BAND_STATUS_TOOL,
+      SONG_LYRICS_TOOL,
+      REPLAY_SONG_TOOL,
+    ]);
     expect(buildTeamSpeakTools({ music: true }).map((tool) => tool.name)).not.toContain(
       COMPOSE_SONG_TOOL,
     );
@@ -218,6 +225,11 @@ describe("the house band (PHA-3554)", () => {
         announcement: undefined,
         lastSong: undefined,
       }),
+      lyrics: (title) =>
+        title
+          ? { ok: false, error: `No song called "${title}" in what I remember playing.` }
+          : { ok: true, title: "Tuesday Again", singer: "bexton", lyrics: "[Verse]\ntest lyric line" },
+      replay: (request) => ({ ok: true, title: request.titleQuery ?? "Tuesday Again", singer: "bexton" }),
       close: () => undefined,
     };
     const deps = { ...createHarness().deps, band };
@@ -264,6 +276,18 @@ describe("the house band (PHA-3554)", () => {
       { clientId: 4, nickname: "Brandon" },
     ) as Promise<Record<string, unknown> & { ok: boolean }>);
     expect(noBand.ok).toBe(false);
+
+    const lyrics = await call(SONG_LYRICS_TOOL, {});
+    expect(lyrics).toMatchObject({ ok: true, title: "Tuesday Again", singer: "bexton" });
+    expect(String(lyrics.lyrics)).toContain("test lyric line");
+
+    const missingLyrics = await call(SONG_LYRICS_TOOL, { title: "Nope" });
+    expect(missingLyrics.ok).toBe(false);
+    expect(String(missingLyrics.error)).toContain("Nope");
+
+    const replayed = await call(REPLAY_SONG_TOOL, { title: "Tuesday Again" });
+    expect(replayed).toMatchObject({ ok: true, status: "announcing", title: "Tuesday Again" });
+    expect(String(replayed.next)).toContain("bringing it back");
   });
 });
 

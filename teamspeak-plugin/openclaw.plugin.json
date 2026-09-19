@@ -51,7 +51,9 @@
       "leave_voice",
       "join_voice",
       "compose_song",
-      "band_status"
+      "band_status",
+      "song_lyrics",
+      "replay_song"
     ]
   }
 }
