@@ -251,6 +251,12 @@ if ! node -e '
       const names = env.SEXTON_WAKE_NAMES.split(",").map((n) => n.trim()).filter(Boolean);
       ts.voice.wakeNames = [...new Set(names.flatMap((n) => [n, n.toLowerCase()]))];
     }
+    // PHA-3605: heard-aliases (exact whisper spellings of the name) and the
+    // other bot in the room. Always written, even when empty: Bexton imports
+    // the Sexton config and must not inherit the Sexton aliases.
+    const csv = (v) => (v || "").split(",").map((n) => n.trim()).filter(Boolean);
+    ts.voice.wakeAliases = csv(env.SEXTON_WAKE_ALIASES);
+    ts.voice.excludeWakeNames = csv(env.SEXTON_EXCLUDE_WAKE_NAMES);
     // A voice of its own (PHA-3554, Brandon: a different MiniMax voice so
     // Bexton does not match the Sexton). The plugin passes this as the TTS
     // override, so it wins over the voiceId in the imported tts block.
