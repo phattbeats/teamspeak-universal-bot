@@ -132,6 +132,67 @@ if [ -s "$IMPORT_FILE" ]; then
   rm -f "$IMPORT_FILE"
 fi
 
+# --- 1c. a persona of our own (PHA-3554: Bexton) ---
+#
+# The sexton image is also the Bexton image: same binary, same bridge, same
+# gateway, a different agent in the chair. SEXTON_AGENT_ID names the agent this
+# container's teamspeak channel binds to, and SEXTON_PERSONA_DIR is a directory
+# of workspace files (AGENTS.md, SOUL.md, IDENTITY.md) baked into the image for
+# it. Both are first-boot seeds: the workspace is copied only if the agent has
+# none yet, and the agent entry + binding are written only if absent, so an
+# operator's later edits to either survive every restart.
+#
+# The model block is copied from whatever agent the imported config already
+# routes teamspeak to (the Sexton, on this box), then from agents.defaults, so
+# a new persona inherits the credentials that are known to work here rather
+# than the main gateway's MiniMax-M3 default, which produces no speakable
+# payload on this lane.
+if [ -n "${SEXTON_AGENT_ID:-}" ] && [ "${SEXTON_AGENT_ID}" != "sexton" ]; then
+  PERSONA_DIR="${SEXTON_PERSONA_DIR:-/opt/sexton-persona/${SEXTON_AGENT_ID}}"
+  WS="${OPENCLAW_STATE_DIR}/workspace/agents/${SEXTON_AGENT_ID}"
+  if [ ! -d "$WS" ] && [ -d "$PERSONA_DIR" ]; then
+    echo "run-gateway: seeding the ${SEXTON_AGENT_ID} workspace from ${PERSONA_DIR}"
+    mkdir -p "$WS"
+    cp -a "$PERSONA_DIR"/. "$WS"/
+  fi
+  mkdir -p "$WS"
+  node -e '
+    const fs = require("fs");
+    const p = process.env.OPENCLAW_CONFIG_PATH;
+    const id = process.env.SEXTON_AGENT_ID;
+    const ws = process.argv[1];
+    const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+    cfg.agents = cfg.agents || {};
+    cfg.agents.entries = cfg.agents.entries || {};
+    let changed = false;
+    if (!cfg.agents.entries[id]) {
+      const bound = (cfg.bindings || []).find((b) => b?.match?.channel === "teamspeak")?.agentId;
+      const donor = (bound && cfg.agents.entries[bound]) || {};
+      const name = process.env.SEXTON_NICK || id;
+      cfg.agents.entries[id] = {
+        name,
+        workspace: ws,
+        ...(donor.model ? { model: donor.model } : {}),
+        identity: { name },
+        thinkingDefault: "off",
+        tools: { deny: ["process", "sessions_spawn"] },
+      };
+      console.log("run-gateway: added agents.entries." + id + (bound ? " (model from " + bound + ")" : ""));
+      changed = true;
+    }
+    const want = { agentId: id, match: { channel: "teamspeak", accountId: "*" } };
+    const bindings = (cfg.bindings || []).filter((b) => b?.match?.channel !== "teamspeak");
+    const current = (cfg.bindings || []).find((b) => b?.match?.channel === "teamspeak");
+    if (!current || current.agentId !== id) {
+      cfg.bindings = [...bindings, want];
+      console.log("run-gateway: bound channel teamspeak -> " + id);
+      changed = true;
+    }
+    if (changed) fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+  ' "$WS"
+  chmod 0600 "$OPENCLAW_CONFIG_PATH"
+fi
+
 # A config with no model credentials starts, joins the channel, and then says
 # nothing — the failure mode that looks like a dead bot but is a green
 # healthcheck. Say so at boot rather than leaving it to be discovered in the
@@ -184,6 +245,54 @@ if ! node -e '
       "--extractor-args",
       `youtubepot-bgutilhttp:base_url=http://127.0.0.1:${env.POT_PORT || 4416}`,
     ];
+    // Wake names follow the persona. Comma-separated; case variants are added
+    // because the wake gate matches the transcript literally.
+    if (env.SEXTON_WAKE_NAMES) {
+      const names = env.SEXTON_WAKE_NAMES.split(",").map((n) => n.trim()).filter(Boolean);
+      ts.voice.wakeNames = [...new Set(names.flatMap((n) => [n, n.toLowerCase()]))];
+    }
+    // A voice of its own (PHA-3554, Brandon: a different MiniMax voice so
+    // Bexton does not match the Sexton). The plugin passes this as the TTS
+    // override, so it wins over the voiceId in the imported tts block.
+    if (env.SEXTON_TTS_VOICE_ID) {
+      ts.voice.streaming.speech.voiceId = env.SEXTON_TTS_VOICE_ID;
+    }
+    // The house band (PHA-3554). Opt-in, and the MiniMax key is the one the
+    // TTS block already carries, so nobody types it twice.
+    if (env.SEXTON_BAND_ENABLED === "1") {
+      const provider = env.SEXTON_BAND_PROVIDER || "minimax";
+      const band = {
+        enabled: true,
+        provider,
+        songsDir: "/config/band-songs",
+        ...(env.SEXTON_BAND_NAME ? { name: env.SEXTON_BAND_NAME } : {}),
+        // Pipe-separated (the names have commas in them). Unset keeps the
+        // built-in billing; an explicit empty string means none. NO
+        // apostrophes anywhere in this node script: it is a single-quoted
+        // sh string and one apostrophe ends it (that is exactly what broke
+        // the first pha-3554 boot).
+        ...(env.SEXTON_BAND_ALIASES !== undefined
+          ? { aliases: env.SEXTON_BAND_ALIASES.split("|").map((n) => n.trim()).filter(Boolean) }
+          : {}),
+      };
+      const ttsKey = cfg.tts?.providers?.minimax?.apiKey;
+      if (provider === "minimax") {
+        band.minimax = {
+          ...(env.SEXTON_BAND_MINIMAX_API_KEY || ttsKey
+            ? { apiKey: env.SEXTON_BAND_MINIMAX_API_KEY || ttsKey }
+            : {}),
+          ...(env.SEXTON_BAND_MINIMAX_MODEL ? { model: env.SEXTON_BAND_MINIMAX_MODEL } : {}),
+        };
+      } else if (provider === "suno-api") {
+        band.sunoApi = {
+          ...(env.SEXTON_BAND_SUNO_API_URL ? { baseUrl: env.SEXTON_BAND_SUNO_API_URL } : {}),
+          ...(env.SEXTON_BAND_SUNO_API_KEY ? { apiKey: env.SEXTON_BAND_SUNO_API_KEY } : {}),
+        };
+      } else if (provider === "command") {
+        band.command = { path: env.SEXTON_BAND_COMMAND || "/config/band/generate" };
+      }
+      ts.tools.band = band;
+    }
     cfg.channels = { ...(cfg.channels || {}), teamspeak: ts };
     fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
   '

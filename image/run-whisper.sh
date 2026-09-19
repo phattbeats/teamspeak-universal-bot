@@ -31,4 +31,8 @@ exec /opt/whisper/bin/whisper-server \
   --threads "$WHISPER_THREADS" \
   --language "$WHISPER_LANGUAGE" \
   --no-timestamps \
-  --convert
+  --convert \
+  --audio-ctx "${WHISPER_AUDIO_CTX:-768}" \
+  --beam-size 1 \
+  --best-of 1 \
+  --no-fallback

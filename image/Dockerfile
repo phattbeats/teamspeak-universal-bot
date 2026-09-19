@@ -95,7 +95,30 @@ RUN cargo build --release -p sexton
 #    `ldd whisper-server` wants: libstdc++6, libgomp1, libm, libgcc_s, plus
 #    its own libwhisper/libggml*, which come along in /opt/whisper/bin.
 # --------------------------------------------------------------------------
-FROM ghcr.io/ggml-org/whisper.cpp:main AS whisper-src
+#
+#    PHA-3554: NOT `ghcr.io/ggml-org/whisper.cpp:main` any more. That tag
+#    moves, and the 2026-09-17 build of it (ggml 0.24, parakeet) dies with
+#    SIGILL on PHATT-RAID's Ryzen 2600X the moment it runs inference — a
+#    binary built for instructions this CPU does not have. `--help` still
+#    works, so the image verification was green while the STT lane was dead
+#    in the room. Building from a pinned release with GGML_NATIVE=OFF and an
+#    explicit AVX2 feature set is what makes the result depend on this
+#    Dockerfile rather than on what upstream's runner happened to be.
+#    Static, so nothing depends on which .so files a given release lays out.
+FROM debian:bookworm-slim AS whisper-src
+ARG WHISPER_CPP_VERSION=v1.9.3
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+RUN git clone --depth 1 --branch "${WHISPER_CPP_VERSION}" https://github.com/ggml-org/whisper.cpp.git . \
+    && cmake -B build \
+         -DCMAKE_BUILD_TYPE=Release \
+         -DBUILD_SHARED_LIBS=OFF \
+         -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON \
+         -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_SERVER=ON \
+    && cmake --build build --config Release -j"$(nproc)" --target whisper-server whisper-cli \
+    && ls -l build/bin/whisper-server build/bin/whisper-cli
 
 # --------------------------------------------------------------------------
 # 3. The whisper weights. A separate stage so the ~148 MB download is its own
@@ -291,6 +314,10 @@ COPY --from=plugin-builder /plugin/ /opt/openclaw-teamspeak-plugin/
 
 COPY image/supervisord.conf          /etc/supervisor/conf.d/sexton.conf
 COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json
+# PHA-3554: the Bexton persona, seeded into the gateway workspace on first boot
+# when SEXTON_AGENT_ID=bexton. Same image, different agent in the chair.
+COPY image/bexton/workspace/           /opt/sexton-persona/bexton/
+COPY image/bexton/avatar/bexton.png    /usr/local/share/sexton-avatar/bexton.png
 COPY image/run-sexton.sh             /usr/local/bin/run-sexton
 COPY image/run-whisper.sh            /usr/local/bin/run-whisper
 COPY image/run-pot.sh                /usr/local/bin/run-pot
