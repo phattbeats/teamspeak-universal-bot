@@ -96,7 +96,7 @@ export function buildTeamSpeakTools(options: {
         type: "function",
         name: PLAY_MUSIC_TOOL,
         description:
-          "Play music into the TeamSpeak channel. Give either a search phrase or a direct URL. Music ducks automatically while anyone speaks. Confirm in a few words.",
+          "Play music into the TeamSpeak channel. Give either a search phrase or a direct URL. Music ducks automatically while anyone speaks. If something is already playing, this queues the request instead of interrupting it — the result tells you the queue position, so confirm with that (e.g. \"queued, you're third\") instead of announcing it as playing now. Confirm in a few words.",
         parameters: {
           type: "object",
           properties: {
@@ -114,7 +114,8 @@ export function buildTeamSpeakTools(options: {
       {
         type: "function",
         name: STOP_MUSIC_TOOL,
-        description: "Stop the music playing in the channel. Confirm in a few words.",
+        description:
+          "Stop the music playing in the channel and clear anything queued behind it. Confirm in a few words.",
         parameters: { type: "object", properties: {} },
       },
       {
@@ -364,7 +365,18 @@ async function playMusic(
   const track = await music.play({
     ...(query ? { query } : {}),
     ...(url ? { url } : {}),
+    enqueue: true,
   });
+  if (track.queuedPosition !== undefined) {
+    return {
+      ok: true,
+      queued: true,
+      position: track.queuedPosition,
+      title: track.title,
+      request: track.request,
+      volume: music.volume,
+    };
+  }
   return { ok: true, title: track.title, request: track.request, volume: music.volume };
 }
 
@@ -373,8 +385,14 @@ function stopMusic(deps: TeamSpeakToolDeps): ToolResult {
   if (!music) {
     return { ok: false, error: "Music playback is not enabled on this Sexton." };
   }
+  const queuedBefore = music.queueLength;
   const wasPlaying = music.stop("stop_music");
-  return { ok: true, stopped: wasPlaying, wasPlaying };
+  return {
+    ok: true,
+    stopped: wasPlaying,
+    wasPlaying,
+    ...(queuedBefore > 0 ? { queueCleared: queuedBefore } : {}),
+  };
 }
 
 function setVolume(deps: TeamSpeakToolDeps, args: Record<string, unknown>): ToolResult {
