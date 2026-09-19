@@ -49,6 +49,7 @@ class FakeGenerator implements SongGenerator {
 class FakeMusic implements MusicController {
   isPlaying = false;
   nowPlaying: MusicTrack | undefined;
+  queueLength = 0;
   volume = 0.6;
   readonly plays: MusicPlayRequest[] = [];
   failWith: Error | undefined;

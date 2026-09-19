@@ -31,12 +31,13 @@ import {
 class FakeMusic implements MusicController {
   isPlaying = false;
   nowPlaying: MusicTrack | undefined;
+  queueLength = 0;
   volume = 0.6;
-  readonly requests: { query?: string; url?: string }[] = [];
+  readonly requests: { query?: string; url?: string; enqueue?: boolean }[] = [];
   readonly stops: string[] = [];
   failWith: Error | undefined;
 
-  async play(request: { query?: string; url?: string }): Promise<MusicTrack> {
+  async play(request: { query?: string; url?: string; enqueue?: boolean }): Promise<MusicTrack> {
     this.requests.push(request);
     if (this.failWith) {
       throw this.failWith;
@@ -46,6 +47,10 @@ class FakeMusic implements MusicController {
       streamUrl: "https://cdn.example/a.webm",
       request: request.query ?? request.url ?? "",
     };
+    if (request.enqueue && this.isPlaying) {
+      this.queueLength += 1;
+      return { ...track, queuedPosition: this.queueLength };
+    }
     this.isPlaying = true;
     this.nowPlaying = track;
     return track;
@@ -54,6 +59,7 @@ class FakeMusic implements MusicController {
   stop(reason: string): boolean {
     this.stops.push(reason);
     const wasPlaying = this.isPlaying;
+    this.queueLength = 0;
     this.isPlaying = false;
     this.nowPlaying = undefined;
     return wasPlaying;
@@ -267,7 +273,7 @@ describe("play_music / stop_music / set_volume", () => {
     const result = await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
 
     expect(result).toMatchObject({ ok: true, title: "Smooth Jazz Radio", request: "smooth jazz" });
-    expect(harness.music.requests).toEqual([{ query: "smooth jazz" }]);
+    expect(harness.music.requests).toEqual([{ query: "smooth jazz", enqueue: true }]);
   });
 
   it("accepts arguments as a JSON string, which some providers send", async () => {
@@ -275,7 +281,7 @@ describe("play_music / stop_music / set_volume", () => {
     const result = await harness.call(PLAY_MUSIC_TOOL, '{"url":"https://youtu.be/abc"}');
 
     expect(result.ok).toBe(true);
-    expect(harness.music.requests).toEqual([{ url: "https://youtu.be/abc" }]);
+    expect(harness.music.requests).toEqual([{ url: "https://youtu.be/abc", enqueue: true }]);
   });
 
   it("settles a failed play as ok:false instead of leaving the turn hanging", async () => {
@@ -293,6 +299,31 @@ describe("play_music / stop_music / set_volume", () => {
     await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
     expect(await harness.call(STOP_MUSIC_TOOL)).toMatchObject({ ok: true, wasPlaying: true });
     expect(harness.music.stops).toEqual(["stop_music", "stop_music"]);
+  });
+
+  it("queues a request instead of interrupting what's already playing (PHA-3635)", async () => {
+    const harness = createHarness();
+    const first = await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
+    expect(first).toMatchObject({ ok: true, title: "Smooth Jazz Radio" });
+    expect(first.queued).toBeUndefined();
+
+    const second = await harness.call(PLAY_MUSIC_TOOL, { query: "some death metal" });
+    expect(second).toMatchObject({ ok: true, queued: true, position: 1 });
+
+    const third = await harness.call(PLAY_MUSIC_TOOL, { query: "polka" });
+    expect(third).toMatchObject({ ok: true, queued: true, position: 2 });
+
+    // Nothing was interrupted: only the first request's play() started a track.
+    expect(harness.music.isPlaying).toBe(true);
+  });
+
+  it("reports how many queued songs stop_music clears along with the current track", async () => {
+    const harness = createHarness();
+    await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
+    await harness.call(PLAY_MUSIC_TOOL, { query: "some death metal" });
+
+    const stopped = await harness.call(STOP_MUSIC_TOOL);
+    expect(stopped).toMatchObject({ ok: true, wasPlaying: true, queueCleared: 1 });
   });
 
   it("reads a bare number over 1 as a percentage", async () => {

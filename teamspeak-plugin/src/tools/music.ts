@@ -20,6 +20,13 @@
  *
  * Ducking is not implemented here: the bridge drops the music lane to
  * `duckGain` on its own whenever voice is queued or a human is speaking.
+ *
+ * Song-request queueing (PHA-3635) lives here too, one level up from the
+ * bridge's frame queue above: `play({ enqueue: true })` stacks a track behind
+ * whatever is playing instead of replacing it, and the next one starts itself
+ * when the current track's ffmpeg drains. A plain `play()` (no `enqueue`,
+ * e.g. the band leader taking the stage) still interrupts immediately and
+ * drops anything queued — that is a deliberate restart, not a skip.
  */
 import { execFile, spawn } from "node:child_process";
 import {
@@ -52,6 +59,11 @@ export type MusicTrack = {
   request: string;
   /** A file on disk (the band's output) rather than a resolved stream. */
   isFile?: boolean;
+  /**
+   * Set when this `play()` call queued behind what was already playing
+   * instead of starting it. 1-based position in the queue.
+   */
+  queuedPosition?: number;
 };
 
 export type MusicPlayRequest = {
@@ -70,12 +82,21 @@ export type MusicPlayRequest = {
    * not under it.
    */
   startDelayMs?: number;
+  /**
+   * Stack behind whatever is already playing instead of replacing it
+   * (PHA-3635). Ignored when nothing is playing and the queue is empty —
+   * the request just starts. A caller that wants the old interrupt
+   * behaviour (the band leader taking the stage) simply omits this.
+   */
+  enqueue?: boolean;
 };
 
 /** The surface the tool registry needs; a fake stands in for it in tests. */
 export type MusicController = {
   readonly isPlaying: boolean;
   readonly nowPlaying: MusicTrack | undefined;
+  /** Tracks stacked up behind `nowPlaying`, waiting their turn. */
+  readonly queueLength: number;
   readonly volume: number;
   play(request: MusicPlayRequest): Promise<MusicTrack>;
   stop(reason: string): boolean;
@@ -156,6 +177,8 @@ type ActiveStream = {
 
 export class MusicPlayer implements MusicController {
   private stream: ActiveStream | undefined;
+  /** Resolved tracks waiting their turn (PHA-3635); consumed on natural finish. */
+  private queue: MusicTrack[] = [];
   private gain: number;
   private closed = false;
   private readonly run: MusicCommandRunner;
@@ -179,6 +202,10 @@ export class MusicPlayer implements MusicController {
 
   get nowPlaying(): MusicTrack | undefined {
     return this.stream?.track;
+  }
+
+  get queueLength(): number {
+    return this.queue.length;
   }
 
   get volume(): number {
@@ -206,14 +233,23 @@ export class MusicPlayer implements MusicController {
     if (this.closed) {
       throw new MusicError("The music player is shut down.");
     }
+    if (request.enqueue && (this.stream !== undefined || this.queue.length > 0)) {
+      this.queue.push(track);
+      this.params.log?.(
+        `teamspeak music: queued "${track.title}" request="${track.request}" position=${this.queue.length}`,
+      );
+      return { ...track, queuedPosition: this.queue.length };
+    }
     // A new track replaces the old one; two ffmpeg processes on one lane would
-    // be summed into noise by the mixer.
+    // be summed into noise by the mixer. This also drops anything queued: an
+    // interrupt is a deliberate "start over", not a skip.
     this.stop("replaced");
     this.startStream(track, Math.max(0, request.startDelayMs ?? 0));
     return track;
   }
 
   stop(reason: string): boolean {
+    this.queue = [];
     const stream = this.stream;
     if (!stream) {
       return false;
@@ -411,6 +447,13 @@ export class MusicPlayer implements MusicController {
     this.params.log?.(
       `teamspeak music: finished "${stream.track.title}" playedMs=${stream.framesSent * MUSIC_FRAME_MS}`,
     );
+    const next = this.queue.shift();
+    if (next) {
+      this.params.log?.(
+        `teamspeak music: advancing to queued "${next.title}" remaining=${this.queue.length}`,
+      );
+      this.startStream(next, 0);
+    }
   }
 
   private applyBackpressure(stream: ActiveStream): void {
