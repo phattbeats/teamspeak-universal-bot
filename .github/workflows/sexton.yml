@@ -1,21 +1,28 @@
 name: sexton
 
-# PHA-3173 verification pipeline. The dev sandbox that writes this code has
-# no C toolchain (no cc/gcc), so it cannot compile tsclientlib locally —
-# this workflow, on a real Ubuntu runner, is the actual compile check for
-# the chat-memory bot. (The runtime image itself was built and deployed via
-# a direct docker build on PHATT-RAID — see PHA-3173 for that transcript.)
+# PHA-3173 verification pipeline, extended by PHA-3580 to cover the
+# teamspeak-plugin/ tree that used to be the separate openclaw-teamspeak-plugin
+# repo's own workflow. The dev sandbox that writes this code has no C
+# toolchain (no cc/gcc), so it cannot compile tsclientlib locally — the
+# `build`/`docker` jobs, on a real Ubuntu runner, are the actual compile
+# check for the chat-memory bot. (The runtime image itself is built and
+# deployed via `image/build.sh` on PHATT-RAID, not by this workflow — see
+# PHA-3173 and PHA-3428 for those transcripts.)
 
 on:
   push:
     branches: [main]
     paths:
       - "sexton/**"
+      - "teamspeak-plugin/**"
+      - "image/**"
       - ".github/workflows/sexton.yml"
   pull_request:
     branches: [main]
     paths:
       - "sexton/**"
+      - "teamspeak-plugin/**"
+      - "image/**"
   workflow_dispatch:
 
 jobs:
@@ -77,3 +84,34 @@ jobs:
       # split.
       - name: Build image (no push — no registry credentials wired yet)
         run: docker build -t phattbeats/sexton:ci -f sexton/Dockerfile .
+
+  plugin:
+    # PHA-3580: folded in from openclaw-teamspeak-plugin's own `test` workflow
+    # now that the plugin lives in this repo at teamspeak-plugin/ instead of
+    # a separate repo. Runs the plugin's standalone suite: the mock bridge
+    # replays recorded frames, so no TeamSpeak server is needed. The live
+    # provider path and the SDK-dependent files (src/channel.ts,
+    # src/accounts.ts, src/bridge/ws-socket.ts) are excluded here and need a
+    # real gateway.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: teamspeak-plugin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install
+        run: npm install --include=dev --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

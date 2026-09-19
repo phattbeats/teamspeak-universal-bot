@@ -1,0 +1,81 @@
+{
+  "name": "@openclaw/teamspeak",
+  "version": "0.1.0",
+  "description": "OpenClaw TeamSpeak channel plugin: realtime voice in a TeamSpeak channel over the plnt-ts-bridge sidecar.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/phattbeats/plnt-sexton"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --config vitest.standalone.config.ts",
+    "test:watch": "vitest --config vitest.standalone.config.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "@types/ws": "8.18.1",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.9.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "teamspeak",
+      "label": "TeamSpeak",
+      "selectionLabel": "TeamSpeak (voice channel)",
+      "detailLabel": "TeamSpeak",
+      "blurb": "realtime voice in a TeamSpeak channel, over the plnt-ts-bridge sidecar.",
+      "markdownCapable": false,
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "TEAMSPEAK_BRIDGE_URL"
+          ]
+        }
+      },
+      "setup": {
+        "fields": [
+          {
+            "key": "bridgeUrl",
+            "kind": "string",
+            "cli": {
+              "flags": "--bridge-url <url>",
+              "description": "plnt-ts-bridge WebSocket URL, e.g. ws://ts-bridge:9099"
+            },
+            "envVars": [
+              "TEAMSPEAK_BRIDGE_URL"
+            ]
+          },
+          {
+            "key": "channel",
+            "kind": "string",
+            "cli": {
+              "flags": "--channel <channel>",
+              "description": "TeamSpeak channel name or numeric id to join"
+            }
+          }
+        ]
+      }
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.2"
+    },
+    "build": {
+      "bundledDist": false
+    }
+  }
+}
