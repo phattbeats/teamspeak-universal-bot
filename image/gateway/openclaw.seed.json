@@ -17,6 +17,20 @@
           "Henchman",
           "henchman"
         ],
+        "wakeAliases": [
+          "section",
+          "sections",
+          "sex and",
+          "sexin",
+          "saxton",
+          "sex ton",
+          "sex done"
+        ],
+        "excludeWakeNames": [
+          "Bexton",
+          "band leader",
+          "maestro"
+        ],
         "streaming": {
           "transcription": {
             "provider": "whisper-local",

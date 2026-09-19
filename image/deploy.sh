@@ -53,6 +53,11 @@ IMPORT_CONFIG_PATH=${IMPORT_CONFIG_PATH:-/root/.openclaw/openclaw.json}
 # Sexton. See image/deploy-bexton.sh for the values.
 AGENT_ID=${AGENT_ID:-}
 WAKE_NAMES=${WAKE_NAMES:-}
+# PHA-3605: exact whisper hearings accepted as the name, and the other bot's
+# names that must NOT wake this one. Defaults are the Sexton's; a second
+# persona sets both (empty is a valid value: WAKE_ALIASES= to have none).
+WAKE_ALIASES=${WAKE_ALIASES-section,sections,sex and,sexin,saxton,sex ton,sex done}
+EXCLUDE_WAKE_NAMES=${EXCLUDE_WAKE_NAMES-Bexton,band leader,maestro}
 # MiniMax voice id for this persona; empty keeps the imported tts block's.
 TTS_VOICE_ID=${TTS_VOICE_ID:-}
 BAND_ENABLED=${BAND_ENABLED:-0}
@@ -181,6 +186,8 @@ docker run -d \
   -e SEXTON_GATEWAY_PORT="$GATEWAY_PORT" \
   -e SEXTON_AGENT_ID="$AGENT_ID" \
   -e SEXTON_WAKE_NAMES="$WAKE_NAMES" \
+  -e SEXTON_WAKE_ALIASES="$WAKE_ALIASES" \
+  -e SEXTON_EXCLUDE_WAKE_NAMES="$EXCLUDE_WAKE_NAMES" \
   -e SEXTON_NO_CATCHUP="$SEXTON_NO_CATCHUP" \
   ${TTS_VOICE_ID:+-e SEXTON_TTS_VOICE_ID="$TTS_VOICE_ID"} \
   -e SEXTON_BAND_ENABLED="$BAND_ENABLED" \

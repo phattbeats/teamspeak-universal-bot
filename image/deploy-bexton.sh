@@ -39,6 +39,10 @@ export APPDATA=${APPDATA:-/mnt/user/appdata/bexton}
 export CHANNEL=${CHANNEL:-General Shit}
 export AGENT_ID=${AGENT_ID:-bexton}
 export WAKE_NAMES=${WAKE_NAMES:-Bexton,band leader,maestro}
+# PHA-3605: no heard-aliases yet (24h of bexton's declined log showed no
+# misheard form of the name); never answer the Sexton's names.
+export WAKE_ALIASES=${WAKE_ALIASES-}
+export EXCLUDE_WAKE_NAMES=${EXCLUDE_WAKE_NAMES-Sexton,Henchman}
 # Not the Sexton's English_WiseScholar (Brandon, 2026-09-18). A bossy leader
 # "speaking unconcernedly with an air of command"; English_ManWithDeepVoice is
 # the other fit if this one reads too flat.
