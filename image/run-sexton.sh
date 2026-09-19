@@ -24,6 +24,12 @@ set -eu
 : "${SEXTON_DUCK_GAIN:=0.25}"
 : "${SEXTON_IDENTITY:=}"
 : "${SEXTON_IDENTITY_FILE:=/config/sexton-id.txt}"
+# PHA-3573: suppress the catch-up recap for a second persona sharing the
+# Sexton's channel (image/deploy-bexton.sh sets this to 1) — the welcome PM
+# still fires. The binary also reads this env var directly as a fallback, but
+# mapping it to a flag here keeps it visible in the logged command line below,
+# same as every other knob this wrapper owns.
+: "${SEXTON_NO_CATCHUP:=0}"
 
 # The identity is the bot's server-side UID: lose it and the Sexton comes back
 # as a stranger with no permissions and no history. Prefer the mounted config
@@ -63,6 +69,9 @@ fi
 if [ -n "${SEXTON_ON_CONNECTED:-}" ]; then
   set -- "$@" --on-connected "$SEXTON_ON_CONNECTED"
 fi
+case "$SEXTON_NO_CATCHUP" in
+  1 | true | True | TRUE | yes | Yes | YES) set -- "$@" --no-catchup ;;
+esac
 
-echo "run-sexton: $SEXTON_NICK -> $SEXTON_ADDR:$SEXTON_PORT channel='$SEXTON_CHANNEL' ws=$SEXTON_WS_BIND"
+echo "run-sexton: $SEXTON_NICK -> $SEXTON_ADDR:$SEXTON_PORT channel='$SEXTON_CHANNEL' ws=$SEXTON_WS_BIND no_catchup=$SEXTON_NO_CATCHUP"
 exec /usr/local/bin/sexton "$@"
