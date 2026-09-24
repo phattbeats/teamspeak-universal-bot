@@ -88,11 +88,13 @@ export type TeamSpeakVoiceTurnTimings = {
  * play out does not spend it, and a long follow-up question does not either --
  * only actual dead air does.
  *
- * Off by default. Brandon, PHA-3428 2026-09-13: "HE LISTENS FOR HIS NAME ONLY."
- * A follow-up window is, by construction, a turn that answers without the name,
- * so it stays shut unless `voice.followUpSilenceMs` turns it back on.
+ * Was off by default (Brandon, PHA-3428 2026-09-13: "HE LISTENS FOR HIS NAME
+ * ONLY"). Reversed in PHA-3783 (2026-09-24): with the window shut, nobody could
+ * answer the bot's own question without saying the name again, and it "just
+ * doesn't respond". 15 s of dead air after our speech ends is the default now;
+ * `voice.followUpSilenceMs: 0` shuts it again for a bot that must be name-only.
  */
-const DEFAULT_FOLLOW_UP_SILENCE_MS = 0;
+export const DEFAULT_FOLLOW_UP_SILENCE_MS = 15_000;
 
 export class TeamSpeakSttTtsSpeakerSession {
   readonly clientId: TeamSpeakClientId;
