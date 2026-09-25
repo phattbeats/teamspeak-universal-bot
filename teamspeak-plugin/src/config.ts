@@ -54,8 +54,8 @@ export type TeamSpeakVoiceRealtimeConfig = {
   bootstrapContextFiles?: TeamSpeakVoiceRealtimeBootstrapContextFile[];
   /**
    * Dead air allowed after our own speech before the conversation closes again,
-   * during which a follow-up needs no wake name. Default 0: the name is the only
-   * way in (PHA-3428, "HE LISTENS FOR HIS NAME ONLY").
+   * during which a follow-up needs no wake name. Default 15000 (PHA-3783);
+   * 0 makes the name the only way in (the pre-PHA-3783 behaviour).
    */
   followUpSilenceMs?: number;
   /** Allow `speaker_start` frames to interrupt active realtime playback. */

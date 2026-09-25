@@ -69,3 +69,12 @@ describe("WakeGate", () => {
     expect(gate.isBargeInEnabled()).toBe(false);
   });
 });
+
+describe("follow-up window default (PHA-3783)", () => {
+  it("leaves the conversation open for well over ten seconds of dead air after the bot finishes speaking", async () => {
+    const { DEFAULT_FOLLOW_UP_SILENCE_MS } = await import("../src/voice/stt-tts-speaker-session.js");
+    // Brandon, 2026-09-24: 8-10 s was too short; people answered the bot's
+    // own question and got nothing unless they said the name again.
+    expect(DEFAULT_FOLLOW_UP_SILENCE_MS).toBeGreaterThanOrEqual(15_000);
+  });
+});
