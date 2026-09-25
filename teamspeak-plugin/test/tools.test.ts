@@ -35,9 +35,12 @@ class FakeMusic implements MusicController {
   nowPlaying: MusicTrack | undefined;
   queueLength = 0;
   volume = 0.6;
+  paused = false;
   readonly requests: { query?: string; url?: string; enqueue?: boolean }[] = [];
   readonly stops: string[] = [];
   failWith: Error | undefined;
+  private queue: MusicTrack[] = [];
+  private nextId = 1;
 
   async play(request: { query?: string; url?: string; enqueue?: boolean }): Promise<MusicTrack> {
     this.requests.push(request);
@@ -45,12 +48,14 @@ class FakeMusic implements MusicController {
       throw this.failWith;
     }
     const track: MusicTrack = {
+      id: `t${this.nextId++}`,
       title: "Smooth Jazz Radio",
       streamUrl: "https://cdn.example/a.webm",
       request: request.query ?? request.url ?? "",
     };
     if (request.enqueue && this.isPlaying) {
       this.queueLength += 1;
+      this.queue.push(track);
       return { ...track, queuedPosition: this.queueLength };
     }
     this.isPlaying = true;
@@ -58,10 +63,15 @@ class FakeMusic implements MusicController {
     return track;
   }
 
+  async playSource(): Promise<MusicTrack> {
+    return this.play({});
+  }
+
   stop(reason: string): boolean {
     this.stops.push(reason);
     const wasPlaying = this.isPlaying;
     this.queueLength = 0;
+    this.queue = [];
     this.isPlaying = false;
     this.nowPlaying = undefined;
     return wasPlaying;
@@ -74,6 +84,78 @@ class FakeMusic implements MusicController {
 
   close(): void {
     this.stop("close");
+  }
+
+  nowPlayingInfo() {
+    return this.nowPlaying ? { track: this.nowPlaying, elapsedMs: 0, paused: this.paused } : undefined;
+  }
+
+  listQueue(): MusicTrack[] {
+    return [...this.queue];
+  }
+
+  skip(): MusicTrack | undefined {
+    const next = this.queue.shift();
+    this.queueLength = this.queue.length;
+    this.nowPlaying = next;
+    this.isPlaying = next !== undefined;
+    return next;
+  }
+
+  removeFromQueue(id: string): MusicTrack | undefined {
+    const index = this.queue.findIndex((t) => t.id === id);
+    if (index < 0) {
+      return undefined;
+    }
+    const [removed] = this.queue.splice(index, 1);
+    this.queueLength = this.queue.length;
+    return removed;
+  }
+
+  moveInQueue(id: string, toPosition: number): MusicTrack[] {
+    const index = this.queue.findIndex((t) => t.id === id);
+    if (index < 0) {
+      return [...this.queue];
+    }
+    const [track] = this.queue.splice(index, 1);
+    if (track) {
+      this.queue.splice(Math.max(0, toPosition - 1), 0, track);
+    }
+    return [...this.queue];
+  }
+
+  clearQueue(): number {
+    const count = this.queue.length;
+    this.queue = [];
+    this.queueLength = 0;
+    return count;
+  }
+
+  async search(): Promise<never[]> {
+    return [];
+  }
+
+  pause(): boolean {
+    if (!this.isPlaying || this.paused) {
+      return false;
+    }
+    this.paused = true;
+    return true;
+  }
+
+  resume(): boolean {
+    if (!this.paused) {
+      return false;
+    }
+    this.paused = false;
+    return true;
+  }
+
+  async seek(): Promise<MusicTrack> {
+    if (!this.nowPlaying) {
+      throw new Error("Nothing is playing to seek.");
+    }
+    return this.nowPlaying;
   }
 }
 
@@ -154,11 +236,22 @@ function createHarness(
 }
 
 describe("tool definitions", () => {
-  it("registers the eight v1 tools", () => {
+  it("registers the v1 tools plus the music queue v2 tools", () => {
     expect(buildTeamSpeakTools({ music: true }).map((tool) => tool.name)).toEqual([
       PLAY_MUSIC_TOOL,
       STOP_MUSIC_TOOL,
       SET_VOLUME_TOOL,
+      "now_playing",
+      "show_queue",
+      "skip",
+      "remove_from_queue",
+      "move_in_queue",
+      "clear_queue",
+      "search_music",
+      "play_source",
+      "pause",
+      "resume",
+      "seek",
       WHAT_DID_I_MISS_TOOL,
       WHO_IS_HERE_TOOL,
       POKE_TOOL,
@@ -362,6 +455,114 @@ describe("play_music / stop_music / set_volume", () => {
     const result = await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
     expect(result).toMatchObject({ ok: false });
     expect(String(result.error)).toMatch(/not enabled/u);
+  });
+});
+
+describe("music queue v2 tools (PHA-3785)", () => {
+  it("now_playing reports nothing playing, then the current track", async () => {
+    const harness = createHarness();
+    expect(await harness.call("now_playing")).toMatchObject({ ok: true, playing: false });
+
+    await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
+    const info = await harness.call("now_playing");
+    expect(info).toMatchObject({ ok: true, playing: true, title: "Smooth Jazz Radio" });
+  });
+
+  it("show_queue reflects previously-added tracks", async () => {
+    const harness = createHarness();
+    await harness.call(PLAY_MUSIC_TOOL, { query: "first" });
+    await harness.call(PLAY_MUSIC_TOOL, { query: "second" });
+    await harness.call(PLAY_MUSIC_TOOL, { query: "third" });
+
+    const result = await harness.call("show_queue");
+    expect(result.ok).toBe(true);
+    expect(result.count).toBe(2);
+    expect((result.queue as { title: string }[]).map((t) => t.title)).toEqual([
+      "Smooth Jazz Radio",
+      "Smooth Jazz Radio",
+    ]);
+  });
+
+  it("skip advances without clearing the rest of the queue and reports it plainly", async () => {
+    const harness = createHarness();
+    expect(await harness.call("skip")).toMatchObject({ ok: false });
+
+    await harness.call(PLAY_MUSIC_TOOL, { query: "first" });
+    await harness.call(PLAY_MUSIC_TOOL, { query: "second" });
+    await harness.call(PLAY_MUSIC_TOOL, { query: "third" });
+
+    const result = await harness.call("skip");
+    expect(result).toMatchObject({ ok: true, skipped: true, remaining: 1 });
+  });
+
+  it("remove_from_queue removes the requested track", async () => {
+    const harness = createHarness();
+    await harness.call(PLAY_MUSIC_TOOL, { query: "first" });
+    const second = await harness.call(PLAY_MUSIC_TOOL, { query: "second" });
+    const id = harness.music.listQueue()[0]?.id;
+    expect(id).toBeDefined();
+
+    const result = await harness.call("remove_from_queue", { id });
+    expect(result).toMatchObject({ ok: true, remaining: 0 });
+    expect(second.queued).toBe(true);
+
+    const missing = await harness.call("remove_from_queue", { id: "bogus" });
+    expect(missing.ok).toBe(false);
+  });
+
+  it("move_in_queue reorders and clear_queue empties without stopping playback", async () => {
+    const harness = createHarness();
+    await harness.call(PLAY_MUSIC_TOOL, { query: "first" });
+    await harness.call(PLAY_MUSIC_TOOL, { query: "second" });
+    await harness.call(PLAY_MUSIC_TOOL, { query: "third" });
+    const [secondId] = harness.music.listQueue().map((t) => t.id);
+
+    const moved = await harness.call("move_in_queue", { id: secondId, position: 2 });
+    expect(moved.ok).toBe(true);
+
+    const cleared = await harness.call("clear_queue");
+    expect(cleared).toMatchObject({ ok: true, cleared: 2 });
+    expect(harness.music.isPlaying).toBe(true);
+  });
+
+  it("search_music returns candidates without auto-playing anything", async () => {
+    const harness = createHarness();
+    const result = await harness.call("search_music", { query: "smooth jazz", limit: 3 });
+    expect(result.ok).toBe(true);
+    expect(harness.music.isPlaying).toBe(false);
+  });
+
+  it("play_source dispatches to the controller with the given source", async () => {
+    const harness = createHarness();
+    const result = await harness.call("play_source", { source: "youtube", query: "smooth jazz" });
+    expect(result).toMatchObject({ ok: true, source: "youtube" });
+  });
+
+  it("play_source without a source fails clearly", async () => {
+    const harness = createHarness();
+    const result = await harness.call("play_source", {});
+    expect(result.ok).toBe(false);
+  });
+
+  it("pause and resume flip playback state, seek reports the new position", async () => {
+    const harness = createHarness();
+    expect((await harness.call("pause")).ok).toBe(false);
+
+    await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
+    expect(await harness.call("pause")).toMatchObject({ ok: true, paused: true });
+    expect(await harness.call("resume")).toMatchObject({ ok: true, resumed: true });
+
+    const seek = await harness.call("seek", { seconds: 30 });
+    expect(seek).toMatchObject({ ok: true, seconds: 30 });
+  });
+
+  it("all queue v2 tools say music is off when there is no player", async () => {
+    const harness = createHarness({ noMusic: true });
+    for (const name of ["now_playing", "show_queue", "skip", "search_music", "pause", "resume"]) {
+      const result = await harness.call(name);
+      expect(result.ok).toBe(false);
+      expect(String(result.error)).toMatch(/not enabled/u);
+    }
   });
 });
 

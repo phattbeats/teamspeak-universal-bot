@@ -53,7 +53,18 @@
       "compose_song",
       "band_status",
       "song_lyrics",
-      "replay_song"
+      "replay_song",
+      "now_playing",
+      "show_queue",
+      "skip",
+      "remove_from_queue",
+      "move_in_queue",
+      "clear_queue",
+      "search_music",
+      "play_source",
+      "pause",
+      "resume",
+      "seek"
     ]
   }
 }

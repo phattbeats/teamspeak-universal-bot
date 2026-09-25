@@ -109,19 +109,54 @@ needs an agent tool, **new** = build.
 | `leave_voice` / `join_voice` | have | |
 
 ### 4.2 Music queue (PHA-3635 gave us a queue the bot can't see)
+
+PHA-3785 shipped the "new" rows below against the existing `MusicPlayer`
+queue (`teamspeak-plugin/src/tools/music.ts`) — no second queue, same
+`ActiveStream`/`queue` the pacing-rules comment at the top of the file
+already documents. Tool defs and dispatch: `teamspeak-plugin/src/tools/registry.ts`;
+tests: `teamspeak-plugin/test/music.test.ts` and `test/tools.test.ts`.
+
 | Tool | Status | Notes |
 | --- | --- | --- |
 | `play_music` | have | queues when busy |
 | `stop_music`, `set_volume` | have | |
-| `now_playing` | new | title, requester, position, remaining |
-| `show_queue` | new | numbered list, requester per entry |
-| `skip` | new | next in queue (today `stop` drops the whole queue) |
-| `remove_from_queue` | new | by position or "mine" |
-| `move_in_queue` | new | reorder; "play Kai's next" |
-| `clear_queue` | new | |
-| `search_music` | new | return top-N candidates so the model can ask "which one"; today `ytsearch1:` picks blind |
-| `play_source` | new | explicit source: youtube, soundcloud, bandcamp, direct URL, local library, **Suno/band library** (`replay_song` already covers band) |
-| `seek`, `pause`/`resume` | new | ffmpeg lane supports it |
+| `now_playing` | have | title, requester, elapsed, paused |
+| `show_queue` | have | numbered list, requester per entry |
+| `skip` | have | next in queue — **distinct from `stop_music`/`clear_queue`**, see below |
+| `remove_from_queue` | have | by id (from `show_queue`) |
+| `move_in_queue` | have | reorder by id to a new 1-based position |
+| `clear_queue` | have | |
+| `search_music` | have | return top-N candidates so the model can ask "which one"; **never plays anything itself** |
+| `play_source` | have | explicit source: youtube, soundcloud, bandcamp, direct URL, local; **band-library is not backed yet, see notes** |
+| `seek`, `pause`/`resume` | have | ffmpeg lane supports it via reseek (`seek`) or wall-clock freeze (`pause`/`resume`) |
+
+#### 4.2.1 `skip` vs `stop_music` vs `clear_queue`
+
+Three different operations that are easy to conflate:
+- **`stop_music`** stops the current track *and clears the queue*. This is
+  "get out" — a deliberate reset, not a skip.
+- **`skip`** tears down only the current track and, if something is queued,
+  starts it. The rest of the queue is left alone. If nothing is queued it
+  behaves like `stop_music` (nothing left to advance to).
+- **`clear_queue`** empties the queue only; whatever is currently playing is
+  untouched. The inverse case of `skip` — it drops what's *waiting*, not
+  what's *playing*.
+
+#### 4.2.2 Per-tool detail
+
+| Tool | Params | Returns | Notes |
+| --- | --- | --- | --- |
+| `now_playing` | none | `{ playing, title?, source?, requestedBy?, elapsedMs?, paused? }` | `playing:false` when nothing is loaded |
+| `show_queue` | none | `{ count, queue: [{ position, id, title, requestedBy }] }` | read-only; never starts or changes playback |
+| `skip` | none | `{ skipped, nowPlaying?, remaining }` on success; `ok:false` if nothing is playing | does not clear the rest of the queue |
+| `remove_from_queue` | `id` (string, from `show_queue`) | `{ removed, remaining }` | `ok:false` for an unknown id |
+| `move_in_queue` | `id` (string), `position` (number, 1-based) | `{ queue: [{ position, id, title }] }` | clamps out-of-range positions to the ends of the queue |
+| `clear_queue` | none | `{ cleared }` (count removed) | current track keeps playing |
+| `search_music` | `query` (string), `limit` (number, optional, default 5, max 10) | `{ count, candidates: [{ title, id, url, durationSeconds?, channel? }] }` | a read-only `yt-dlp` `ytsearchN:` lookup; **never plays anything** — results come back as one structured batch, not narrated as separate chat/voice lines |
+| `play_source` | `source` (`youtube`\|`soundcloud`\|`bandcamp`\|`direct-url`\|`local`\|`band-library`), plus `query`/`url`/`file` as the source needs | `{ title, source }` or `{ queued, position, title, source }` | `bandcamp` has no yt-dlp search extractor and requires a direct URL; `band-library` currently has **no backing catalog** in this repo and fails with a clear "not available" error rather than fabricating a listing (scope omission, see PHA-3785 report) |
+| `pause` | none | `{ paused }` | `ok:false` if nothing is playing or it's already paused |
+| `resume` | none | `{ resumed }` | `ok:false` if nothing is paused |
+| `seek` | `seconds` (number, >= 0) | `{ title, seconds }` | restarts ffmpeg with `-ss` on the same resolved stream; `ok:false` if nothing is playing |
 
 ### 4.3 Moderation (gated: only on request from an allowed server group)
 | Tool | Status | Path |
