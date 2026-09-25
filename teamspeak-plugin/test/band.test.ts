@@ -51,6 +51,7 @@ class FakeMusic implements MusicController {
   nowPlaying: MusicTrack | undefined;
   queueLength = 0;
   volume = 0.6;
+  paused = false;
   readonly plays: MusicPlayRequest[] = [];
   failWith: Error | undefined;
 
@@ -60,6 +61,7 @@ class FakeMusic implements MusicController {
       throw this.failWith;
     }
     const track: MusicTrack = {
+      id: "t1",
       title: request.title ?? "song",
       streamUrl: request.file ?? request.url ?? "",
       request: request.title ?? "",
@@ -68,6 +70,10 @@ class FakeMusic implements MusicController {
     this.isPlaying = true;
     this.nowPlaying = track;
     return track;
+  }
+
+  async playSource(): Promise<MusicTrack> {
+    return this.play({});
   }
 
   stop(): boolean {
@@ -82,6 +88,58 @@ class FakeMusic implements MusicController {
   }
 
   close(): void {}
+
+  nowPlayingInfo() {
+    return this.nowPlaying ? { track: this.nowPlaying, elapsedMs: 0, paused: this.paused } : undefined;
+  }
+
+  listQueue(): MusicTrack[] {
+    return [];
+  }
+
+  skip(): MusicTrack | undefined {
+    this.isPlaying = false;
+    return undefined;
+  }
+
+  removeFromQueue(): MusicTrack | undefined {
+    return undefined;
+  }
+
+  moveInQueue(): MusicTrack[] {
+    return [];
+  }
+
+  clearQueue(): number {
+    return 0;
+  }
+
+  async search(): Promise<never[]> {
+    return [];
+  }
+
+  pause(): boolean {
+    if (!this.isPlaying || this.paused) {
+      return false;
+    }
+    this.paused = true;
+    return true;
+  }
+
+  resume(): boolean {
+    if (!this.paused) {
+      return false;
+    }
+    this.paused = false;
+    return true;
+  }
+
+  async seek(): Promise<MusicTrack> {
+    if (!this.nowPlaying) {
+      throw new Error("Nothing is playing to seek.");
+    }
+    return this.nowPlaying;
+  }
 }
 
 function config(overrides: Partial<ResolvedTeamSpeakBandConfig> = {}): ResolvedTeamSpeakBandConfig {

@@ -426,15 +426,35 @@ describe("the house band tells the agent when it settles (PHA-3601)", () => {
         nowPlaying: undefined,
         queueLength: 0,
         volume: 0.6,
+        paused: false,
         play: async (request) => ({
+          id: "t1",
           title: request.title ?? "song",
           streamUrl: request.file ?? "",
           request: request.title ?? "",
           isFile: Boolean(request.file),
         }),
+        playSource: async () => ({
+          id: "t1",
+          title: "song",
+          streamUrl: "",
+          request: "",
+        }),
         stop: () => false,
         setVolume: (volume) => volume,
         close: () => undefined,
+        nowPlayingInfo: () => undefined,
+        listQueue: () => [],
+        skip: () => undefined,
+        removeFromQueue: () => undefined,
+        moveInQueue: () => [],
+        clearQueue: () => 0,
+        search: async () => [],
+        pause: () => false,
+        resume: () => false,
+        seek: async () => {
+          throw new Error("Nothing is playing to seek.");
+        },
       }),
     };
   }

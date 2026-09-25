@@ -412,6 +412,7 @@ describe("MusicPlayer files (PHA-3554)", () => {
     });
     expect(harness.ytdlpCalls).toHaveLength(0);
     expect(track).toEqual({
+      id: expect.any(String),
       title: "Kai's Truck",
       streamUrl: "/songs/kais-truck.mp3",
       request: "Kai's Truck",
@@ -443,5 +444,299 @@ describe("MusicPlayer files (PHA-3554)", () => {
     const harness = createHarness();
     const track = await harness.player.play({ file: "/songs/2026-09-17-tuesday-again.mp3" });
     expect(track.title).toBe("2026-09-17-tuesday-again");
+  });
+});
+
+describe("MusicPlayer queue browsing (PHA-3785)", () => {
+  it("show_queue reflects previously-added tracks in order", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "first", enqueue: true });
+    await harness.player.play({ query: "second", enqueue: true, requestedBy: "Brandon" });
+    await harness.player.play({ query: "third", enqueue: true });
+
+    const queue = harness.player.listQueue();
+    expect(queue).toHaveLength(2);
+    expect(queue[0]?.request).toBe("second");
+    expect(queue[0]?.requestedBy).toBe("Brandon");
+    expect(queue[1]?.request).toBe("third");
+  });
+
+  it("skip advances to the next track without clearing the rest of the queue", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "first", enqueue: true });
+    await harness.player.play({ query: "second", enqueue: true });
+    await harness.player.play({ query: "third", enqueue: true });
+    expect(harness.player.queueLength).toBe(2);
+
+    const next = harness.player.skip();
+    expect(next?.request).toBe("second");
+    expect(harness.player.nowPlaying?.request).toBe("second");
+    // "third" is still queued — skip must not have cleared it.
+    expect(harness.player.queueLength).toBe(1);
+    expect(harness.player.listQueue()[0]?.request).toBe("third");
+    expect(harness.children[0]?.signals).toEqual(["SIGKILL"]);
+  });
+
+  it("skip with nothing queued behaves like stop: nothing left playing", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "first" });
+    const next = harness.player.skip();
+    expect(next).toBeUndefined();
+    expect(harness.player.isPlaying).toBe(false);
+  });
+
+  it("skip on an idle player is a no-op", () => {
+    const harness = createHarness();
+    expect(harness.player.skip()).toBeUndefined();
+  });
+
+  it("remove_from_queue removes only the targeted entry", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "first", enqueue: true });
+    const second = await harness.player.play({ query: "second", enqueue: true });
+    await harness.player.play({ query: "third", enqueue: true });
+
+    const removed = harness.player.removeFromQueue(second.id);
+    expect(removed?.request).toBe("second");
+    const remaining = harness.player.listQueue().map((track) => track.request);
+    expect(remaining).toEqual(["third"]);
+  });
+
+  it("remove_from_queue returns undefined for an unknown id", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "first", enqueue: true });
+    await harness.player.play({ query: "second", enqueue: true });
+    expect(harness.player.removeFromQueue("not-a-real-id")).toBeUndefined();
+    expect(harness.player.queueLength).toBe(1);
+  });
+
+  it("move_in_queue reorders a track to a new position", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "first", enqueue: true });
+    const second = await harness.player.play({ query: "second", enqueue: true });
+    await harness.player.play({ query: "third", enqueue: true });
+
+    const reordered = harness.player.moveInQueue(second.id, 2);
+    expect(reordered.map((track) => track.request)).toEqual(["third", "second"]);
+  });
+
+  it("move_in_queue throws for an unknown id", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "first", enqueue: true });
+    await harness.player.play({ query: "second", enqueue: true });
+    expect(() => harness.player.moveInQueue("nope", 1)).toThrow(MusicError);
+  });
+
+  it("clear_queue empties the queue without touching what's playing", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "first", enqueue: true });
+    await harness.player.play({ query: "second", enqueue: true });
+    await harness.player.play({ query: "third", enqueue: true });
+    expect(harness.player.queueLength).toBe(2);
+
+    const cleared = harness.player.clearQueue();
+    expect(cleared).toBe(2);
+    expect(harness.player.queueLength).toBe(0);
+    // Still playing "first" — clear_queue is not stop_music.
+    expect(harness.player.isPlaying).toBe(true);
+    expect(harness.player.nowPlaying?.request).toBe("first");
+    expect(harness.children[0]?.signals).toEqual([]);
+  });
+
+  it("now_playing (nowPlayingInfo) reports elapsed time and pause state", async () => {
+    const harness = createHarness({ prebufferMs: 20 });
+    await harness.player.play({ query: "smooth jazz", requestedBy: "Brandon" });
+    const child = harness.children[0];
+    child?.emitFrames(50);
+    harness.tick();
+
+    const info = harness.player.nowPlayingInfo();
+    expect(info?.track.requestedBy).toBe("Brandon");
+    expect(info?.paused).toBe(false);
+    expect(info?.elapsedMs).toBeGreaterThan(0);
+  });
+
+  it("now_playing reports undefined when nothing is loaded", () => {
+    const harness = createHarness();
+    expect(harness.player.nowPlayingInfo()).toBeUndefined();
+  });
+});
+
+describe("MusicPlayer search (PHA-3785)", () => {
+  it("search_music returns candidates without auto-playing anything", async () => {
+    const harness = createHarness({
+      resolve: {
+        code: 0,
+        stdout: [
+          "Song One\tabc123\t210\tChannel A\thttps://youtube.com/watch?v=abc123",
+          "Song Two\tdef456\t180\tChannel B\thttps://youtube.com/watch?v=def456",
+        ].join("\n"),
+        stderr: "",
+      },
+    });
+
+    const candidates = await harness.player.search("smooth jazz", 2);
+    expect(candidates).toEqual([
+      { title: "Song One", id: "abc123", url: "https://youtube.com/watch?v=abc123", durationSeconds: 210, channel: "Channel A" },
+      { title: "Song Two", id: "def456", url: "https://youtube.com/watch?v=def456", durationSeconds: 180, channel: "Channel B" },
+    ]);
+    // No ffmpeg spawned and nothing playing: search never plays.
+    expect(harness.children).toHaveLength(0);
+    expect(harness.player.isPlaying).toBe(false);
+    const call = harness.ytdlpCalls[0];
+    expect(call?.args).toContain("ytsearch2:smooth jazz");
+    expect(call?.args).toContain("--flat-playlist");
+  });
+
+  it("search_music rejects an empty query", async () => {
+    const harness = createHarness();
+    await expect(harness.player.search("   ", 5)).rejects.toBeInstanceOf(MusicError);
+    expect(harness.ytdlpCalls).toHaveLength(0);
+  });
+
+  it("search_music surfaces a yt-dlp failure", async () => {
+    const harness = createHarness({ resolve: { code: 1, stdout: "", stderr: "ERROR: blocked\n" } });
+    await expect(harness.player.search("x", 5)).rejects.toThrow(/blocked/u);
+  });
+});
+
+describe("MusicPlayer playSource (PHA-3785)", () => {
+  it("dispatches youtube by query through the normal search path", async () => {
+    const harness = createHarness();
+    const track = await harness.player.playSource({ source: "youtube", query: "smooth jazz" });
+    expect(track.title).toBe("Smooth Jazz Radio");
+    expect(harness.ytdlpCalls[0]?.args).toContain("ytsearch1:smooth jazz");
+  });
+
+  it("dispatches soundcloud by query through scsearch1", async () => {
+    const harness = createHarness();
+    await harness.player.playSource({ source: "soundcloud", query: "lofi beats" });
+    expect(harness.ytdlpCalls[0]?.args).toContain("scsearch1:lofi beats");
+  });
+
+  it("dispatches soundcloud by url directly", async () => {
+    const harness = createHarness();
+    await harness.player.playSource({ source: "soundcloud", url: "https://soundcloud.com/x/y" });
+    expect(harness.ytdlpCalls[0]?.args).toContain("https://soundcloud.com/x/y");
+  });
+
+  it("bandcamp requires a direct URL and refuses a bare query", async () => {
+    const harness = createHarness();
+    await expect(harness.player.playSource({ source: "bandcamp", query: "some album" })).rejects.toThrow(
+      /direct URL/u,
+    );
+    expect(harness.ytdlpCalls).toHaveLength(0);
+  });
+
+  it("bandcamp plays through when given a direct URL", async () => {
+    const harness = createHarness();
+    await harness.player.playSource({ source: "bandcamp", url: "https://band.bandcamp.com/track/x" });
+    expect(harness.ytdlpCalls[0]?.args).toContain("https://band.bandcamp.com/track/x");
+  });
+
+  it("direct-url requires a URL", async () => {
+    const harness = createHarness();
+    await expect(harness.player.playSource({ source: "direct-url" })).rejects.toBeInstanceOf(MusicError);
+  });
+
+  it("local dispatches to the file path, skipping yt-dlp", async () => {
+    const harness = createHarness();
+    const track = await harness.player.playSource({ source: "local", file: "/songs/x.mp3" });
+    expect(track.isFile).toBe(true);
+    expect(harness.ytdlpCalls).toHaveLength(0);
+  });
+
+  it("local without a file path fails clearly", async () => {
+    const harness = createHarness();
+    await expect(harness.player.playSource({ source: "local" })).rejects.toBeInstanceOf(MusicError);
+  });
+
+  it("band-library fails gracefully: no backing catalog, no fabricated data", async () => {
+    const harness = createHarness();
+    await expect(harness.player.playSource({ source: "band-library" })).rejects.toThrow(
+      /not available/u,
+    );
+    expect(harness.ytdlpCalls).toHaveLength(0);
+    expect(harness.player.isPlaying).toBe(false);
+  });
+});
+
+describe("MusicPlayer transport: pause/resume/seek (PHA-3785)", () => {
+  it("pause freezes pacing without killing ffmpeg", async () => {
+    const harness = createHarness({ prebufferMs: 20 });
+    await harness.player.play({ query: "smooth jazz" });
+    const child = harness.children[0];
+    child?.emitFrames(50);
+    harness.tick();
+    const sentBeforePause = harness.music.length;
+
+    expect(harness.player.pause()).toBe(true);
+    expect(harness.player.paused).toBe(true);
+    harness.advance(10 * MUSIC_FRAME_MS);
+    harness.tick();
+    // No new frames while paused, and ffmpeg is still alive (never killed).
+    expect(harness.music).toHaveLength(sentBeforePause);
+    expect(child?.signals).toEqual([]);
+  });
+
+  it("pause on an already-paused or idle player returns false", async () => {
+    const harness = createHarness();
+    expect(harness.player.pause()).toBe(false);
+    await harness.player.play({ query: "smooth jazz" });
+    expect(harness.player.pause()).toBe(true);
+    expect(harness.player.pause()).toBe(false);
+  });
+
+  it("resume continues pacing from where it paused, not from the start", async () => {
+    const harness = createHarness({ prebufferMs: 20 });
+    await harness.player.play({ query: "smooth jazz" });
+    const child = harness.children[0];
+    child?.emitFrames(200);
+    harness.tick();
+    const sentBeforePause = harness.music.length;
+
+    harness.player.pause();
+    harness.advance(500); // time passes while paused; must not count toward pacing
+    harness.tick();
+    expect(harness.music).toHaveLength(sentBeforePause);
+
+    expect(harness.player.resume()).toBe(true);
+    expect(harness.player.paused).toBe(false);
+    harness.advance(5 * MUSIC_FRAME_MS);
+    harness.tick();
+    expect(harness.music.length).toBeGreaterThan(sentBeforePause);
+  });
+
+  it("resume with nothing paused returns false", () => {
+    const harness = createHarness();
+    expect(harness.player.resume()).toBe(false);
+  });
+
+  it("seek restarts ffmpeg with -ss and seeds pacing at the offset", async () => {
+    const harness = createHarness({ prebufferMs: 20 });
+    await harness.player.play({ query: "smooth jazz" });
+    const firstChild = harness.children[0];
+
+    const track = await harness.player.seek(90);
+    expect(track.title).toBe("Smooth Jazz Radio");
+    expect(firstChild?.signals).toEqual(["SIGKILL"]);
+    expect(harness.children).toHaveLength(2);
+    const secondChild = harness.children[1];
+    expect(secondChild?.args).toContain("-ss");
+    expect(secondChild?.args).toContain("90");
+
+    const info = harness.player.nowPlayingInfo();
+    expect(info?.elapsedMs).toBeGreaterThanOrEqual(90_000);
+  });
+
+  it("seek with nothing playing fails clearly", async () => {
+    const harness = createHarness();
+    await expect(harness.player.seek(10)).rejects.toThrow(/Nothing is playing/u);
+  });
+
+  it("seek rejects a negative timestamp", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "smooth jazz" });
+    await expect(harness.player.seek(-5)).rejects.toBeInstanceOf(MusicError);
   });
 });

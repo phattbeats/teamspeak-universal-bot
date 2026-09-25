@@ -28,7 +28,7 @@ import type { TeamSpeakRealtimeToolRegistration } from "../voice/realtime-speake
 import { readChannelLog, type ReadChannelLog } from "./catch-up.js";
 import type { BandController } from "./band.js";
 import { readSinger } from "./band-vibe.js";
-import type { MusicController } from "./music.js";
+import type { MusicController, MusicSourceKind } from "./music.js";
 
 export const PLAY_MUSIC_TOOL = "play_music";
 export const STOP_MUSIC_TOOL = "stop_music";
@@ -42,6 +42,28 @@ export const COMPOSE_SONG_TOOL = "compose_song";
 export const BAND_STATUS_TOOL = "band_status";
 export const SONG_LYRICS_TOOL = "song_lyrics";
 export const REPLAY_SONG_TOOL = "replay_song";
+
+// --- music queue v2 (PHA-3785) ---------------------------------------------
+export const NOW_PLAYING_TOOL = "now_playing";
+export const SHOW_QUEUE_TOOL = "show_queue";
+export const SKIP_TOOL = "skip";
+export const REMOVE_FROM_QUEUE_TOOL = "remove_from_queue";
+export const MOVE_IN_QUEUE_TOOL = "move_in_queue";
+export const CLEAR_QUEUE_TOOL = "clear_queue";
+export const SEARCH_MUSIC_TOOL = "search_music";
+export const PLAY_SOURCE_TOOL = "play_source";
+export const PAUSE_TOOL = "pause";
+export const RESUME_TOOL = "resume";
+export const SEEK_TOOL = "seek";
+
+const MUSIC_SOURCE_KINDS: MusicSourceKind[] = [
+  "youtube",
+  "soundcloud",
+  "bandcamp",
+  "direct-url",
+  "local",
+  "band-library",
+];
 
 const MAX_CATCH_UP_MINUTES = 720;
 
@@ -131,6 +153,116 @@ export function buildTeamSpeakTools(options: {
             volume: { type: "number", description: "Volume between 0 and 1." },
           },
           required: ["volume"],
+        },
+      },
+      {
+        type: "function",
+        name: NOW_PLAYING_TOOL,
+        description: "What's currently playing: title, source, who requested it, and elapsed time.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: SHOW_QUEUE_TOOL,
+        description:
+          "List what's queued up behind the current track, in order. Read-only — this never starts or changes playback. Read the list back as one summary, not one message per song.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: SKIP_TOOL,
+        description:
+          "Skip the current track and move on to the next queued one, if any. Unlike stop_music, this does NOT clear the rest of the queue — it only advances past the current track. If nothing is queued, this just stops, same as stop_music.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: REMOVE_FROM_QUEUE_TOOL,
+        description: "Remove one specific track from the queue by its id (from show_queue), without touching anything else queued or currently playing.",
+        parameters: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "The track id, from show_queue." },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        type: "function",
+        name: MOVE_IN_QUEUE_TOOL,
+        description: "Reorder one queued track to a new 1-based position in the queue.",
+        parameters: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "The track id, from show_queue." },
+            position: { type: "number", description: "New 1-based position in the queue." },
+          },
+          required: ["id", "position"],
+        },
+      },
+      {
+        type: "function",
+        name: CLEAR_QUEUE_TOOL,
+        description:
+          "Empty the queue entirely, without stopping or skipping whatever is currently playing. Distinct from skip (which advances one track) and stop_music (which also stops playback).",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: SEARCH_MUSIC_TOOL,
+        description:
+          "Search for music and get back a short list of candidates (title, id/url, duration, channel) to choose from. This NEVER plays anything by itself — follow up with play_source (or play_music) once a choice is made. Return the results as one structured list in your reply; do not narrate them as separate lines or read every result aloud.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "What to search for." },
+            limit: { type: "number", description: "How many candidates to return, up to 10. Defaults to 5." },
+          },
+          required: ["query"],
+        },
+      },
+      {
+        type: "function",
+        name: PLAY_SOURCE_TOOL,
+        description:
+          "Play from an explicit source instead of a plain search. Sources: youtube, soundcloud, bandcamp, direct-url, local, band-library. bandcamp requires a direct url (no search). band-library may not be available on this Sexton. Queues behind what's already playing unless nothing is playing.",
+        parameters: {
+          type: "object",
+          properties: {
+            source: {
+              type: "string",
+              enum: MUSIC_SOURCE_KINDS,
+              description: "Which source to play from.",
+            },
+            query: { type: "string", description: "A search phrase, for sources that support search." },
+            url: { type: "string", description: "A direct URL, for sources that need or accept one." },
+            file: { type: "string", description: "A local file path, for the local source." },
+          },
+          required: ["source"],
+        },
+      },
+      {
+        type: "function",
+        name: PAUSE_TOOL,
+        description: "Pause the current track in place. Use resume to pick back up where it left off.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: RESUME_TOOL,
+        description: "Resume a paused track from where it was paused.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: SEEK_TOOL,
+        description: "Jump to a specific timestamp in the current track.",
+        parameters: {
+          type: "object",
+          properties: {
+            seconds: { type: "number", description: "Timestamp to seek to, in seconds from the start." },
+          },
+          required: ["seconds"],
         },
       },
     );
@@ -314,6 +446,28 @@ async function dispatch(
       return stopMusic(deps);
     case SET_VOLUME_TOOL:
       return setVolume(deps, args);
+    case NOW_PLAYING_TOOL:
+      return nowPlaying(deps);
+    case SHOW_QUEUE_TOOL:
+      return showQueue(deps);
+    case SKIP_TOOL:
+      return skipTrack(deps);
+    case REMOVE_FROM_QUEUE_TOOL:
+      return removeFromQueue(deps, args);
+    case MOVE_IN_QUEUE_TOOL:
+      return moveInQueue(deps, args);
+    case CLEAR_QUEUE_TOOL:
+      return clearQueue(deps);
+    case SEARCH_MUSIC_TOOL:
+      return await searchMusic(deps, args);
+    case PLAY_SOURCE_TOOL:
+      return await playSource(deps, args, context);
+    case PAUSE_TOOL:
+      return pauseMusic(deps);
+    case RESUME_TOOL:
+      return resumeMusic(deps);
+    case SEEK_TOOL:
+      return await seekMusic(deps, args);
     case WHAT_DID_I_MISS_TOOL:
       return await whatDidIMiss(deps, args);
     case WHO_IS_HERE_TOOL:
@@ -476,6 +630,203 @@ function setVolume(deps: TeamSpeakToolDeps, args: Record<string, unknown>): Tool
   // A percentage is the likelier reading of "set the volume to 40" than 40x.
   const normalized = requested > 1 && requested <= 100 ? requested / 100 : requested;
   return { ok: true, volume: music.setVolume(normalized) };
+}
+
+// --- music queue v2 (PHA-3785) ---------------------------------------------
+
+function nowPlaying(deps: TeamSpeakToolDeps): ToolResult {
+  const music = deps.music;
+  if (!music) {
+    return { ok: false, error: "Music playback is not enabled on this Sexton." };
+  }
+  const info = music.nowPlayingInfo();
+  if (!info) {
+    return { ok: true, playing: false };
+  }
+  return {
+    ok: true,
+    playing: true,
+    title: info.track.title,
+    source: info.track.isFile ? "file" : "stream",
+    requestedBy: info.track.requestedBy,
+    elapsedMs: info.elapsedMs,
+    paused: info.paused,
+  };
+}
+
+function showQueue(deps: TeamSpeakToolDeps): ToolResult {
+  const music = deps.music;
+  if (!music) {
+    return { ok: false, error: "Music playback is not enabled on this Sexton." };
+  }
+  const queue = music.listQueue();
+  return {
+    ok: true,
+    count: queue.length,
+    queue: queue.map((track, index) => ({
+      position: index + 1,
+      id: track.id,
+      title: track.title,
+      requestedBy: track.requestedBy,
+    })),
+  };
+}
+
+function skipTrack(deps: TeamSpeakToolDeps): ToolResult {
+  const music = deps.music;
+  if (!music) {
+    return { ok: false, error: "Music playback is not enabled on this Sexton." };
+  }
+  if (!music.isPlaying) {
+    return { ok: false, error: "Nothing is playing to skip." };
+  }
+  const next = music.skip();
+  return next
+    ? { ok: true, skipped: true, nowPlaying: next.title, remaining: music.queueLength }
+    : { ok: true, skipped: true, nowPlaying: undefined, remaining: 0 };
+}
+
+function removeFromQueue(deps: TeamSpeakToolDeps, args: Record<string, unknown>): ToolResult {
+  const music = deps.music;
+  if (!music) {
+    return { ok: false, error: "Music playback is not enabled on this Sexton." };
+  }
+  const id = readString(args.id);
+  if (!id) {
+    return { ok: false, error: "Say which track to remove (id, from show_queue)." };
+  }
+  const removed = music.removeFromQueue(id);
+  if (!removed) {
+    return { ok: false, error: `No queued track with id "${id}".` };
+  }
+  return { ok: true, removed: removed.title, remaining: music.queueLength };
+}
+
+function moveInQueue(deps: TeamSpeakToolDeps, args: Record<string, unknown>): ToolResult {
+  const music = deps.music;
+  if (!music) {
+    return { ok: false, error: "Music playback is not enabled on this Sexton." };
+  }
+  const id = readString(args.id);
+  const position = readNumber(args.position);
+  if (!id || position === undefined) {
+    return { ok: false, error: "Say which track (id) and the new position." };
+  }
+  try {
+    const queue = music.moveInQueue(id, position);
+    return {
+      ok: true,
+      queue: queue.map((track, index) => ({ position: index + 1, id: track.id, title: track.title })),
+    };
+  } catch (error) {
+    return { ok: false, error: describe(error) };
+  }
+}
+
+function clearQueue(deps: TeamSpeakToolDeps): ToolResult {
+  const music = deps.music;
+  if (!music) {
+    return { ok: false, error: "Music playback is not enabled on this Sexton." };
+  }
+  const cleared = music.clearQueue();
+  return { ok: true, cleared };
+}
+
+async function searchMusic(deps: TeamSpeakToolDeps, args: Record<string, unknown>): Promise<ToolResult> {
+  const music = deps.music;
+  if (!music) {
+    return { ok: false, error: "Music playback is not enabled on this Sexton." };
+  }
+  const query = readString(args.query);
+  if (!query) {
+    return { ok: false, error: "Say what to search for." };
+  }
+  const limit = readNumber(args.limit) ?? 5;
+  try {
+    const candidates = await music.search(query, limit);
+    return {
+      ok: true,
+      count: candidates.length,
+      candidates: candidates.map((candidate) => ({
+        title: candidate.title,
+        id: candidate.id,
+        url: candidate.url,
+        durationSeconds: candidate.durationSeconds,
+        channel: candidate.channel,
+      })),
+    };
+  } catch (error) {
+    return { ok: false, error: describe(error) };
+  }
+}
+
+async function playSource(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): Promise<ToolResult> {
+  const music = deps.music;
+  if (!music) {
+    return { ok: false, error: "Music playback is not enabled on this Sexton." };
+  }
+  const source = readString(args.source);
+  if (!source) {
+    return { ok: false, error: "Say which source: youtube, soundcloud, bandcamp, direct-url, local, or band-library." };
+  }
+  const query = readString(args.query);
+  const url = readString(args.url);
+  const file = readString(args.file);
+  try {
+    const track = await music.playSource({
+      source: source as MusicSourceKind,
+      ...(query ? { query } : {}),
+      ...(url ? { url } : {}),
+      ...(file ? { file } : {}),
+      requestedBy: context.nickname,
+      enqueue: true,
+    });
+    if (track.queuedPosition !== undefined) {
+      return { ok: true, queued: true, position: track.queuedPosition, title: track.title, source };
+    }
+    return { ok: true, title: track.title, source };
+  } catch (error) {
+    return { ok: false, error: describe(error) };
+  }
+}
+
+function pauseMusic(deps: TeamSpeakToolDeps): ToolResult {
+  const music = deps.music;
+  if (!music) {
+    return { ok: false, error: "Music playback is not enabled on this Sexton." };
+  }
+  const paused = music.pause();
+  return { ok: paused, paused, ...(paused ? {} : { error: "Nothing is playing, or it's already paused." }) };
+}
+
+function resumeMusic(deps: TeamSpeakToolDeps): ToolResult {
+  const music = deps.music;
+  if (!music) {
+    return { ok: false, error: "Music playback is not enabled on this Sexton." };
+  }
+  const resumed = music.resume();
+  return { ok: resumed, resumed, ...(resumed ? {} : { error: "Nothing is paused." }) };
+}
+
+async function seekMusic(deps: TeamSpeakToolDeps, args: Record<string, unknown>): Promise<ToolResult> {
+  const music = deps.music;
+  if (!music) {
+    return { ok: false, error: "Music playback is not enabled on this Sexton." };
+  }
+  const seconds = readNumber(args.seconds);
+  if (seconds === undefined) {
+    return { ok: false, error: "Give a timestamp in seconds." };
+  }
+  try {
+    const track = await music.seek(seconds);
+    return { ok: true, title: track.title, seconds };
+  } catch (error) {
+    return { ok: false, error: describe(error) };
+  }
 }
 
 async function whatDidIMiss(
