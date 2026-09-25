@@ -36,6 +36,9 @@ tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45
 # Needed directly (not just via tsclientlib) for the `AudioData`/`CodecType`/
 # `OutAudio` types the outbound Opus tick builds by hand — same pin, so this
 # is the exact crate version tsclientlib itself compiles against.
+# `time` 0.3 is the crate tsclientlib's generated message structs use for
+# duration fields (e.g. `OutBanClientPart::time`); needed to build a ban length.
+time = "0.3"
 tsproto-packets = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5" }
 
 # PHA-3342: bridge-proto's BridgeEvent/BridgeCommand/Snapshot vocabulary is

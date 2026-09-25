@@ -1694,7 +1694,9 @@ async fn handle_bridge_command(
         BridgeCommand::BanClient { client_id, duration_secs, reason } => {
             let part = OutBanClientPart {
                 client_id: ClientId(client_id),
-                time: duration_secs.map(Duration::from_secs),
+                // `OutBanClientPart::time` is a `time::Duration` (the `time` 0.3 crate
+                // tsclientlib generates its message structs against), not `std`'s.
+                time: duration_secs.map(|s| time::Duration::seconds(s as i64)),
                 ban_reason: reason.as_deref().map(std::borrow::Cow::Borrowed),
             };
             let cmd = OutBanClientMessage::new(&mut std::iter::once(part));
@@ -1774,7 +1776,6 @@ async fn handle_bridge_command(
                 codec: None,
                 codec_quality: None,
                 needed_talk_power: None,
-                icon: None,
                 max_clients: None,
                 max_family_clients: None,
                 codec_latency_factor: None,
