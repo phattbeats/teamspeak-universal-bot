@@ -1,0 +1,13 @@
+{
+  "voiceId": "English_BossyLeader",
+  "wakeNames": [
+    "Bexton",
+    "band leader",
+    "maestro"
+  ],
+  "wakeAliases": [],
+  "excludeWakeNames": [
+    "Sexton",
+    "Henchman"
+  ]
+}

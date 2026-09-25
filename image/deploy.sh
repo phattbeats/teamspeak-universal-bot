@@ -20,11 +20,20 @@
 set -euo pipefail
 
 IMAGE=${IMAGE:-phattbeats/sexton:latest}
-NAME=${NAME:-sexton}
+# PHA-3791: one universal image, N persona packs (personas/<name>/, see
+# docs/universal-bot/TOOL-CATALOG.md section 3). PERSONA picks which one this
+# deploy is for; NAME/APPDATA/AGENT_ID/NICK below derive from it. Everything
+# else in this script (network, ports, gateway machinery) stays persona-blind
+# on purpose. image/deploy-bexton.sh sets PERSONA=bexton and execs this file;
+# a bare `image/deploy.sh` with nothing set is unchanged from before this
+# refactor — PERSONA defaults to sexton and every derived default below
+# reproduces exactly what was hardcoded here previously.
+PERSONA=${PERSONA:-sexton}
+NAME=${NAME:-$PERSONA}
 NETWORK=${NETWORK:-phattvip}
-APPDATA=${APPDATA:-/mnt/user/appdata/sexton}
+APPDATA=${APPDATA:-/mnt/user/appdata/$PERSONA}
 CHANNEL=${CHANNEL:-General Shit}
-NICK=${NICK:-Sexton}
+NICK=${NICK:-${PERSONA^}}
 TS_HOST=${TS_HOST:-teamspeak6-server}
 TS_PORT=${TS_PORT:-9987}
 WHISPER_THREADS=${WHISPER_THREADS:-4}
@@ -62,20 +71,40 @@ IMPORT_GATEWAY_CONFIG=${IMPORT_GATEWAY_CONFIG:-1}
 # model and the TTS voice that are known to work on this lane.
 IMPORT_FROM=${IMPORT_FROM:-$MAIN_GATEWAY}
 IMPORT_CONFIG_PATH=${IMPORT_CONFIG_PATH:-/root/.openclaw/openclaw.json}
-# PHA-3554: a persona other than the Sexton in this container. Empty = the
-# Sexton. See image/deploy-bexton.sh for the values.
-AGENT_ID=${AGENT_ID:-}
+# PHA-3554/PHA-3791: the OpenClaw agent id this container's channel binds to.
+# Empty = the Sexton (run-gateway.sh's AGENT_ID_EFFECTIVE default), which is
+# also its own agent id in the imported main-gateway config — that is why the
+# Sexton stays empty here rather than becoming the literal string "sexton".
+# A second persona's agent id is just its PERSONA name.
+AGENT_ID=${AGENT_ID:-$([ "$PERSONA" = sexton ] && echo "" || echo "$PERSONA")}
 WAKE_NAMES=${WAKE_NAMES:-}
-# PHA-3605: exact whisper hearings accepted as the name, and the other bot's
-# names that must NOT wake this one. Defaults are the Sexton's; a second
-# persona sets both (empty is a valid value: WAKE_ALIASES= to have none).
-WAKE_ALIASES=${WAKE_ALIASES-section,sections,sex and,sexin,saxton,sex ton,sex done}
-EXCLUDE_WAKE_NAMES=${EXCLUDE_WAKE_NAMES-Bexton,band leader,maestro}
-# MiniMax voice id for this persona; empty keeps the imported tts block's.
+# PHA-3605/PHA-3791: exact whisper hearings accepted as the name, and the
+# other bot's names that must NOT wake this one. These used to be hardcoded
+# to the Sexton's values unconditionally; now only the Sexton gets that
+# literal default. A non-Sexton persona with no explicit override is left
+# empty here so run-gateway.sh's persona-pack fallback (personas/<id>/
+# voice.json, staged at /opt/sexton-persona/<id>.config/ by image/Dockerfile)
+# is what supplies its wake aliases/excludes — see that script's step 3.
+# Explicit env overrides still win either way (empty is a valid explicit
+# value: WAKE_ALIASES= to force none).
+if [ "$PERSONA" = sexton ]; then
+  WAKE_ALIASES=${WAKE_ALIASES-section,sections,sex and,sexin,saxton,sex ton,sex done}
+  EXCLUDE_WAKE_NAMES=${EXCLUDE_WAKE_NAMES-Bexton,band leader,maestro}
+  BAND_ENABLED=${BAND_ENABLED:-0}
+  BAND_PROVIDER=${BAND_PROVIDER:-minimax}
+else
+  WAKE_ALIASES=${WAKE_ALIASES-}
+  EXCLUDE_WAKE_NAMES=${EXCLUDE_WAKE_NAMES-}
+  BAND_ENABLED=${BAND_ENABLED-}
+  BAND_PROVIDER=${BAND_PROVIDER-}
+fi
+# MiniMax voice id for this persona; empty keeps the imported tts block's
+# (or, for a non-Sexton persona, whatever personas/<id>/voice.json says).
 TTS_VOICE_ID=${TTS_VOICE_ID:-}
-BAND_ENABLED=${BAND_ENABLED:-0}
-BAND_PROVIDER=${BAND_PROVIDER:-minimax}
-AVATAR=${AVATAR:-/usr/local/share/sexton-avatar/brandon.png}
+# Baked into the image at /usr/local/share/sexton-avatar/<persona>.png by
+# image/Dockerfile, except the Sexton's, which keeps its pre-persona-pack
+# filename (brandon.png) so this default needs no change for the live bot.
+AVATAR=${AVATAR:-/usr/local/share/sexton-avatar/$([ "$PERSONA" = sexton ] && echo brandon.png || echo "$PERSONA.png")}
 # PHA-3573: suppress the catch-up recap for a second persona sharing the
 # Sexton's channel (image/deploy-bexton.sh sets this) — the welcome PM still
 # fires. Default off, so the Sexton itself is unaffected.
@@ -204,13 +233,13 @@ docker run -d \
   -e SEXTON_GATEWAY_ENABLED="$GATEWAY_ENABLED" \
   -e SEXTON_GATEWAY_PORT="$GATEWAY_PORT" \
   -e SEXTON_AGENT_ID="$AGENT_ID" \
-  -e SEXTON_WAKE_NAMES="$WAKE_NAMES" \
-  -e SEXTON_WAKE_ALIASES="$WAKE_ALIASES" \
-  -e SEXTON_EXCLUDE_WAKE_NAMES="$EXCLUDE_WAKE_NAMES" \
+  ${WAKE_NAMES:+-e SEXTON_WAKE_NAMES="$WAKE_NAMES"} \
+  ${WAKE_ALIASES:+-e SEXTON_WAKE_ALIASES="$WAKE_ALIASES"} \
+  ${EXCLUDE_WAKE_NAMES:+-e SEXTON_EXCLUDE_WAKE_NAMES="$EXCLUDE_WAKE_NAMES"} \
   -e SEXTON_NO_CATCHUP="$SEXTON_NO_CATCHUP" \
   ${TTS_VOICE_ID:+-e SEXTON_TTS_VOICE_ID="$TTS_VOICE_ID"} \
-  -e SEXTON_BAND_ENABLED="$BAND_ENABLED" \
-  -e SEXTON_BAND_PROVIDER="$BAND_PROVIDER" \
+  ${BAND_ENABLED:+-e SEXTON_BAND_ENABLED="$BAND_ENABLED"} \
+  ${BAND_PROVIDER:+-e SEXTON_BAND_PROVIDER="$BAND_PROVIDER"} \
   ${BAND_NAME:+-e SEXTON_BAND_NAME="$BAND_NAME"} \
   ${BAND_ALIASES+-e SEXTON_BAND_ALIASES="$BAND_ALIASES"} \
   ${BAND_SUNO_API_URL:+-e SEXTON_BAND_SUNO_API_URL="$BAND_SUNO_API_URL"} \
