@@ -132,29 +132,41 @@ if [ -s "$IMPORT_FILE" ]; then
   rm -f "$IMPORT_FILE"
 fi
 
-# --- 1c. a persona of our own (PHA-3554: Bexton) ---
+# --- 1c. a persona of our own (PHA-3554: Bexton; PHA-3787: the Sexton itself) ---
 #
 # The sexton image is also the Bexton image: same binary, same bridge, same
 # gateway, a different agent in the chair. SEXTON_AGENT_ID names the agent this
 # container's teamspeak channel binds to, and SEXTON_PERSONA_DIR is a directory
-# of workspace files (AGENTS.md, SOUL.md, IDENTITY.md) baked into the image for
-# it. Both are first-boot seeds: the workspace is copied only if the agent has
-# none yet, and the agent entry + binding are written only if absent, so an
-# operator's later edits to either survive every restart.
+# of workspace files (AGENTS.md, SOUL.md, IDENTITY.md, HUMAN.md) baked into the
+# image for it. Both are first-boot seeds: the workspace is copied only if the
+# agent has none yet, and the agent entry + binding are written only if absent,
+# so an operator's later edits to either survive every restart.
 #
-# The model block is copied from whatever agent the imported config already
-# routes teamspeak to (the Sexton, on this box), then from agents.defaults, so
-# a new persona inherits the credentials that are known to work here rather
-# than the main gateway's MiniMax-M3 default, which produces no speakable
-# payload on this lane.
+# PHA-3787 finding: this block used to skip entirely for SEXTON_AGENT_ID=sexton
+# (the default), on the theory that the Sexton's own agent entry always already
+# existed from the imported main-gateway config. That left its *workspace* with
+# nothing seeding it, so OpenClaw's own first-conversation prompts
+# ("_Fill this in during your first conversation_") sat there unfilled forever
+# — a bot with no human to have that first conversation with. That is the
+# "stuck up, not human" voice Brandon flagged. The workspace seed below now
+# runs unconditionally (default agent id "sexton" when unset); only the
+# agents.entries/binding creation stays gated to a second persona, since the
+# Sexton's own entry and binding already come from the imported config.
+AGENT_ID_EFFECTIVE="${SEXTON_AGENT_ID:-sexton}"
+PERSONA_DIR="${SEXTON_PERSONA_DIR:-/opt/sexton-persona/${AGENT_ID_EFFECTIVE}}"
+WS="${OPENCLAW_STATE_DIR}/workspace/agents/${AGENT_ID_EFFECTIVE}"
+if [ ! -d "$WS" ] && [ -d "$PERSONA_DIR" ]; then
+  echo "run-gateway: seeding the ${AGENT_ID_EFFECTIVE} workspace from ${PERSONA_DIR}"
+  mkdir -p "$WS"
+  cp -a "$PERSONA_DIR"/. "$WS"/
+fi
+# HUMAN.md is shared infrastructure, not persona content an operator hand-edits
+# per bot — always sync it from the image, even onto a workspace that already
+# exists, so a HUMAN.md fix ships without every persona needing re-seeding.
+if [ -d "$WS" ] && [ -f "${PERSONA_DIR}/HUMAN.md" ]; then
+  cp -f "${PERSONA_DIR}/HUMAN.md" "$WS/HUMAN.md"
+fi
 if [ -n "${SEXTON_AGENT_ID:-}" ] && [ "${SEXTON_AGENT_ID}" != "sexton" ]; then
-  PERSONA_DIR="${SEXTON_PERSONA_DIR:-/opt/sexton-persona/${SEXTON_AGENT_ID}}"
-  WS="${OPENCLAW_STATE_DIR}/workspace/agents/${SEXTON_AGENT_ID}"
-  if [ ! -d "$WS" ] && [ -d "$PERSONA_DIR" ]; then
-    echo "run-gateway: seeding the ${SEXTON_AGENT_ID} workspace from ${PERSONA_DIR}"
-    mkdir -p "$WS"
-    cp -a "$PERSONA_DIR"/. "$WS"/
-  fi
   mkdir -p "$WS"
   node -e '
     const fs = require("fs");

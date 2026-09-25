@@ -312,10 +312,17 @@ COPY --from=plugin-builder /plugin/ /opt/openclaw-teamspeak-plugin/
 
 COPY image/supervisord.conf          /etc/supervisor/conf.d/sexton.conf
 COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json
+# PHA-3787: the Sexton's own persona, seeded the same way Bexton's already was
+# — this is the fix for "Sexton has no persona," see image/sexton/workspace.
+COPY image/sexton/workspace/           /opt/sexton-persona/sexton/
 # PHA-3554: the Bexton persona, seeded into the gateway workspace on first boot
 # when SEXTON_AGENT_ID=bexton. Same image, different agent in the chair.
 COPY image/bexton/workspace/           /opt/sexton-persona/bexton/
 COPY image/bexton/avatar/bexton.png    /usr/local/share/sexton-avatar/bexton.png
+# PHA-3787: HUMAN.md is shared by every persona — copied into both persona
+# directories from one source so there is exactly one copy to edit.
+COPY image/workspace-common/HUMAN.md   /opt/sexton-persona/sexton/HUMAN.md
+COPY image/workspace-common/HUMAN.md   /opt/sexton-persona/bexton/HUMAN.md
 COPY image/run-sexton.sh             /usr/local/bin/run-sexton
 COPY image/run-whisper.sh            /usr/local/bin/run-whisper
 COPY image/run-pot.sh                /usr/local/bin/run-pot

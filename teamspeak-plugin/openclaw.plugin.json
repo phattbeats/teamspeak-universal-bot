@@ -79,7 +79,12 @@
       "list_channels",
       "move_to_channel",
       "where_is",
-      "send_text"
+      "send_text",
+      "show_persona",
+      "edit_persona",
+      "set_voice",
+      "set_wake_names",
+      "set_follow_up_window"
     ]
   }
 }
