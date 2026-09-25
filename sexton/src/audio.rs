@@ -379,6 +379,22 @@ fn resolve_server_group_names(
         .collect()
 }
 
+/// Every channel on the server with who currently occupies it (PHA-3784).
+/// `build_roster` above only ever looked at the Sexton's own channel because
+/// nothing needed more; `list_channels`/`where_is`/`move_to_channel(follow=
+/// ...)` do.
+pub fn build_channel_tree(state: &tsclientlib::data::Connection) -> Vec<bridge_proto::ChannelInfo> {
+    state
+        .channels
+        .iter()
+        .map(|(id, ch)| bridge_proto::ChannelInfo {
+            channel_id: id.0,
+            name: ch.name.clone(),
+            occupants: build_roster(state, *id),
+        })
+        .collect()
+}
+
 fn roster_signature(roster: &[RosterEntry]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();

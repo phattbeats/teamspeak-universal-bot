@@ -25,6 +25,8 @@ export const TYPE_TEXT_MESSAGE = 0x05;
 export const TYPE_STATE = 0x06;
 /** Answer to any moderation command below (PHA-3786). */
 export const TYPE_MODERATION_RESULT = 0x07;
+/** Answer to `TYPE_LIST_CHANNELS` (PHA-3784): the full channel tree with occupants. */
+export const TYPE_CHANNEL_TREE = 0x08;
 
 /** Frames we send to the bridge. */
 export const TYPE_VOICE_AUDIO = 0x81;
@@ -49,6 +51,9 @@ export const TYPE_CHANNEL_CREATE = 0x91;
 export const TYPE_CHANNEL_DELETE = 0x92;
 export const TYPE_SERVER_EDIT = 0x93;
 export const TYPE_SERVER_GROUP_ADD_CLIENT = 0x94;
+
+/** Ask for the current channel tree; the bridge answers with `TYPE_CHANNEL_TREE` (PHA-3784). */
+export const TYPE_LIST_CHANNELS = 0x95;
 
 const FRAME_PREFIX_BYTES = 5;
 
@@ -88,6 +93,13 @@ export type ModerationResult = {
   action: string;
   ok: boolean;
   detail: string;
+};
+
+/** One channel and who is currently in it (PHA-3784, `TYPE_CHANNEL_TREE`). */
+export type ChannelInfo = {
+  channelId: number;
+  name: string;
+  occupants: RosterEntry[];
 };
 
 export type TextMessageHeader = {
@@ -228,6 +240,36 @@ export function readModerationResult(header: unknown): ModerationResult | undefi
     ok: header.ok,
     detail: typeof header.detail === "string" ? header.detail : "",
   };
+}
+
+function readOneChannel(raw: unknown): ChannelInfo | undefined {
+  if (!isRecord(raw) || typeof raw.name !== "string") {
+    return undefined;
+  }
+  const channelId = typeof raw.channelId === "number" ? raw.channelId : undefined;
+  if (channelId === undefined) {
+    return undefined;
+  }
+  return {
+    channelId,
+    name: raw.name,
+    occupants: readRoster(raw.occupants) ?? [],
+  };
+}
+
+/** Decode a `TYPE_CHANNEL_TREE` frame header (a JSON array of channels). */
+export function readChannelTree(header: unknown): ChannelInfo[] | undefined {
+  if (!Array.isArray(header)) {
+    return undefined;
+  }
+  const channels: ChannelInfo[] = [];
+  for (const raw of header) {
+    const channel = readOneChannel(raw);
+    if (channel) {
+      channels.push(channel);
+    }
+  }
+  return channels;
 }
 
 const TEXT_TARGETS: ReadonlySet<string> = new Set(["channel", "server", "client", "poke"]);

@@ -8,7 +8,7 @@
  * nickname finds the right person.
  */
 import { describe, expect, it } from "vitest";
-import type { RosterEntry } from "../src/bridge/protocol.js";
+import type { ChannelInfo, RosterEntry, TeamSpeakClientId } from "../src/bridge/protocol.js";
 import type { ChannelLogResult, ReadChannelLogParams } from "../src/tools/catch-up.js";
 import type { MusicController, MusicTrack } from "../src/tools/music.js";
 import type { BandController, ComposeRequest } from "../src/tools/band.js";
@@ -21,13 +21,17 @@ import {
   KICK_CLIENT_TOOL,
   LEAVE_VOICE_TOOL,
   MOVE_CLIENT_TOOL,
+  LIST_CHANNELS_TOOL,
+  MOVE_TO_CHANNEL_TOOL,
   PLAY_MUSIC_TOOL,
   POKE_TOOL,
   REPLAY_SONG_TOOL,
+  SEND_TEXT_TOOL,
   SET_VOLUME_TOOL,
   SONG_LYRICS_TOOL,
   STOP_MUSIC_TOOL,
   WHAT_DID_I_MISS_TOOL,
+  WHERE_IS_TOOL,
   WHO_IS_HERE_TOOL,
   type TeamSpeakToolDeps,
 } from "../src/tools/registry.js";
@@ -174,6 +178,7 @@ type Harness = {
   logRequests: ReadChannelLogParams[];
   sentTexts: { target: unknown; text: string }[];
   moderationCalls: { fn: string; args: unknown[] }[];
+  moves: string[];
   call: (name: string, args?: unknown) => Promise<Record<string, unknown> & { ok: boolean }>;
 };
 
@@ -185,6 +190,7 @@ function createHarness(
     log?: ChannelLogResult;
     config?: TeamSpeakToolDeps["config"];
     roster?: RosterEntry[];
+    channels?: ChannelInfo[];
   } = {},
 ): Harness {
   const music = new FakeMusic();
@@ -194,6 +200,7 @@ function createHarness(
   const sentTexts: { target: unknown; text: string }[] = [];
   const moderationCalls: { fn: string; args: unknown[] }[] = [];
   const parkings: { parked: boolean; reason: string }[] = [];
+  const moves: string[] = [];
   let parked = false;
   const recordModeration =
     (fn: string) =>
@@ -206,6 +213,8 @@ function createHarness(
     roster: () => options.roster ?? ROSTER,
     channelName: () => options.channelName ?? "General Shit",
     poke: (clientId, text) => pokes.push({ clientId, text }),
+    listChannels: async () => options.channels ?? [],
+    moveToChannel: (channel) => moves.push(channel),
     logDir: "/mnt/user/appdata/sexton",
     readLog: async (params) => {
       logRequests.push(params);
@@ -254,6 +263,7 @@ function createHarness(
     logRequests,
     sentTexts,
     moderationCalls,
+    moves,
     call: async (name, args) =>
       (await registration.handle(
         { itemId: "item-1", callId: `call-${name}`, name, args: args ?? {} },
@@ -263,7 +273,7 @@ function createHarness(
 }
 
 describe("tool definitions", () => {
-  it("registers the v1 tools plus the music queue v2 tools", () => {
+  it("registers the v1 tools plus the music queue v2 and channel tools", () => {
     expect(buildTeamSpeakTools({ music: true }).map((tool) => tool.name)).toEqual([
       PLAY_MUSIC_TOOL,
       STOP_MUSIC_TOOL,
@@ -284,6 +294,10 @@ describe("tool definitions", () => {
       POKE_TOOL,
       LEAVE_VOICE_TOOL,
       JOIN_VOICE_TOOL,
+      LIST_CHANNELS_TOOL,
+      MOVE_TO_CHANNEL_TOOL,
+      WHERE_IS_TOOL,
+      SEND_TEXT_TOOL,
     ]);
   });
 
@@ -295,6 +309,10 @@ describe("tool definitions", () => {
       POKE_TOOL,
       LEAVE_VOICE_TOOL,
       JOIN_VOICE_TOOL,
+      LIST_CHANNELS_TOOL,
+      MOVE_TO_CHANNEL_TOOL,
+      WHERE_IS_TOOL,
+      SEND_TEXT_TOOL,
     ]);
   });
 
@@ -663,6 +681,138 @@ describe("who_is_here and poke", () => {
     expect((await harness.call(POKE_TOOL, { text: "hi" })).ok).toBe(false);
     expect((await harness.call(POKE_TOOL, { nickname: "Brandon" })).ok).toBe(false);
     expect(harness.pokes).toEqual([]);
+  });
+});
+
+describe("channel and presence tools (PHA-3784)", () => {
+  const TREE: ChannelInfo[] = [
+    {
+      channelId: 1,
+      name: "General Shit",
+      occupants: [
+        { clientId: 4, nickname: "Brandon", muted: false, away: false },
+        { clientId: 11, nickname: "Sexton", muted: false, away: false },
+      ],
+    },
+    {
+      channelId: 2,
+      name: "AFK",
+      occupants: [{ clientId: 7, nickname: "[PHATT] Kai_", muted: true, away: false }],
+    },
+    { channelId: 3, name: "Empty Room", occupants: [] },
+  ];
+
+  it("list_channels reports every channel with its occupants' nicknames", async () => {
+    const harness = createHarness({ channels: TREE });
+    const result = await harness.call(LIST_CHANNELS_TOOL);
+
+    expect(result).toMatchObject({ ok: true, count: 3 });
+    expect(result.channels).toEqual([
+      { channelId: 1, name: "General Shit", occupantCount: 2, occupants: ["Brandon", "Sexton"] },
+      { channelId: 2, name: "AFK", occupantCount: 1, occupants: ["[PHATT] Kai_"] },
+      { channelId: 3, name: "Empty Room", occupantCount: 0, occupants: [] },
+    ]);
+  });
+
+  it("list_channels reports failure when the bridge does not answer", async () => {
+    const harness = createHarness({ channels: [] });
+    const result = await harness.call(LIST_CHANNELS_TOOL);
+    expect(result.ok).toBe(false);
+  });
+
+  it("move_to_channel resolves a channel by name", async () => {
+    const harness = createHarness({ channels: TREE });
+    const result = await harness.call(MOVE_TO_CHANNEL_TOOL, { channel: "afk" });
+
+    expect(result).toMatchObject({ ok: true, channel: "AFK", channelId: 2 });
+    expect(harness.moves).toEqual(["2"]);
+  });
+
+  it("move_to_channel resolves a channel by numeric id", async () => {
+    const harness = createHarness({ channels: TREE });
+    const result = await harness.call(MOVE_TO_CHANNEL_TOOL, { channel: "3" });
+
+    expect(result).toMatchObject({ ok: true, channel: "Empty Room", channelId: 3 });
+    expect(harness.moves).toEqual(["3"]);
+  });
+
+  it("move_to_channel errors on a channel that does not exist", async () => {
+    const harness = createHarness({ channels: TREE });
+    const result = await harness.call(MOVE_TO_CHANNEL_TOOL, { channel: "Nowhere" });
+
+    expect(result.ok).toBe(false);
+    expect(harness.moves).toEqual([]);
+  });
+
+  it("move_to_channel follows a nickname into whatever channel they're in", async () => {
+    const harness = createHarness({ channels: TREE });
+    const result = await harness.call(MOVE_TO_CHANNEL_TOOL, { follow: "kai" });
+
+    expect(result).toMatchObject({ ok: true, channel: "AFK", channelId: 2, following: "[PHATT] Kai_" });
+    expect(harness.moves).toEqual(["2"]);
+  });
+
+  it("move_to_channel requires channel or follow", async () => {
+    const harness = createHarness({ channels: TREE });
+    const result = await harness.call(MOVE_TO_CHANNEL_TOOL, {});
+    expect(result.ok).toBe(false);
+    expect(harness.moves).toEqual([]);
+  });
+
+  it("where_is finds someone across the whole server, not just the bot's own channel", async () => {
+    const harness = createHarness({ channels: TREE });
+    const result = await harness.call(WHERE_IS_TOOL, { nickname: "kai" });
+
+    expect(result).toMatchObject({ ok: true, nickname: "[PHATT] Kai_", channel: "AFK", channelId: 2 });
+  });
+
+  it("where_is says so when nobody matches", async () => {
+    const harness = createHarness({ channels: TREE });
+    const result = await harness.call(WHERE_IS_TOOL, { nickname: "Steve" });
+
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toMatch(/No one/u);
+  });
+
+  it("send_text defaults to the channel", async () => {
+    const harness = createHarness();
+    const result = await harness.call(SEND_TEXT_TOOL, { text: "back in five" });
+
+    expect(result).toMatchObject({ ok: true, target: "channel" });
+    expect(harness.sentTexts).toEqual([{ target: "channel", text: "back in five" }]);
+  });
+
+  it("send_text can target the server", async () => {
+    const harness = createHarness();
+    const result = await harness.call(SEND_TEXT_TOOL, { text: "brb", target: "server" });
+
+    expect(result).toMatchObject({ ok: true, target: "server" });
+    expect(harness.sentTexts).toEqual([{ target: "server", text: "brb" }]);
+  });
+
+  it("send_text resolves a client target by nickname", async () => {
+    const harness = createHarness();
+    const result = await harness.call(SEND_TEXT_TOOL, {
+      text: "hey",
+      target: "client",
+      nickname: "kai",
+    });
+
+    expect(result).toMatchObject({ ok: true, target: "client", nickname: "[PHATT] Kai_" });
+    expect(harness.sentTexts).toEqual([{ target: 7, text: "hey" }]);
+  });
+
+  it("send_text requires a nickname when targeting a client", async () => {
+    const harness = createHarness();
+    const result = await harness.call(SEND_TEXT_TOOL, { text: "hey", target: "client" });
+    expect(result.ok).toBe(false);
+    expect(harness.sentTexts).toEqual([]);
+  });
+
+  it("send_text requires text", async () => {
+    const harness = createHarness();
+    const result = await harness.call(SEND_TEXT_TOOL, {});
+    expect(result.ok).toBe(false);
   });
 });
 

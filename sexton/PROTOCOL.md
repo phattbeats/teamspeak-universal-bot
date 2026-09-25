@@ -37,6 +37,7 @@ Message types the bridge sends (`out`):
 `{"clientId":u16,"nickname":string,"muted":bool,"away":bool,"serverGroups":[string]}`.
 The moderation tool gate (`tools.moderation.allowGroups`) lives on the plugin
 side, not here — the Sexton just reports group membership on the wire.
+| 0x08 | `channel_tree` | `[{"channelId":u64,"name":string,"occupants":[{"clientId":u16,"nickname":string,"muted":bool,"away":bool}]}]` (PHA-3784, answer to `list_channels`) | — |
 
 Message types the bridge accepts (`in`):
 
@@ -62,6 +63,7 @@ Message types the bridge accepts (`in`):
 | 0x92 | `channel_delete` | `{"channelId":u64,"force":bool}` (PHA-3786) | — |
 | 0x93 | `server_edit` | `{"name":string?,"welcomeMessage":string?}` (PHA-3786) | — |
 | 0x94 | `server_group_add_client` | `{"serverGroupId":u64,"clientId":u16}` (PHA-3786) | — |
+| 0x95 | `list_channels` | `{}` (PHA-3784: ask for the full channel tree; answered async with `channel_tree` 0x08, no request id) | — |
 
 Every 0x8A-0x94 command answers with `moderation_result` (0x07). None of them
 enforce authorization themselves — the Sexton trusts whatever command it is

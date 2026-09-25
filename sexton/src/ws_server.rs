@@ -282,6 +282,9 @@ async fn dispatch(
                 });
             }
         }
+        TYPE_LIST_CHANNELS => {
+            let _ = cmd_tx.send(BridgeCommand::ListChannels);
+        }
         other => debug!("unknown inbound frame type 0x{other:02x}, ignoring"),
     }
 }
@@ -327,6 +330,7 @@ fn encode_event(ev: &BridgeEvent) -> Vec<u8> {
             &ModerationResultHeader { action, ok: *ok, detail: detail.clone() },
             &[],
         ),
+        BridgeEvent::ChannelTree(tree) => encode_frame(TYPE_CHANNEL_TREE, tree, &[]),
     }
 }
 

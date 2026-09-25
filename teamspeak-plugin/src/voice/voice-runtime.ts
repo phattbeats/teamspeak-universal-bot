@@ -6,6 +6,7 @@
 import { TeamSpeakBridgeClient, type BridgeSocketFactory } from "../bridge/client.js";
 import type {
   BridgeStateHeader,
+  ChannelInfo,
   RosterEntry,
   TeamSpeakClientId,
   TextMessageHeader,
@@ -121,6 +122,14 @@ export type TeamSpeakVoiceRuntimeParams = {
 };
 
 const DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
+/**
+ * `listChannels()`/`onChannelTree` have no request id (PHA-3784, same shape
+ * as every other command on this connection) — a FIFO queue of waiters is
+ * correct as long as the bridge answers in the order asked, which a single
+ * TCP-ish WebSocket guarantees. This bounds how long a tool call waits if
+ * the bridge never answers (disconnect mid-flight).
+ */
+const CHANNEL_TREE_TIMEOUT_MS = 4_000;
 
 /** Marks a tool call that came from an agent turn rather than a realtime session. */
 const AGENT_TOOL_ITEM_ID = "teamspeak-agent-turn";
@@ -144,6 +153,7 @@ export class TeamSpeakVoiceRuntime {
    */
   private parked = false;
   private lastRoster: RosterEntry[] = [];
+  private channelTreeWaiters: Array<(channels: ChannelInfo[]) => void> = [];
   private selfClientId: TeamSpeakClientId | undefined;
   private readonly chatTurnsInFlight = new Set<TeamSpeakClientId>();
 
@@ -225,6 +235,10 @@ export class TeamSpeakVoiceRuntime {
           session?.sendInputAudio(pcm);
         },
         onTextMessage: (message) => this.handleTextMessage(message),
+        onChannelTree: (channels) => {
+          const waiter = this.channelTreeWaiters.shift();
+          waiter?.(channels);
+        },
         onError: (error) => this.params.log?.(`teamspeak bridge: ${error.message}`),
       },
     });
@@ -256,6 +270,8 @@ export class TeamSpeakVoiceRuntime {
           editServer: (name, welcomeMessage) => this.bridge.editServer(name, welcomeMessage),
           addToServerGroup: (serverGroupId, clientId) =>
             this.bridge.addToServerGroup(serverGroupId, clientId),
+          listChannels: () => this.requestChannelTree(),
+          moveToChannel: (channel) => this.bridge.join(channel),
           band: this.band,
           logDir: params.toolOverrides?.logDir ?? resolveSextonLogDir(params.config),
           ...(params.toolOverrides?.readLog ? { readLog: params.toolOverrides.readLog } : {}),
@@ -340,6 +356,35 @@ export class TeamSpeakVoiceRuntime {
     }
     this.selfClientId = ownClientId;
     this.sessions.applyRoster(this.sessions.rosterEntries());
+  }
+
+  /**
+   * Ask the bridge for the full channel tree and wait for the answer
+   * (PHA-3784). Resolves to `[]` on timeout rather than rejecting — the
+   * tools that call this (`list_channels`, `where_is`, `move_to_channel`'s
+   * `follow`) already treat an empty tree as "found nothing" and say so,
+   * which is a better outcome for a voice turn than an unhandled rejection.
+   */
+  private requestChannelTree(): Promise<ChannelInfo[]> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (channels: ChannelInfo[]) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(channels);
+      };
+      this.channelTreeWaiters.push(finish);
+      this.bridge.listChannels();
+      setTimeout(() => {
+        const idx = this.channelTreeWaiters.indexOf(finish);
+        if (idx !== -1) {
+          this.channelTreeWaiters.splice(idx, 1);
+        }
+        finish([]);
+      }, CHANNEL_TREE_TIMEOUT_MS);
+    });
   }
 
   private createMusicController(): MusicController | undefined {

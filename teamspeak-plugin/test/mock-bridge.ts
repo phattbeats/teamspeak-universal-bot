@@ -11,6 +11,7 @@
 import {
   decodeFrame,
   encodeFrame,
+  TYPE_CHANNEL_TREE,
   TYPE_ROSTER,
   TYPE_SPEAKER_AUDIO,
   TYPE_SPEAKER_START,
@@ -19,6 +20,7 @@ import {
   TYPE_TEXT_MESSAGE,
   type BridgeStateHeader,
   type BridgeTextTarget,
+  type ChannelInfo,
   type RosterEntry,
   type TeamSpeakClientId,
 } from "../src/bridge/protocol.js";
@@ -43,7 +45,8 @@ export type RecordedFrame =
       nickname: string;
       text: string;
       target?: BridgeTextTarget;
-    };
+    }
+  | { type: "channel_tree"; channels: ChannelInfo[] };
 
 /** A frame the plugin sent to the bridge, decoded for assertions. */
 export type SentFrame = {
@@ -137,6 +140,8 @@ export function encodeRecordedFrame(frame: RecordedFrame): Buffer {
         text: frame.text,
         target: frame.target ?? "channel",
       });
+    case "channel_tree":
+      return encodeFrame(TYPE_CHANNEL_TREE, frame.channels);
   }
 }
 
@@ -156,6 +161,14 @@ export function rosterEntry(
   overrides: Partial<RosterEntry> = {},
 ): RosterEntry {
   return { clientId, nickname, muted: false, away: false, ...overrides };
+}
+
+export function channelInfo(
+  channelId: number,
+  name: string,
+  occupants: RosterEntry[] = [],
+): ChannelInfo {
+  return { channelId, name, occupants };
 }
 
 export { decodeFrame };

@@ -17,7 +17,7 @@ import type {
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
-import type { RosterEntry, TeamSpeakClientId } from "../bridge/protocol.js";
+import type { ChannelInfo, RosterEntry, TeamSpeakClientId } from "../bridge/protocol.js";
 import {
   DEFAULT_CATCH_UP_LINES,
   DEFAULT_CATCH_UP_MAX_LINES,
@@ -42,6 +42,10 @@ export const COMPOSE_SONG_TOOL = "compose_song";
 export const BAND_STATUS_TOOL = "band_status";
 export const SONG_LYRICS_TOOL = "song_lyrics";
 export const REPLAY_SONG_TOOL = "replay_song";
+export const LIST_CHANNELS_TOOL = "list_channels";
+export const MOVE_TO_CHANNEL_TOOL = "move_to_channel";
+export const WHERE_IS_TOOL = "where_is";
+export const SEND_TEXT_TOOL = "send_text";
 
 // --- moderation (PHA-3786) --------------------------------------------------
 export const KICK_CLIENT_TOOL = "kick_client";
@@ -116,6 +120,14 @@ export type TeamSpeakToolDeps = {
   deleteChannel: (channelId: number, force: boolean) => void;
   editServer: (name?: string, welcomeMessage?: string) => void;
   addToServerGroup: (serverGroupId: number, clientId: TeamSpeakClientId) => void;
+  /**
+   * The full channel tree — every channel with who is in it (PHA-3784).
+   * Round-trips through the bridge (`ListChannels` / `ChannelTree`), so it is
+   * async and can come back empty if the bridge does not answer in time.
+   */
+  listChannels: () => Promise<ChannelInfo[]>;
+  /** Move the bot itself into a channel by name or numeric id. */
+  moveToChannel: (channel: string) => void;
   /** The house band (PHA-3554). Undefined on an account that has not opted in. */
   band?: BandController | undefined;
   logDir: string;
@@ -376,6 +388,66 @@ export function buildTeamSpeakTools(options: {
       description:
         "Come back into voice after sitting out. Use it when someone asks you to come back, rejoin, or start listening again. Confirm in a few words.",
       parameters: { type: "object", properties: {} },
+    },
+    {
+      type: "function",
+      name: LIST_CHANNELS_TOOL,
+      description:
+        "List every channel on the server and who is currently sitting in each one. Use this when someone asks what channels exist, who's around, or where people have gone — this sees the whole server, not just your own channel (that's who_is_here).",
+      parameters: { type: "object", properties: {} },
+    },
+    {
+      type: "function",
+      name: MOVE_TO_CHANNEL_TOOL,
+      description:
+        "Move yourself into a different channel. Give either `channel` (a name or numeric id) or `follow` (someone's nickname, to go wherever they currently are) — not both. Confirm in a few words once you're there.",
+      parameters: {
+        type: "object",
+        properties: {
+          channel: {
+            type: "string",
+            description: "The channel to move into, by name or numeric id.",
+          },
+          follow: {
+            type: "string",
+            description: "Instead of `channel`: a nickname to follow into whatever channel they're in right now.",
+          },
+        },
+      },
+    },
+    {
+      type: "function",
+      name: WHERE_IS_TOOL,
+      description: "Find which channel a person is currently in, anywhere on the server.",
+      parameters: {
+        type: "object",
+        properties: {
+          nickname: { type: "string", description: "Who to look for, by their channel nickname." },
+        },
+        required: ["nickname"],
+      },
+    },
+    {
+      type: "function",
+      name: SEND_TEXT_TOOL,
+      description:
+        "Send a text message instead of speaking it. Defaults to your own channel; set target to \"server\" for a server-wide message, or \"client\" with a nickname to message one person directly.",
+      parameters: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "The message to send." },
+          target: {
+            type: "string",
+            enum: ["channel", "server", "client"],
+            description: 'Where to send it. Defaults to "channel".',
+          },
+          nickname: {
+            type: "string",
+            description: 'Who to message. Required when target is "client".',
+          },
+        },
+        required: ["text"],
+      },
     },
   );
   if (options.band) {
@@ -723,6 +795,14 @@ async function dispatch(
       return editServerTool(deps, args, context);
     case ADD_TO_SERVER_GROUP_TOOL:
       return addToServerGroupTool(deps, args, context);
+    case LIST_CHANNELS_TOOL:
+      return await listChannelsTool(deps);
+    case MOVE_TO_CHANNEL_TOOL:
+      return await moveToChannel(deps, args, context);
+    case WHERE_IS_TOOL:
+      return await whereIs(deps, args, context);
+    case SEND_TEXT_TOOL:
+      return sendText(deps, args, context);
     default:
       return { ok: false, error: `Unknown TeamSpeak tool "${name}".` };
   }
@@ -1362,6 +1442,95 @@ function muteClientTool(
   return { ok: true, nickname: target.nickname, muted };
 }
 
+// --- channel and presence (PHA-3784) --------------------------------------
+
+async function listChannelsTool(deps: TeamSpeakToolDeps): Promise<ToolResult> {
+  const tree = await deps.listChannels();
+  if (tree.length === 0) {
+    return { ok: false, error: "Could not read the channel list right now." };
+  }
+  return {
+    ok: true,
+    count: tree.length,
+    channels: tree.map((channel) => ({
+      channelId: channel.channelId,
+      name: channel.name,
+      occupantCount: channel.occupants.length,
+      occupants: channel.occupants.map((entry) => entry.nickname),
+    })),
+  };
+}
+
+async function moveToChannel(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): Promise<ToolResult> {
+  const channelSpec = readString(args.channel);
+  const follow = readString(args.follow);
+  if (!channelSpec && !follow) {
+    return { ok: false, error: "Give a channel (name or id) or someone to follow." };
+  }
+  const tree = await deps.listChannels();
+  if (tree.length === 0) {
+    return { ok: false, error: "Could not read the channel list right now." };
+  }
+  if (follow) {
+    const match = matchNicknameAcrossTree(tree, follow, context);
+    if (!match) {
+      return { ok: false, error: `No one on the server is called "${follow}".` };
+    }
+    if (Array.isArray(match)) {
+      return { ok: false, error: `"${follow}" matches more than one person.`, candidates: match };
+    }
+    deps.moveToChannel(String(match.channel.channelId));
+    return {
+      ok: true,
+      channel: match.channel.name,
+      channelId: match.channel.channelId,
+      following: match.entry.nickname,
+    };
+  }
+  const target = resolveChannelInTree(tree, channelSpec!);
+  if (!target) {
+    return {
+      ok: false,
+      error: `No channel named "${channelSpec}".`,
+      channels: tree.map((channel) => channel.name),
+    };
+  }
+  deps.moveToChannel(String(target.channelId));
+  return { ok: true, channel: target.name, channelId: target.channelId };
+}
+
+async function whereIs(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): Promise<ToolResult> {
+  const nickname = readString(args.nickname);
+  if (!nickname) {
+    return { ok: false, error: "Who do you want to find?" };
+  }
+  const tree = await deps.listChannels();
+  if (tree.length === 0) {
+    return { ok: false, error: "Could not read the channel list right now." };
+  }
+  const match = matchNicknameAcrossTree(tree, nickname, context);
+  if (!match) {
+    return { ok: false, error: `No one on the server is called "${nickname}".` };
+  }
+  if (Array.isArray(match)) {
+    return { ok: false, error: `"${nickname}" matches more than one person.`, candidates: match };
+  }
+  return {
+    ok: true,
+    nickname: match.entry.nickname,
+    channel: match.channel.name,
+    channelId: match.channel.channelId,
+  };
+}
+
 function editChannelTool(
   deps: TeamSpeakToolDeps,
   args: Record<string, unknown>,
@@ -1460,6 +1629,98 @@ function addToServerGroupTool(
   deps.addToServerGroup(serverGroupId, target.clientId);
   auditModeration(deps, context, `added ${target.nickname} to server group ${serverGroupId}`);
   return { ok: true, nickname: target.nickname, serverGroupId };
+}
+
+function sendText(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  const text = readString(args.text);
+  if (!text) {
+    return { ok: false, error: "A text message needs some text." };
+  }
+  const target = readString(args.target) ?? "channel";
+  if (target === "channel" || target === "server") {
+    deps.sendText(target, text);
+    return { ok: true, target };
+  }
+  if (target === "client") {
+    const nickname = readString(args.nickname);
+    if (!nickname) {
+      return { ok: false, error: 'Say who to message (nickname) when target is "client".' };
+    }
+    const roster = deps.roster();
+    const match = matchNickname(roster, nickname, context);
+    if (!match) {
+      return { ok: false, error: `No one here is called "${nickname}".` };
+    }
+    if (Array.isArray(match)) {
+      return { ok: false, error: `"${nickname}" matches more than one person here.`, candidates: match };
+    }
+    deps.sendText(match.clientId, text);
+    return { ok: true, target: "client", nickname: match.nickname };
+  }
+  return { ok: false, error: `Unknown target "${target}". Use "channel", "server", or "client".` };
+}
+
+/**
+ * Resolve a `move_to_channel` spec the same way the Rust side's
+ * `audio::resolve_channel_id` does: a bare number is tried as a channel id
+ * first, then an exact case-insensitive name.
+ */
+function resolveChannelInTree(tree: ChannelInfo[], spec: string): ChannelInfo | undefined {
+  const asId = Number(spec);
+  if (Number.isInteger(asId) && String(asId) === spec.trim()) {
+    const byId = tree.find((channel) => channel.channelId === asId);
+    if (byId) {
+      return byId;
+    }
+  }
+  return tree.find((channel) => channel.name.toLowerCase() === spec.trim().toLowerCase());
+}
+
+/**
+ * Same matching rules as `matchNickname`, but over every channel's occupants
+ * instead of just the caller's own roster — `where_is` and `follow` need to
+ * find someone who may not be anywhere near the bot.
+ */
+function matchNicknameAcrossTree(
+  tree: ChannelInfo[],
+  nickname: string,
+  context: TeamSpeakToolContext,
+): { entry: RosterEntry; channel: ChannelInfo } | string[] | undefined {
+  const wanted = normalizeNickname(nickname);
+  if (!wanted) {
+    return undefined;
+  }
+  const all: Array<{ entry: RosterEntry; channel: ChannelInfo }> = tree.flatMap((channel) =>
+    channel.occupants.map((entry) => ({ entry, channel })),
+  );
+  if (wanted === "me" || wanted === "myself") {
+    const self = all.find((hit) => hit.entry.clientId === context.clientId);
+    return self;
+  }
+  const exact = all.filter((hit) => normalizeNickname(hit.entry.nickname) === wanted);
+  if (exact.length === 1) {
+    return exact[0];
+  }
+  if (exact.length > 1) {
+    return exact.map((hit) => hit.entry.nickname);
+  }
+  for (const test of [
+    (candidate: string) => candidate.startsWith(wanted),
+    (candidate: string) => candidate.includes(wanted),
+  ]) {
+    const hits = all.filter((hit) => test(normalizeNickname(hit.entry.nickname)));
+    if (hits.length === 1) {
+      return hits[0];
+    }
+    if (hits.length > 1) {
+      return hits.map((hit) => hit.entry.nickname);
+    }
+  }
+  return undefined;
 }
 
 /**
