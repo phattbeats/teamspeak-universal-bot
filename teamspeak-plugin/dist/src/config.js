@@ -1,3 +1,7 @@
+import {
+  MINIMAX_ASR_PROVIDER_ID,
+  WHISPER_LOCAL_PROVIDER_ID
+} from "./voice/stt-provider.js";
 const DEFAULT_COMMAND_PREFIX = "!";
 const DEFAULT_VOICE_MODE = "agent-proxy";
 const DEFAULT_SEXTON_LOG_DIR = "/mnt/user/appdata/sexton";
@@ -94,33 +98,26 @@ const DEFAULT_SPEECH_MODEL = "speech-2.8-hd";
 const DEFAULT_SEGMENT_HANGOVER_MS = 600;
 const DEFAULT_MIN_SEGMENT_MS = 320;
 const DEFAULT_MAX_SEGMENT_MS = 2e4;
-const LOCAL_TRANSCRIPTION_PROVIDERS = ["whisper-local"];
-function isLocalTranscriptionProvider(provider) {
-  return LOCAL_TRANSCRIPTION_PROVIDERS.includes(
-    (provider ?? "").trim().toLowerCase()
-  );
-}
-function resolveTeamSpeakTranscriptionConfig(config, env = process.env) {
+function resolveTeamSpeakTranscriptionConfig(config) {
   const raw = config?.voice?.streaming?.transcription;
-  const provider = raw?.provider?.trim() || LOCAL_TRANSCRIPTION_PROVIDERS[0];
-  if (!isLocalTranscriptionProvider(provider)) {
-    return {
-      ok: false,
-      reason: `voice.streaming.transcription.provider="${provider}" is not a local transcriber. voice.mode=stt-tts only runs local speech-to-text (${LOCAL_TRANSCRIPTION_PROVIDERS.join(", ")}); every registered OpenClaw transcription provider is metered and hosted.`
-    };
-  }
   return {
-    ok: true,
-    config: {
-      provider,
-      url: raw?.url?.trim() || env.TEAMSPEAK_WHISPER_URL?.trim() || DEFAULT_WHISPER_URL,
-      model: raw?.model?.trim() || void 0,
-      language: raw?.language?.trim() || DEFAULT_WHISPER_LANGUAGE,
-      timeoutMs: positiveMs(raw?.timeoutMs, DEFAULT_TRANSCRIPTION_TIMEOUT_MS)
-    }
+    provider: raw?.provider?.trim() || WHISPER_LOCAL_PROVIDER_ID,
+    url: raw?.url?.trim() || void 0,
+    baseUrl: raw?.baseUrl?.trim() || void 0,
+    apiKey: raw?.apiKey?.trim() || void 0,
+    model: raw?.model?.trim() || void 0,
+    language: raw?.language?.trim() || DEFAULT_WHISPER_LANGUAGE,
+    prompt: raw?.prompt?.trim() || void 0,
+    confidence: raw?.confidence === true,
+    timeoutMs: positiveMs(raw?.timeoutMs, DEFAULT_TRANSCRIPTION_TIMEOUT_MS),
+    // Hosted-provider health knobs. Harmless for a local provider, which ignores
+    // them; the secondary slot lets config override both.
+    slowMs: DEFAULT_SECONDARY_SLOW_MS,
+    backoffMs: DEFAULT_SECONDARY_BACKOFF_MS,
+    allowHosted: raw?.allowHosted === true,
+    options: raw?.options ?? {}
   };
 }
-const SECONDARY_TRANSCRIPTION_PROVIDERS = ["minimax-asr"];
 const DEFAULT_MINIMAX_ASR_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_ASR_MODEL = "asr-1.0";
 const DEFAULT_SECONDARY_TIMEOUT_MS = 8e3;
@@ -130,36 +127,29 @@ const DEFAULT_LONG_SEGMENT_MS = 8e3;
 const DEFAULT_EMPTY_ESCALATION_MIN_MS = 1500;
 const DEFAULT_MAX_FRUITLESS_ESCALATIONS = 3;
 const DEFAULT_FRUITLESS_COOLDOWN_MS = 12e4;
-function resolveTeamSpeakSecondaryTranscriptionConfig(config, env = process.env) {
+function resolveTeamSpeakSecondaryTranscriptionConfig(config) {
   const raw = config?.voice?.streaming?.secondaryTranscription;
   if (!raw) {
     return { ok: false, reason: void 0 };
   }
-  const apiKey = raw.apiKey?.trim() || env.MINIMAX_API_KEY?.trim() || "";
-  const provider = raw.provider?.trim() || SECONDARY_TRANSCRIPTION_PROVIDERS[0];
-  if (!SECONDARY_TRANSCRIPTION_PROVIDERS.includes(provider)) {
-    return {
-      ok: false,
-      reason: `voice.streaming.secondaryTranscription.provider="${provider}" is not implemented (${SECONDARY_TRANSCRIPTION_PROVIDERS.join(", ")}).`
-    };
-  }
-  if (!apiKey) {
-    return {
-      ok: false,
-      reason: "voice.streaming.secondaryTranscription is configured but no apiKey was found (set it there or as MINIMAX_API_KEY); staying on whisper-local only."
-    };
-  }
   return {
     ok: true,
     config: {
-      provider,
-      baseUrl: (raw.baseUrl?.trim() || DEFAULT_MINIMAX_ASR_BASE_URL).replace(/\/+$/, "").replace(/\/v1$/, ""),
-      apiKey,
-      model: raw.model?.trim() || DEFAULT_MINIMAX_ASR_MODEL,
+      provider: raw.provider?.trim() || MINIMAX_ASR_PROVIDER_ID,
+      url: raw.url?.trim() || void 0,
+      baseUrl: raw.baseUrl?.trim() || void 0,
+      apiKey: raw.apiKey?.trim() || void 0,
+      model: raw.model?.trim() || void 0,
       language: raw.language?.trim() || DEFAULT_WHISPER_LANGUAGE,
+      prompt: raw.prompt?.trim() || void 0,
+      confidence: raw.confidence === true,
       timeoutMs: positiveMs(raw.timeoutMs, DEFAULT_SECONDARY_TIMEOUT_MS),
       slowMs: positiveMs(raw.slowMs, DEFAULT_SECONDARY_SLOW_MS),
-      backoffMs: positiveMs(raw.backoffMs, DEFAULT_SECONDARY_BACKOFF_MS)
+      backoffMs: positiveMs(raw.backoffMs, DEFAULT_SECONDARY_BACKOFF_MS),
+      // Meaningless in this slot: escalating to a hosted second opinion is the
+      // point of the block, and the registry only gates the primary.
+      allowHosted: true,
+      options: raw.options ?? {}
     },
     routing: {
       longSegmentMs: positiveMs(raw.longSegmentMs, DEFAULT_LONG_SEGMENT_MS),
@@ -249,10 +239,7 @@ export {
   DEFAULT_VOICE_MODE,
   DEFAULT_WHISPER_LANGUAGE,
   DEFAULT_WHISPER_URL,
-  LOCAL_TRANSCRIPTION_PROVIDERS,
-  SECONDARY_TRANSCRIPTION_PROVIDERS,
   areTeamSpeakToolsEnabled,
-  isLocalTranscriptionProvider,
   isTeamSpeakBandEnabled,
   isTeamSpeakMusicEnabled,
   isTeamSpeakVoiceEnabled,

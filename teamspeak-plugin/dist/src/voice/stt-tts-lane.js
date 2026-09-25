@@ -15,9 +15,8 @@ import {
   ConcurrencyLimitedTranscriber,
   TeamSpeakSttTtsSpeakerSession
 } from "./stt-tts-speaker-session.js";
-import { MiniMaxAsrTranscriber } from "./minimax-asr.js";
 import { RoutingTranscriber } from "./stt-routing.js";
-import { LocalWhisperTranscriber } from "./whisper-local.js";
+import { createDefaultSttProviderRegistry } from "./stt-registry.js";
 function resolveTeamSpeakWakeNames(params) {
   const configured = resolveTeamSpeakWakeConfig(params.config).wakeNames;
   if (configured) {
@@ -27,10 +26,9 @@ function resolveTeamSpeakWakeNames(params) {
   return agentName && agentName.toLowerCase() !== "openclaw" ? [agentName, "OpenClaw"] : ["OpenClaw"];
 }
 function createSttTtsLane(params) {
-  const transcription = resolveTeamSpeakTranscriptionConfig(params.config, params.env);
-  if (!transcription.ok) {
-    return transcription;
-  }
+  const env = params.env ?? process.env;
+  const registry = params.deps?.sttRegistry ?? createDefaultSttProviderRegistry();
+  const transcription = resolveTeamSpeakTranscriptionConfig(params.config);
   const speech = resolveTeamSpeakSpeechConfig(params.config);
   const segmentation = resolveTeamSpeakSegmentationConfig(params.config);
   const wakeConfig = resolveTeamSpeakWakeConfig(params.config);
@@ -38,22 +36,42 @@ function createSttTtsLane(params) {
     config: params.config,
     agentId: params.agentId
   });
-  const primaryTranscriber = params.deps?.createTranscriber?.(transcription.config) ?? new LocalWhisperTranscriber({
-    config: transcription.config,
-    ...params.log ? { log: params.log } : {}
-  });
-  const secondary = resolveTeamSpeakSecondaryTranscriptionConfig(params.config, params.env);
-  let transcriber = primaryTranscriber;
-  if (secondary.ok) {
-    transcriber = new RoutingTranscriber({
-      primary: primaryTranscriber,
-      secondary: new MiniMaxAsrTranscriber({
-        config: secondary.config,
-        ...params.log ? { log: params.log } : {}
-      }),
-      config: secondary.routing,
+  let primaryTranscriber;
+  if (params.deps?.createTranscriber) {
+    primaryTranscriber = params.deps.createTranscriber(transcription);
+  } else {
+    const built = registry.create({
+      slot: "primary",
+      config: transcription,
+      env,
       ...params.log ? { log: params.log } : {}
     });
+    if (!built.ok) {
+      return { ok: false, reason: `voice.streaming.transcription: ${built.reason}` };
+    }
+    primaryTranscriber = built.provider;
+  }
+  const secondary = resolveTeamSpeakSecondaryTranscriptionConfig(params.config);
+  let transcriber = primaryTranscriber;
+  if (secondary.ok) {
+    const built = registry.create({
+      slot: "secondary",
+      config: secondary.config,
+      env,
+      ...params.log ? { log: params.log } : {}
+    });
+    if (built.ok) {
+      transcriber = new RoutingTranscriber({
+        primary: primaryTranscriber,
+        secondary: built.provider,
+        config: secondary.routing,
+        ...params.log ? { log: params.log } : {}
+      });
+    } else {
+      params.log?.(
+        `teamspeak voice: secondary transcription disabled - voice.streaming.secondaryTranscription: ${built.reason} Staying on ${primaryTranscriber.id} only.`
+      );
+    }
   } else if (secondary.reason) {
     params.log?.(`teamspeak voice: secondary transcription disabled - ${secondary.reason}`);
   }

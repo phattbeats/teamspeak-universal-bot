@@ -141,7 +141,7 @@ class TeamSpeakSttTtsSpeakerSession {
   enqueueTurn(segment) {
     const generation = this.generation;
     const sttStartedAt = this.now();
-    const transcription = transcribeSegment(this.params.transcriber, {
+    const transcription = this.params.transcriber.transcribe({
       pcm48kMono: segment.pcm48kMono,
       label: this.nickname,
       durationMs: segment.durationMs,
@@ -164,12 +164,13 @@ class TeamSpeakSttTtsSpeakerSession {
     const { heard, sttMs } = await transcription;
     const transcript = heard.text;
     const sttProvider = heard.provider;
+    const sttConfidence = heard.confidence === void 0 ? "" : ` sttConfidence=${heard.confidence.toFixed(2)}`;
     if (this.isStopped() || generation !== this.generation) {
       return;
     }
     if (!transcript) {
       this.params.log?.(
-        `teamspeak voice: empty transcript clientId=${this.clientId} segmentMs=${Math.round(segment.durationMs)} sttMs=${Math.round(sttMs)} sttProvider=${sttProvider}`
+        `teamspeak voice: empty transcript clientId=${this.clientId} segmentMs=${Math.round(segment.durationMs)} sttMs=${Math.round(sttMs)} sttProvider=${sttProvider}${sttConfidence}`
       );
       return;
     }
@@ -265,7 +266,7 @@ class TeamSpeakSttTtsSpeakerSession {
     const requestedModel = this.params.agentTurnLabel?.model ?? "default";
     const requestedThinking = this.params.agentTurnLabel?.thinking ?? "default";
     this.params.log?.(
-      `teamspeak voice: stt-tts turn clientId=${this.clientId} nickname=${this.nickname} segmentMs=${this.lastTimings.segmentMs} queueWaitMs=${Math.round(queueWaitMs)} sttMs=${this.lastTimings.sttMs} agentMs=${this.lastTimings.agentMs} firstBlockMs=${firstBlockMs} ttsMs=${this.lastTimings.ttsMs} firstAudioMs=${this.lastTimings.firstAudioMs} ttsChunks=${speech.spokenChunks}/${speech.totalChunks} replyPath=${outcome.path ?? "unknown"} blocks=${outcome.blocks ?? 0} sttProvider=${sttProvider} speechProvider=${speech.speechProvider ?? this.params.synthesizer.id} requestedModel=${requestedModel} requestedThinking=${requestedThinking}${this.lastFuzzyHearing ? ` wakeHeardAs=${JSON.stringify(this.lastFuzzyHearing)}` : ""}`
+      `teamspeak voice: stt-tts turn clientId=${this.clientId} nickname=${this.nickname} segmentMs=${this.lastTimings.segmentMs} queueWaitMs=${Math.round(queueWaitMs)} sttMs=${this.lastTimings.sttMs} agentMs=${this.lastTimings.agentMs} firstBlockMs=${firstBlockMs} ttsMs=${this.lastTimings.ttsMs} firstAudioMs=${this.lastTimings.firstAudioMs} ttsChunks=${speech.spokenChunks}/${speech.totalChunks} replyPath=${outcome.path ?? "unknown"} blocks=${outcome.blocks ?? 0} sttProvider=${sttProvider}${sttConfidence} sttMsProvider=${Math.round(heard.ms)} speechProvider=${speech.speechProvider ?? this.params.synthesizer.id} requestedModel=${requestedModel} requestedThinking=${requestedThinking}${this.lastFuzzyHearing ? ` wakeHeardAs=${JSON.stringify(this.lastFuzzyHearing)}` : ""}`
     );
   }
   /**
@@ -327,13 +328,6 @@ function resolveSttTtsWakeNamePolicy(requireWakeName) {
   }
   return "automatic";
 }
-async function transcribeSegment(transcriber, request) {
-  const detailed = transcriber.transcribeDetailed;
-  if (typeof detailed === "function") {
-    return await detailed.call(transcriber, request);
-  }
-  return { text: await transcriber.transcribe(request), provider: transcriber.id };
-}
 class ConcurrencyLimitedTranscriber {
   constructor(inner, maxInFlight = 1, maxQueueDepth = 1, log) {
     this.inner = inner;
@@ -341,19 +335,23 @@ class ConcurrencyLimitedTranscriber {
     this.maxQueueDepth = maxQueueDepth;
     this.log = log;
     this.id = inner.id;
+    this.kind = inner.kind;
   }
   inner;
   maxInFlight;
   maxQueueDepth;
   log;
   id;
+  kind;
   inFlight = 0;
   waiting = [];
-  async transcribe(request) {
-    const { text } = await this.transcribeDetailed(request);
-    return text;
+  isBackedOff() {
+    return this.inner.isBackedOff?.() ?? false;
   }
-  async transcribeDetailed(request) {
+  backoffRemainingMs() {
+    return this.inner.backoffRemainingMs?.() ?? 0;
+  }
+  async transcribe(request) {
     if (this.inFlight >= this.maxInFlight) {
       if (this.waiting.length >= this.maxQueueDepth) {
         const evicted = this.waiting.shift();
@@ -366,12 +364,12 @@ class ConcurrencyLimitedTranscriber {
         this.waiting.push(resolve);
       });
       if (!proceed) {
-        return { text: "", provider: this.id };
+        return { text: "", provider: this.id, ms: 0 };
       }
     }
     this.inFlight += 1;
     try {
-      return await transcribeSegment(this.inner, request);
+      return await this.inner.transcribe(request);
     } finally {
       this.inFlight -= 1;
       const next = this.waiting.shift();
@@ -383,6 +381,5 @@ export {
   ConcurrencyLimitedTranscriber,
   DEFAULT_FOLLOW_UP_SILENCE_MS,
   TeamSpeakSttTtsSpeakerSession,
-  resolveSttTtsWakeNamePolicy,
-  transcribeSegment
+  resolveSttTtsWakeNamePolicy
 };
