@@ -172,8 +172,13 @@ export function createSttTtsLane(
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       ...(params.config.voice?.model ? { model: params.config.voice.model } : {}),
+      thinking: params.config.voice?.thinking?.trim() || "off",
       ...(params.log ? { log: params.log } : {}),
     });
+  const agentTurnLabel = {
+    model: params.config.voice?.model,
+    thinking: params.config.voice?.thinking?.trim() || "off",
+  };
 
   return {
     ok: true,
@@ -191,6 +196,7 @@ export function createSttTtsLane(
           transcriber,
           synthesizer,
           runAgentTurn,
+          agentTurnLabel,
           playback,
           humanParticipantCount: params.humanParticipantCount,
           ...(params.onTerminalError ? { onTerminalError: params.onTerminalError } : {}),

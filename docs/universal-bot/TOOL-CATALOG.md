@@ -195,15 +195,54 @@ WebQuery and hand the bot an API key.
 | `memory`/notes | have | daily memory already writes |
 
 ### 4.6 Token and turn control ("every token end to end per instruction")
-Not a tool, a config surface plus a log line:
-- per-turn `maxOutputTokens` for voice (30-word answers do not need 1k)
-- prompt budget: which of SOUL/AGENTS/USER/skills/memory get loaded on a
-  voice turn vs a text turn
-- transcript framing size (`agent-turn.ts` wraps every utterance)
-- `thinkingDefault` per persona (already `off` on Sexton)
-- one log line per turn: prompt tokens, output tokens, model, cost, and
-  the existing `sttMs/agentMs/ttsMs`. Then we can see what each
-  instruction costs and cut it.
+
+Checked each item against the actual `AgentCommandOpts` / `AgentCommandIngressOpts`
+surface (`openclaw/src/agents/command/types.ts`) that `runCommandFromIngress`
+accepts, not the wishlist. Two of five items are a real, ingress-exposed knob;
+three are not there and would need a host change. Cut accordingly.
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| `voice.thinking` (per-turn `thinking`) | **shipped this issue** | `AgentCommandOpts.thinking` is a real, unrestricted ingress field. Wired: `config.ts` (`TeamSpeakVoiceConfig.thinking`) → `stt-tts-lane.ts` → `agent-turn.ts` → `runCommandFromIngress({ thinking })`, defaulting to `"off"` for every stt-tts voice turn regardless of the agent's `thinkingDefault`. This is the one lever in this list that plausibly moves `agentMs` (7461ms measured 2026-09-24 on MiniMax-M3) — a visible thinking trace has nowhere to go on a voice line and the model still pays to produce it. Not yet re-measured live; do that before trusting the number. |
+| per-turn `maxOutputTokens` | **cut — not exposed** | `AgentCommandOpts` has no `maxOutputTokens` field. The host resolves it internally per model/context-engine (`embedded-agent-runner/run-loop.ts`, tied to the model's declared `maxTokens`), not per ingress call. Capping a 30-word voice answer at ~150 output tokens would need a new `AgentCommandOpts` field plumbed through the embedded runner — an `openclaw` core change, out of scope for this plugin. Filed nowhere yet; worth a core issue if the token spend turns out to matter once the log line below has data. |
+| prompt budget (which of SOUL/AGENTS/USER/skills/memory load per turn) | **cut — wrong model** | This isn't a per-turn switch. Workspace bootstrap files (`IDENTITY.md`/`USER.md`/`SOUL.md`) load once per session via `bootstrapPending` (`openclaw/src/agents/bootstrap-mode.ts`), not fresh on every voice turn; skills/memory inclusion is system-prompt composition, same for every channel today. The closest real knob is `promptMode: "minimal"` (`system-prompt.ts`), but that's built for spawned subagents (trims tool guidance/owner line, not SOUL/skills) and swapping it in for voice is untested and risks silently changing tool availability. Not worth the risk for an unmeasured saving — leave it. |
+| transcript framing size (`agent-turn.ts`) | **cut — already minimal** | `formatTeamSpeakVoicePrompt` is one line: `` `[teamspeak voice] ${nickname} said: ${message}` ``. That's a handful of tokens of fixed overhead, not a growing cost. Nothing to trim. |
+| one log line: prompt/output tokens, model, cost | **shipped, partial** | Extended the existing `teamspeak voice: stt-tts turn` line (`stt-tts-speaker-session.ts`) with `requestedModel=` / `requestedThinking=`, next to the existing `sttMs/agentMs/ttsMs/firstAudioMs`. Prompt tokens, output tokens, and cost are **not there and can't be added from this repo**: `runCommandFromIngress` returns only `{ payloads }` to the ingress caller (`command/types.ts`) — no usage object crosses that boundary, even though the host tracks it internally (`CliUsage` in `cli-output-records.ts`, promptTokens/outputTokens/cost). Getting real numbers into this log line needs `runCommandFromIngress` to return usage on the result, which is a host (openclaw core) change, not a plnt-sexton one. |
+
+#### Latency pass (Brandon 2026-09-25: "limit latency as much as possible")
+
+Where a voice turn's time actually goes, from 12 live sexton turns on
+2026-09-24 (whisper-local + MiniMax-M3 + MiniMax T2A, `thinkingDefault:
+"medium"` still in effect on the box):
+
+| stage | typical | notes |
+| --- | --- | --- |
+| hangover | 600 ms | `segmentation.hangoverMs`, spent *before* `closedAt`, so never in the log |
+| queue wait | 0-3.4 s | invisible until now; a speaker chaining utterances waits for the previous turn's trailing chunk synthesis |
+| `sttMs` | 1.4-2.0 s | whisper.cpp fixed 30 s mel window, box at load ~18/12 |
+| `agentMs` | 2.4-3.8 s | full reply, no streaming; includes thinking at `medium` |
+| `ttsMs` (first chunk) | 1.1-1.8 s | MiniMax T2A round trip, mostly fixed overhead |
+| `firstAudioMs` | 5.1-8.8 s | sum of the above minus hangover |
+
+What this issue ships against that:
+
+| lever | status | effect |
+| --- | --- | --- |
+| `voice.thinking` → `"off"` | shipped (above) | removes the `medium` thinking spend from `agentMs`; measure after deploy |
+| transcription off the serialized queue | shipped | STT starts at segment close instead of when the previous turn finishes synthesizing; the 2-3 s "unexplained" gap collapses to `max(0, prevTail - sttMs)` |
+| TTS prefetch (chunk N+1 synthesizes while N plays) | shipped | shrinks inter-chunk gaps and shortens how long a turn holds the queue; first audio unchanged |
+| `queueWaitMs=` in the per-turn log | shipped | the previously hidden stage is now a number |
+| `hangoverMs` 600 → lower | **not changed** | it is a real 600 ms of first-audio, but it is the only thing keeping a mid-sentence breath from splitting one utterance into two turns; a config knob already, tune per room from the log rather than globally |
+| `bootstrapContextMode: "lightweight"` | **cut** | it IS an ingress-exposed per-turn knob (`AgentCommandOpts`), but "lightweight" drops *every* bootstrap file (`bootstrap-files.ts` `applyContextModeFilter` returns `[]`), i.e. no SOUL/IDENTITY/AGENTS. That is "no persona", not "smaller persona". Not usable for a character bot. |
+| stream the reply into TTS | **not shipped, the remaining big lever** | the host does have block streaming: `runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher` fires `onBlockReply` per paragraph/sentence mid-generation via `EmbeddedBlockChunker`, which would let chunk-1 synthesis start ~1 s into `agentMs` instead of after it. It is a different entry point from `runCommandFromIngress` (needs a finalized inbound context + a dispatcher whose `deliver` feeds the synthesizer, and the `blockStreaming` chunking config for the channel), so it is a rewrite of the voice turn, not a flag. Follow-up issue filed; expected win is most of `agentMs` off first audio. |
+
+**Bottom line:** of the five asks, two were real, ingress-level, plugin-side
+work and are done. The other three either don't exist as a per-call knob today
+(`maxOutputTokens`, prompt/token/cost in the ingress result) or don't map to
+the mechanism the issue assumed (prompt budget). Recommend a follow-up host
+issue against `openclaw` core for `maxOutputTokens` override + usage-on-result
+if the `requestedModel`/`requestedThinking` log line, once it has a few days
+of live data, shows spend that's worth capping rather than just watching.
 
 ### 4.7 STT as a connector
 `sttProvider` is already a switch. Make it a contract:

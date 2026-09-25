@@ -135,6 +135,15 @@ export type TeamSpeakVoiceConfig = {
   /** Optional LLM model override for TeamSpeak voice responses. */
   model?: string;
   /**
+   * Thinking level forced on every stt-tts voice turn ("off"|"low"|"medium"|
+   * "high"), passed straight through as `AgentCommandOpts.thinking`. Voice
+   * has no channel for a visible thinking trace and pays for it in dead air
+   * on the line, so the lane defaults this to "off" (PHA-3789) rather than
+   * inheriting whatever the agent's `thinkingDefault` resolves to for other
+   * channels. Set explicitly to override, including back to "inherit".
+   */
+  thinking?: string;
+  /**
    * Wake-name policy for the stt-tts lane. Unset adapts to the room: off for
    * one human, on for two or more. The realtime lane keeps reading these from
    * `voice.realtime`; both spellings resolve, `voice` wins.

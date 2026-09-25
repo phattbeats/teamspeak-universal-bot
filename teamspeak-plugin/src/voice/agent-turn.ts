@@ -40,6 +40,13 @@ export type TeamSpeakAgentTurnParams = {
   sessionKey: string;
   /** Optional LLM override from `voice.model`. */
   model?: string | undefined;
+  /**
+   * Thinking level forced on this turn (`voice.thinking`, PHA-3789). Voice
+   * has no channel to show a thinking trace and the wait is dead air on the
+   * line, so callers default this to "off" rather than leaving it to
+   * whatever the agent's `thinkingDefault` resolves to for other channels.
+   */
+  thinking?: string | undefined;
   runtimeEnv?: unknown;
   log?: ((message: string) => void) | undefined;
 };
@@ -84,6 +91,7 @@ export function createTeamSpeakAgentTurn(params: TeamSpeakAgentTurnParams) {
             accountId: params.accountId,
             allowModelOverride: Boolean(params.model),
             ...(params.model ? { model: params.model } : {}),
+            ...(params.thinking ? { thinking: params.thinking } : {}),
             deliver: false,
           },
           params.runtimeEnv ?? defaultRuntime,
