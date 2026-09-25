@@ -64,6 +64,14 @@ messages within two seconds; "Sexton, play some smooth jazz" starts music
 that ducks when anyone speaks and stops on "Sexton, stop"; the catch-up PM
 keeps working underneath; and the group has been told the Sexton listens.
 
+## Universal bot tool catalog
+
+See [`docs/universal-bot/TOOL-CATALOG.md`](docs/universal-bot/TOOL-CATALOG.md)
+for the research + implementation notes on turning Sexton/Bexton into
+instances of a common tool platform: web search provider choice, the
+`tools.allow` wiring, per-persona skill curation, and the live-verify
+recipe (PHA-3783/PHA-3788).
+
 ## Status
 
 `ts-bridge/` (PHA-3174, audio sidecar) has a working Rust implementation —

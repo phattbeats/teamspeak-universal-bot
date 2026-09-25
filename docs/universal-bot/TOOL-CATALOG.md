@@ -262,9 +262,9 @@ needs Brandon to enable it and mint a scoped API key; not attempted here.
 ### 4.5 Web and skills (OpenClaw core, just needs enabling)
 | Tool | Status | Notes |
 | --- | --- | --- |
-| `web_search` | have-but-dead | needs `tools.web.search.provider` + a key (Brave/MiniMax/Gemini…) or a key-free one (DuckDuckGo/SearXNG); add to `tools.allow` |
-| `web_fetch` | have | |
-| skills | have | 17/53 ready on the Sexton gateway; pick a per-persona list (weather, clawhub, browser-automation…) and prune the rest so they don't eat prompt budget |
+| `web_search` | **done (PHA-3788)** | see §6 below |
+| `web_fetch` | **done (PHA-3788)** | see §6 below |
+| skills | **done (PHA-3788)** | pruned from ~53 bundled to a curated per-persona list; see §6.3 |
 | `memory`/notes | have | daily memory already writes |
 
 ### 4.6 Token and turn control ("every token end to end per instruction")
@@ -350,7 +350,138 @@ Three notes worth keeping:
   obvious use (see the sexton/bexton cross-wake in PHA-3605) but it changes what
   comes back, so it stays an operator decision rather than a default.
 
-## 5. Things found on the way
+## 6. Web search + skills curation implementation (PHA-3788)
+
+Closes the "have-but-dead" gap from §4.5. Applied by hand on both live
+gateway containers on PHATT-RAID (config is not reconstructed by
+`deploy.sh` per PHA-3601 — this needs redoing if either container is
+rebuilt from scratch instead of restarted).
+
+### 6.1 Provider: DuckDuckGo (key-free)
+
+`tools.web.search.provider` is `duckduckgo`, not Brave/MiniMax/Gemini. It's
+the only key-free provider OpenClaw ships (SearXNG needs a self-hosted
+instance we don't have running); the task explicitly preferred a key-free
+option unless clearly inadequate, and for "what's the weather" / general
+lookup voice queries it's adequate. It is **not** auto-selected (OpenClaw
+never auto-picks a key-free provider), and it is **not bundled** — it ships
+as a separate plugin package that has to be installed per container:
+
+```bash
+docker exec <sexton|bexton> openclaw plugins install @openclaw/duckduckgo-plugin
+# then in openclaw.json:
+#   tools.web.search = { "enabled": true, "provider": "duckduckgo" }
+#   tools.web.fetch  = { "enabled": true }
+docker restart <sexton|bexton>   # plugin + tools changes both need a restart
+```
+
+Caveat from OpenClaw's own docs: DuckDuckGo here is an "experimental,
+unofficial" HTML-scrape integration, not an API — expect occasional
+breakage from bot-challenge pages. If that becomes a problem, Brave Search
+(free tier, keyed) is the documented fallback; no key has been granted for
+it, so it was not enabled per the "no paid service without explicit
+approved spend" instruction.
+
+### 6.2 `tools.allow` — actually wired as agent-level `alsoAllow`
+
+Global `tools.allow` **replaces** the whole profile-derived tool set for
+every agent on the gateway (Ledger, Mr. House, Jenkins, etc. all live on
+the same `openclaw.json`) — setting it at the top level to
+`["web_search","web_fetch"]` would have cut every other tool for every
+other agent, a global-config trap in the same family as the
+`enabled:false` channel-toggle trap. Instead:
+
+```json5
+// agents.entries.sexton.tools / agents.entries.bexton.tools
+{
+  "deny": ["process", "sessions_spawn"],      // unchanged
+  "alsoAllow": ["web_search", "web_fetch"]    // added
+}
+```
+
+`alsoAllow` is the additive form (merges on top of the existing profile +
+deny) documented for exactly this per-agent case; `allow` at the agent
+level has the same wholesale-replace semantics as the global key. Net
+effect for both bots: same tool set as before, plus `web_search` and
+`web_fetch`.
+
+### 6.3 Curated skills per persona
+
+OpenClaw ships 49 bundled skills under `/app/skills` plus 4 extension
+skills (`browser-automation`, `canvas`, `obsidian-vault-maintainer`,
+`wiki-maintainer`) — ~53 total, all loaded into prompt context by default
+if no `agents.entries.<id>.skills` allowlist is set (it was unset for both
+bots before this change). Curated via `skills: [...]` on each agent entry:
+
+| Bot | Persona | Skills kept | Why |
+| --- | --- | --- | --- |
+| Sexton | general TS channel voice assistant + music | `weather`, `summarize`, `songsee`, `spotify-player`, `meme-maker`, `model-usage`, `healthcheck`, `control-ui` | small-talk/utility (`weather`), channel recap (`summarize`), music identification/lookup (`songsee`, `spotify-player`), voice-chat personality (`meme-maker`), self-ops (`model-usage`, `healthcheck`, `control-ui`) |
+| Bexton | Velvet Vice Lounge Band leader, Suno song queue (PHA-3554/PHA-3636) | `weather`, `songsee`, `spotify-player`, `sonoscli`, `meme-maker`, `model-usage`, `healthcheck`, `control-ui` | same ops/personality set as Sexton, `sonoscli` in place of `summarize` since the band persona's job is playback/queue, not channel recap |
+
+Everything else (github/gh-issues, 1password, apple-notes/reminders,
+bear-notes, taskflow\*, things-mac, notion, obsidian, trello, coding-agent,
+node-\*, python-debugpy, tmux, skill-creator, etc.) was cut — none of it is
+used by a voice-chat/music persona, and per Brandon's ask this was a prompt-
+budget trim, not a science project, so it stops at "what each persona
+actually uses."
+
+### 6.4 Live verification
+
+Wanted: get Sexton to answer "Sexton, what's the weather in Dayton" over
+TeamSpeak voice and confirm `web_search` actually fired.
+
+What was tried and why the literal voice path doesn't have a scripted
+test: `send-test` (`sexton/src/bin/send-test.rs`) only speaks TS **text**
+chat (`say:<text>` steps) — text messages don't reach the STT/wake-gate
+pipeline at all (confirmed live: a `say:` message produced no wake-gate log
+line, while a real human talking in the same channel did produce
+`wake gate declined` lines). `bridge-test` only emits sine tones for the
+bot's own outbound-mixing test (PHA-3174 acceptance test), not
+speech-like input a real human speaker would produce, and there's no
+documented bridge frame type for injecting a fake speaker's transcript.
+Building a synthetic-speech-over-the-wire injector was out of scope for
+this pass.
+
+Verification actually used the exact same runtime path a voice turn does
+(`runtime.agent.runCommandFromIngress`, i.e. the CLI's `openclaw agent`
+command is not a separate mock — it drives the live gateway):
+
+```bash
+docker exec sexton openclaw agent --agent sexton \
+  --message "Sexton, what's the weather in Dayton" --json --timeout 60
+```
+
+Result: `toolSummary: { "calls": 3, "tools": ["web_search","web_fetch"], "failures": 0 }`,
+final reply `"Dayton, OH right now: sunny, 63°F (17°C), feels like ~61°F,
+68% humidity, light wind out of the east at ~6mph..."` — a real, current,
+specific answer, not a hallucinated one, so the tool actually executed
+end-to-end (config → plugin → provider → result folded into the reply).
+
+Same check against Bexton (`--agent bexton`) came back in-character
+refusals ("I've got a band to run, not a barometer...") for both a direct
+weather ask and a "search the web for..." rephrase — the persona declines
+off-topic requests outright before reaching for a tool. Config-wise Bexton
+is identical to Sexton (same `tools.web.search` block, same plugin
+installed, same `alsoAllow`), so this reads as a persona/prompt behavior,
+not a broken tool wire, but it means Bexton's `web_search` path is
+**config-verified, not behavior-verified** — a genuine in-character prompt
+that would make Bexton reach for search (e.g. "look up when the Velvet
+Vice Lounge Band's next real-world namesake plays") is a follow-up if
+that distinction matters.
+
+### 6.5 Follow-ups
+
+- Bexton's tool call has not been behavior-verified in-character (§6.4).
+- No true TeamSpeak **voice** (audio-in) injection tool exists yet; §4.7's
+  STT-as-a-connector work would be the natural place to add a "fake
+  speaker" test harness (feed real PCM/TTS audio in as if a human spoke
+  it) instead of relying on the text-only `send-test` or tone-only
+  `bridge-test`.
+- If DuckDuckGo's scrape-based provider proves flaky in practice, Brave
+  Search is the documented next step, but needs an approved key/spend
+  first — not enabled here.
+
+## 7. Things found on the way
 
 - **Sexton has no persona.** Live `SOUL.md`, `IDENTITY.md`, `USER.md` are
   the stock OpenClaw placeholders ("_Fill this in during your first
