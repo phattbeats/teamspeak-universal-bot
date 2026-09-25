@@ -54,8 +54,14 @@ class FakeSynthesizer implements SpeechSynthesizer {
     speakText: "",
   };
 
+  /** When set, every synthesis call parks here until it resolves (queue tests). */
+  hold: Promise<void> | undefined;
+
   async synthesize(text: string): Promise<SpeechSynthesisOutcome> {
     this.spoken.push(text);
+    if (this.hold) {
+      await this.hold;
+    }
     return this.outcome;
   }
 }
@@ -365,6 +371,35 @@ describe("stt-tts lane over the mock bridge", () => {
       Buffer.concat([REPLY_PCM, REPLY_PCM]),
     );
     expect(chatty.logs.some((line) => line.includes("ttsChunks=2/2"))).toBe(true);
+  });
+
+  it("transcribes the next utterance while the previous answer is still synthesizing (PHA-3789)", async () => {
+    const busy = createHarness({ transcripts: ["first thing", "second thing"] });
+    joinRoom(busy, [PHATT]);
+    let release: () => void = () => undefined;
+    busy.synthesizer.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    speak(busy, PHATT);
+    await settle();
+    // Turn one is parked inside synthesis, holding the serialized queue.
+    expect(busy.synthesizer.spoken).toHaveLength(1);
+    expect(busy.transcriber.requests).toHaveLength(1);
+
+    speak(busy, PHATT);
+    await settle();
+    // STT for utterance two has already been issued: it does not wait behind
+    // the first turn's synthesis the way the agent turn and playback must.
+    expect(busy.transcriber.requests).toHaveLength(2);
+    expect(busy.turns).toHaveLength(1);
+
+    release();
+    await settle();
+    await settle();
+    expect(busy.turns.map((turn) => turn.message)).toEqual(["first thing", "second thing"]);
+    expect(busy.synthesizer.spoken).toHaveLength(2);
+    expect(busy.logs.some((line) => /queueWaitMs=\d+/.test(line))).toBe(true);
   });
 
   it("reports the lane it is running in !sexton status", async () => {

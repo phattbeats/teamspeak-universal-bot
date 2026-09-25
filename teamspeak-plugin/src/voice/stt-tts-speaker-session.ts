@@ -258,8 +258,24 @@ export class TeamSpeakSttTtsSpeakerSession {
 
   private enqueueTurn(segment: SpeakerSegment): void {
     const generation = this.generation;
+    // Transcription starts the moment the segment closes, NOT when the queue
+    // frees up (PHA-3789 latency pass). STT has no side effects on the lane,
+    // so it does not need the serialization the agent turn and playback do.
+    // Without this, a speaker who talks again while the previous answer is
+    // still synthesizing its trailing chunks pays the full sttMs on top of
+    // that wait -- the 2-3s of unexplained firstAudioMs seen in live logs.
+    const sttStartedAt = this.now();
+    const transcription = transcribeSegment(this.params.transcriber, {
+      pcm48kMono: segment.pcm48kMono,
+      label: this.nickname,
+      durationMs: segment.durationMs,
+      clientId: this.clientId,
+    }).then((heard) => ({ heard, sttMs: this.now() - sttStartedAt }));
+    // A rejection is handled inside runTurn (awaited there); this keeps the
+    // pre-queue promise from reporting as unhandled while it waits its turn.
+    transcription.catch(() => undefined);
     this.queue = this.queue
-      .then(() => this.runTurn(segment, generation))
+      .then(() => this.runTurn(segment, generation, transcription))
       .catch((error: unknown) => {
         const failure = error instanceof Error ? error : new Error(String(error));
         // One failed turn is not a dead session: whisper or MiniMax being
@@ -271,20 +287,21 @@ export class TeamSpeakSttTtsSpeakerSession {
       });
   }
 
-  private async runTurn(segment: SpeakerSegment, generation: number): Promise<void> {
+  private async runTurn(
+    segment: SpeakerSegment,
+    generation: number,
+    transcription: Promise<{ heard: Awaited<ReturnType<typeof transcribeSegment>>; sttMs: number }>,
+  ): Promise<void> {
     if (this.isStopped() || generation !== this.generation) {
       return;
     }
-    const sttStartedAt = this.now();
-    const heard = await transcribeSegment(this.params.transcriber, {
-      pcm48kMono: segment.pcm48kMono,
-      label: this.nickname,
-      durationMs: segment.durationMs,
-      clientId: this.clientId,
-    });
+    // How long this segment sat behind the previous turn before its own work
+    // could start. Zero on a quiet lane; the number to watch when a speaker
+    // chains utterances.
+    const queueWaitMs = this.now() - segment.closedAt;
+    const { heard, sttMs } = await transcription;
     const transcript = heard.text;
     const sttProvider = heard.provider;
-    const sttMs = this.now() - sttStartedAt;
     if (this.isStopped() || generation !== this.generation) {
       return;
     }
@@ -334,10 +351,24 @@ export class TeamSpeakSttTtsSpeakerSession {
     let totalAudioMs = 0;
     let spokenChunks = 0;
 
-    for (let index = 0; index < chunks.length; index += 1) {
-      const chunkStartedAt = this.now();
-      const chunkSpeech = await this.params.synthesizer.synthesize(chunks[index] as string);
-      const chunkTtsMs = this.now() - chunkStartedAt;
+    // Prefetch: chunk N+1 is already synthesizing while chunk N's frames go on
+    // the wire (PHA-3789 latency pass). Synthesis calls still start in order,
+    // so `spoken` order is unchanged; only the inter-chunk gap shrinks. First
+    // audio is untouched -- that is bounded by agentMs + first-chunk ttsMs.
+    const synthesize = (index: number) => {
+      const startedAt = this.now();
+      return this.params.synthesizer
+        .synthesize(chunks[index] as string)
+        .then((outcome) => ({ outcome, ttsMs: this.now() - startedAt }));
+    };
+    let pending = chunks.length > 0 ? synthesize(0) : undefined;
+    for (let index = 0; index < chunks.length && pending; index += 1) {
+      const current = pending;
+      pending = index + 1 < chunks.length ? synthesize(index + 1) : undefined;
+      // A prefetch that fails after we stop or break must not surface as an
+      // unhandled rejection; its outcome is only read if the loop reaches it.
+      pending?.catch(() => undefined);
+      const { outcome: chunkSpeech, ttsMs: chunkTtsMs } = await current;
       if (index === 0) {
         firstChunkTtsMs = chunkTtsMs;
       }
@@ -393,7 +424,7 @@ export class TeamSpeakSttTtsSpeakerSession {
     const requestedThinking = this.params.agentTurnLabel?.thinking ?? "default";
     this.params.log?.(
       `teamspeak voice: stt-tts turn clientId=${this.clientId} nickname=${this.nickname} ` +
-        `segmentMs=${this.lastTimings.segmentMs} sttMs=${this.lastTimings.sttMs} ` +
+        `segmentMs=${this.lastTimings.segmentMs} queueWaitMs=${Math.round(queueWaitMs)} sttMs=${this.lastTimings.sttMs} ` +
         `agentMs=${this.lastTimings.agentMs} ttsMs=${this.lastTimings.ttsMs} ` +
         `firstAudioMs=${this.lastTimings.firstAudioMs} ttsChunks=${spokenChunks}/${chunks.length} ` +
         `sttProvider=${sttProvider} speechProvider=${speechProvider ?? this.params.synthesizer.id} ` +

@@ -174,6 +174,33 @@ three are not there and would need a host change. Cut accordingly.
 | transcript framing size (`agent-turn.ts`) | **cut — already minimal** | `formatTeamSpeakVoicePrompt` is one line: `` `[teamspeak voice] ${nickname} said: ${message}` ``. That's a handful of tokens of fixed overhead, not a growing cost. Nothing to trim. |
 | one log line: prompt/output tokens, model, cost | **shipped, partial** | Extended the existing `teamspeak voice: stt-tts turn` line (`stt-tts-speaker-session.ts`) with `requestedModel=` / `requestedThinking=`, next to the existing `sttMs/agentMs/ttsMs/firstAudioMs`. Prompt tokens, output tokens, and cost are **not there and can't be added from this repo**: `runCommandFromIngress` returns only `{ payloads }` to the ingress caller (`command/types.ts`) — no usage object crosses that boundary, even though the host tracks it internally (`CliUsage` in `cli-output-records.ts`, promptTokens/outputTokens/cost). Getting real numbers into this log line needs `runCommandFromIngress` to return usage on the result, which is a host (openclaw core) change, not a plnt-sexton one. |
 
+#### Latency pass (Brandon 2026-09-25: "limit latency as much as possible")
+
+Where a voice turn's time actually goes, from 12 live sexton turns on
+2026-09-24 (whisper-local + MiniMax-M3 + MiniMax T2A, `thinkingDefault:
+"medium"` still in effect on the box):
+
+| stage | typical | notes |
+| --- | --- | --- |
+| hangover | 600 ms | `segmentation.hangoverMs`, spent *before* `closedAt`, so never in the log |
+| queue wait | 0-3.4 s | invisible until now; a speaker chaining utterances waits for the previous turn's trailing chunk synthesis |
+| `sttMs` | 1.4-2.0 s | whisper.cpp fixed 30 s mel window, box at load ~18/12 |
+| `agentMs` | 2.4-3.8 s | full reply, no streaming; includes thinking at `medium` |
+| `ttsMs` (first chunk) | 1.1-1.8 s | MiniMax T2A round trip, mostly fixed overhead |
+| `firstAudioMs` | 5.1-8.8 s | sum of the above minus hangover |
+
+What this issue ships against that:
+
+| lever | status | effect |
+| --- | --- | --- |
+| `voice.thinking` → `"off"` | shipped (above) | removes the `medium` thinking spend from `agentMs`; measure after deploy |
+| transcription off the serialized queue | shipped | STT starts at segment close instead of when the previous turn finishes synthesizing; the 2-3 s "unexplained" gap collapses to `max(0, prevTail - sttMs)` |
+| TTS prefetch (chunk N+1 synthesizes while N plays) | shipped | shrinks inter-chunk gaps and shortens how long a turn holds the queue; first audio unchanged |
+| `queueWaitMs=` in the per-turn log | shipped | the previously hidden stage is now a number |
+| `hangoverMs` 600 → lower | **not changed** | it is a real 600 ms of first-audio, but it is the only thing keeping a mid-sentence breath from splitting one utterance into two turns; a config knob already, tune per room from the log rather than globally |
+| `bootstrapContextMode: "lightweight"` | **cut** | it IS an ingress-exposed per-turn knob (`AgentCommandOpts`), but "lightweight" drops *every* bootstrap file (`bootstrap-files.ts` `applyContextModeFilter` returns `[]`), i.e. no SOUL/IDENTITY/AGENTS. That is "no persona", not "smaller persona". Not usable for a character bot. |
+| stream the reply into TTS | **not shipped, the remaining big lever** | the host does have block streaming: `runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher` fires `onBlockReply` per paragraph/sentence mid-generation via `EmbeddedBlockChunker`, which would let chunk-1 synthesis start ~1 s into `agentMs` instead of after it. It is a different entry point from `runCommandFromIngress` (needs a finalized inbound context + a dispatcher whose `deliver` feeds the synthesizer, and the `blockStreaming` chunking config for the channel), so it is a rewrite of the voice turn, not a flag. Follow-up issue filed; expected win is most of `agentMs` off first audio. |
+
 **Bottom line:** of the five asks, two were real, ingress-level, plugin-side
 work and are done. The other three either don't exist as a per-call knob today
 (`maxOutputTokens`, prompt/token/cost in the ingress result) or don't map to
