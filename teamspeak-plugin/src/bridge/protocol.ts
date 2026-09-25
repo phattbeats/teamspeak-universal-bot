@@ -23,6 +23,8 @@ export const TYPE_SPEAKER_STOP = 0x03;
 export const TYPE_ROSTER = 0x04;
 export const TYPE_TEXT_MESSAGE = 0x05;
 export const TYPE_STATE = 0x06;
+/** Answer to any moderation command below (PHA-3786). */
+export const TYPE_MODERATION_RESULT = 0x07;
 
 /** Frames we send to the bridge. */
 export const TYPE_VOICE_AUDIO = 0x81;
@@ -34,6 +36,19 @@ export const TYPE_JOIN = 0x86;
 export const TYPE_MUTE = 0x87;
 export const TYPE_POKE = 0x88;
 export const TYPE_SEND_TEXT = 0x89;
+
+/** Moderation commands (PHA-3786). See TOOL-CATALOG.md §4.3. */
+export const TYPE_CLIENT_KICK = 0x8a;
+export const TYPE_BAN_CLIENT = 0x8b;
+export const TYPE_BAN_DEL = 0x8c;
+export const TYPE_BAN_LIST = 0x8d;
+export const TYPE_CLIENT_MOVE = 0x8e;
+export const TYPE_CLIENT_EDIT_MUTE = 0x8f;
+export const TYPE_CHANNEL_EDIT = 0x90;
+export const TYPE_CHANNEL_CREATE = 0x91;
+export const TYPE_CHANNEL_DELETE = 0x92;
+export const TYPE_SERVER_EDIT = 0x93;
+export const TYPE_SERVER_GROUP_ADD_CLIENT = 0x94;
 
 const FRAME_PREFIX_BYTES = 5;
 
@@ -62,6 +77,17 @@ export type RosterEntry = {
   nickname: string;
   muted: boolean;
   away: boolean;
+  /** Server group names this client belongs to (PHA-3786). Optional so
+   * existing literal `RosterEntry` construction (tests, mocks) keeps
+   * compiling without every callsite needing an update. */
+  serverGroups?: string[];
+};
+
+/** Answer to a moderation command (PHA-3786). */
+export type ModerationResult = {
+  action: string;
+  ok: boolean;
+  detail: string;
 };
 
 export type TextMessageHeader = {
@@ -184,9 +210,24 @@ export function readRoster(header: unknown): RosterEntry[] | undefined {
       nickname: typeof raw.nickname === "string" ? raw.nickname : String(clientId),
       muted: raw.muted === true,
       away: raw.away === true,
+      serverGroups: Array.isArray(raw.serverGroups)
+        ? raw.serverGroups.filter((g): g is string => typeof g === "string")
+        : [],
     });
   }
   return roster;
+}
+
+/** Decode a `TYPE_MODERATION_RESULT` frame header (PHA-3786). */
+export function readModerationResult(header: unknown): ModerationResult | undefined {
+  if (!isRecord(header) || typeof header.action !== "string" || typeof header.ok !== "boolean") {
+    return undefined;
+  }
+  return {
+    action: header.action,
+    ok: header.ok,
+    detail: typeof header.detail === "string" ? header.detail : "",
+  };
 }
 
 const TEXT_TARGETS: ReadonlySet<string> = new Set(["channel", "server", "client", "poke"]);

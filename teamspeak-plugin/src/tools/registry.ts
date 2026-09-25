@@ -43,6 +43,19 @@ export const BAND_STATUS_TOOL = "band_status";
 export const SONG_LYRICS_TOOL = "song_lyrics";
 export const REPLAY_SONG_TOOL = "replay_song";
 
+// --- moderation (PHA-3786) --------------------------------------------------
+export const KICK_CLIENT_TOOL = "kick_client";
+export const BAN_CLIENT_TOOL = "ban_client";
+export const UNBAN_CLIENT_TOOL = "unban_client";
+export const LIST_BANS_TOOL = "list_bans";
+export const MOVE_CLIENT_TOOL = "move_client";
+export const MUTE_CLIENT_TOOL = "mute_client";
+export const EDIT_CHANNEL_TOOL = "edit_channel";
+export const CREATE_CHANNEL_TOOL = "create_channel";
+export const DELETE_CHANNEL_TOOL = "delete_channel";
+export const EDIT_SERVER_TOOL = "edit_server";
+export const ADD_TO_SERVER_GROUP_TOOL = "add_to_server_group";
+
 // --- music queue v2 (PHA-3785) ---------------------------------------------
 export const NOW_PLAYING_TOOL = "now_playing";
 export const SHOW_QUEUE_TOOL = "show_queue";
@@ -81,6 +94,8 @@ export type TeamSpeakToolDeps = {
   /** The channel the bridge is in; `what_did_i_miss` reads that channel's log. */
   channelName: () => string;
   poke: (clientId: TeamSpeakClientId, text: string) => void;
+  /** Send a text message to the channel, the server, or one client. Also used for the moderation audit line (PHA-3786). */
+  sendText: (target: "channel" | "server" | TeamSpeakClientId, text: string) => void;
   /**
    * Park/unpark the Sexton (PHA-3428, Brandon: "he can leave and join at will …
    * not everyone wants him sitting in all the time"). Parked means deaf and
@@ -89,6 +104,18 @@ export type TeamSpeakToolDeps = {
    */
   setParked: (parked: boolean, reason: string) => void;
   isParked: () => boolean;
+  // --- moderation (PHA-3786) ------------------------------------------------
+  kickClient: (clientId: TeamSpeakClientId, fromServer: boolean, reason?: string) => void;
+  banClient: (clientId: TeamSpeakClientId, durationSecs?: number, reason?: string) => void;
+  banDel: (banId: number) => void;
+  banList: () => void;
+  moveClient: (clientId: TeamSpeakClientId, channelId: number) => void;
+  muteClient: (clientId: TeamSpeakClientId, muted: boolean) => void;
+  editChannel: (channelId: number, name?: string, topic?: string) => void;
+  createChannel: (name: string, parentId?: number) => void;
+  deleteChannel: (channelId: number, force: boolean) => void;
+  editServer: (name?: string, welcomeMessage?: string) => void;
+  addToServerGroup: (serverGroupId: number, clientId: TeamSpeakClientId) => void;
   /** The house band (PHA-3554). Undefined on an account that has not opted in. */
   band?: BandController | undefined;
   logDir: string;
@@ -99,12 +126,35 @@ export type TeamSpeakToolDeps = {
 
 type ToolResult = Record<string, unknown> & { ok: boolean };
 
+/**
+ * Which moderation tool groups are actually usable (PHA-3786). Fails closed:
+ * an empty/absent `allowGroups` disables every group regardless of the
+ * per-action flags, since there would be nobody it is safe to run them for.
+ */
+function moderationOptions(config: TeamSpeakToolsConfig | undefined): {
+  kick: boolean;
+  ban: boolean;
+  edit: boolean;
+} {
+  const moderation = config?.moderation;
+  const hasAllowlist = (moderation?.allowGroups?.length ?? 0) > 0;
+  return {
+    kick: hasAllowlist && moderation?.kick === true,
+    ban: hasAllowlist && moderation?.ban === true,
+    edit: hasAllowlist && moderation?.edit === true,
+  };
+}
+
 /** Build the `tools` list and the handler the speaker sessions register. */
 export function createTeamSpeakToolRegistration(
   deps: TeamSpeakToolDeps,
 ): TeamSpeakRealtimeToolRegistration {
   return {
-    tools: buildTeamSpeakTools({ music: deps.music !== undefined, band: deps.band !== undefined }),
+    tools: buildTeamSpeakTools({
+      music: deps.music !== undefined,
+      band: deps.band !== undefined,
+      moderation: moderationOptions(deps.config),
+    }),
     handle: (event, context) => runTeamSpeakTool(deps, event, context),
   };
 }
@@ -112,6 +162,7 @@ export function createTeamSpeakToolRegistration(
 export function buildTeamSpeakTools(options: {
   music: boolean;
   band?: boolean;
+  moderation?: { kick: boolean; ban: boolean; edit: boolean };
 }): RealtimeVoiceTool[] {
   const tools: RealtimeVoiceTool[] = [];
   if (options.music) {
@@ -409,6 +460,170 @@ export function buildTeamSpeakTools(options: {
       },
     );
   }
+  if (options.moderation?.kick) {
+    tools.push(
+      {
+        type: "function",
+        name: KICK_CLIENT_TOOL,
+        description:
+          "Kick someone out of the channel or off the server entirely. Use sparingly — this is a moderation action, not a joke. Confirm in a few words once done.",
+        parameters: {
+          type: "object",
+          properties: {
+            nickname: { type: "string", description: "Who to kick." },
+            fromServer: {
+              type: "boolean",
+              description: "true to remove them from the whole server, false (default) to just kick them from this channel.",
+            },
+            reason: { type: "string", description: "Optional reason shown to the kicked client." },
+          },
+          required: ["nickname"],
+        },
+      },
+      {
+        type: "function",
+        name: MOVE_CLIENT_TOOL,
+        description: "Move someone else into a different channel, against their will if need be. Confirm in a few words once done.",
+        parameters: {
+          type: "object",
+          properties: {
+            nickname: { type: "string", description: "Who to move." },
+            channelId: {
+              type: "number",
+              description: "The numeric channel id to move them into. There is no channel-name lookup here yet — ask who_is_here or the roster for ids if you don't already have one.",
+            },
+          },
+          required: ["nickname", "channelId"],
+        },
+      },
+    );
+  }
+  if (options.moderation?.ban) {
+    tools.push(
+      {
+        type: "function",
+        name: BAN_CLIENT_TOOL,
+        description: "Ban someone from the server. Confirm in a few words once done.",
+        parameters: {
+          type: "object",
+          properties: {
+            nickname: { type: "string", description: "Who to ban." },
+            durationSecs: {
+              type: "number",
+              description: "Ban length in seconds. Omit for a permanent ban.",
+            },
+            reason: { type: "string", description: "Optional reason." },
+          },
+          required: ["nickname"],
+        },
+      },
+      {
+        type: "function",
+        name: UNBAN_CLIENT_TOOL,
+        description: "Remove one ban by its ban id (from list_bans).",
+        parameters: {
+          type: "object",
+          properties: {
+            banId: { type: "number", description: "The ban id to remove." },
+          },
+          required: ["banId"],
+        },
+      },
+      {
+        type: "function",
+        name: LIST_BANS_TOOL,
+        description:
+          "Request the server's current ban list. Note: this asks the server for the list but the response is not parsed back into this conversation yet — say so if asked what came back.",
+        parameters: { type: "object", properties: {} },
+      },
+    );
+  }
+  if (options.moderation?.edit) {
+    tools.push(
+      {
+        type: "function",
+        name: MUTE_CLIENT_TOOL,
+        description:
+          "Mute or unmute someone else's voice (via talk power, not a client-side mute — they will visibly lose/regain permission to talk). Confirm in a few words once done.",
+        parameters: {
+          type: "object",
+          properties: {
+            nickname: { type: "string", description: "Who to mute or unmute." },
+            muted: { type: "boolean", description: "true to mute, false to unmute." },
+          },
+          required: ["nickname", "muted"],
+        },
+      },
+      {
+        type: "function",
+        name: EDIT_CHANNEL_TOOL,
+        description: "Rename a channel and/or change its topic.",
+        parameters: {
+          type: "object",
+          properties: {
+            channelId: { type: "number", description: "The numeric id of the channel to edit." },
+            name: { type: "string", description: "New name, if changing it." },
+            topic: { type: "string", description: "New topic, if changing it." },
+          },
+          required: ["channelId"],
+        },
+      },
+      {
+        type: "function",
+        name: CREATE_CHANNEL_TOOL,
+        description: "Create a new channel.",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Name of the new channel." },
+            parentId: { type: "number", description: "Optional numeric id of the parent channel." },
+          },
+          required: ["name"],
+        },
+      },
+      {
+        type: "function",
+        name: DELETE_CHANNEL_TOOL,
+        description: "Delete a channel.",
+        parameters: {
+          type: "object",
+          properties: {
+            channelId: { type: "number", description: "The numeric id of the channel to delete." },
+            force: {
+              type: "boolean",
+              description: "true to delete even if clients are still inside. Default false.",
+            },
+          },
+          required: ["channelId"],
+        },
+      },
+      {
+        type: "function",
+        name: EDIT_SERVER_TOOL,
+        description: "Change the virtual server's name and/or welcome message.",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "New server name, if changing it." },
+            welcomeMessage: { type: "string", description: "New welcome message, if changing it." },
+          },
+        },
+      },
+      {
+        type: "function",
+        name: ADD_TO_SERVER_GROUP_TOOL,
+        description: "Add someone to a server group, by the group's numeric id.",
+        parameters: {
+          type: "object",
+          properties: {
+            nickname: { type: "string", description: "Who to add." },
+            serverGroupId: { type: "number", description: "The server group's numeric id." },
+          },
+          required: ["nickname", "serverGroupId"],
+        },
+      },
+    );
+  }
   return tools;
 }
 
@@ -486,6 +701,28 @@ async function dispatch(
       return songLyrics(deps, args);
     case REPLAY_SONG_TOOL:
       return replaySong(deps, args, context);
+    case KICK_CLIENT_TOOL:
+      return kickClientTool(deps, args, context);
+    case MOVE_CLIENT_TOOL:
+      return moveClientTool(deps, args, context);
+    case BAN_CLIENT_TOOL:
+      return banClientTool(deps, args, context);
+    case UNBAN_CLIENT_TOOL:
+      return unbanClientTool(deps, args, context);
+    case LIST_BANS_TOOL:
+      return listBansTool(deps, context);
+    case MUTE_CLIENT_TOOL:
+      return muteClientTool(deps, args, context);
+    case EDIT_CHANNEL_TOOL:
+      return editChannelTool(deps, args, context);
+    case CREATE_CHANNEL_TOOL:
+      return createChannelTool(deps, args, context);
+    case DELETE_CHANNEL_TOOL:
+      return deleteChannelTool(deps, args, context);
+    case EDIT_SERVER_TOOL:
+      return editServerTool(deps, args, context);
+    case ADD_TO_SERVER_GROUP_TOOL:
+      return addToServerGroupTool(deps, args, context);
     default:
       return { ok: false, error: `Unknown TeamSpeak tool "${name}".` };
   }
@@ -950,6 +1187,279 @@ function joinVoice(deps: TeamSpeakToolDeps, context: TeamSpeakToolContext): Tool
   const wasParked = deps.isParked();
   deps.setParked(false, `join_voice:${context.nickname}`);
   return { ok: true, parked: false, wasParked, channel: deps.channelName() };
+}
+
+// --- moderation (PHA-3786) --------------------------------------------------
+
+/**
+ * Is the invoking client in one of `allowGroups` (PHA-3786)? Case-insensitive
+ * name match against `RosterEntry.serverGroups`, the Sexton's own report of
+ * TeamSpeak server-group membership. Fails closed: no roster entry (caller
+ * left the channel between the tool call and now, or an older bridge that
+ * hasn't been rebuilt for PHA-3786 yet) or no configured `allowGroups` means
+ * not authorized. This check runs again at dispatch time even though
+ * `moderationOptions` already gates tool *registration* on `allowGroups`
+ * being non-empty — registration only proves *some* group is configured, not
+ * that *this* caller is in it.
+ */
+function isAuthorizedForModeration(deps: TeamSpeakToolDeps, context: TeamSpeakToolContext): boolean {
+  const allowGroups = deps.config?.moderation?.allowGroups;
+  if (!allowGroups || allowGroups.length === 0) {
+    return false;
+  }
+  const caller = deps.roster().find((entry) => entry.clientId === context.clientId);
+  if (!caller) {
+    return false;
+  }
+  const wanted = new Set(allowGroups.map((g) => g.toLowerCase()));
+  return (caller.serverGroups ?? []).some((g) => wanted.has(g.toLowerCase()));
+}
+
+const NOT_AUTHORIZED: ToolResult = { ok: false, error: "You don't have permission to do that." };
+
+/** Audit line for a moderation action, sent to the channel so the external logger bot persists it (PHA-3786). */
+function auditModeration(deps: TeamSpeakToolDeps, context: TeamSpeakToolContext, line: string): void {
+  deps.sendText("channel", `[moderation] ${context.nickname}: ${line}`);
+}
+
+function resolveModerationTarget(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): RosterEntry | string[] | undefined {
+  const nickname = readString(args.nickname);
+  if (!nickname) {
+    return undefined;
+  }
+  return matchNickname(deps.roster(), nickname, context);
+}
+
+function kickClientTool(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  if (!isAuthorizedForModeration(deps, context)) {
+    return NOT_AUTHORIZED;
+  }
+  const target = resolveModerationTarget(deps, args, context);
+  if (!target) {
+    return { ok: false, error: "Who do you want to kick?" };
+  }
+  if (Array.isArray(target)) {
+    return { ok: false, error: `That name matches more than one person.`, candidates: target };
+  }
+  const fromServer = readBoolean(args.fromServer) ?? false;
+  const reason = readString(args.reason);
+  deps.kickClient(target.clientId, fromServer, reason);
+  auditModeration(
+    deps,
+    context,
+    `kicked ${target.nickname} (${fromServer ? "server" : "channel"})${reason ? `: ${reason}` : ""}`,
+  );
+  return { ok: true, nickname: target.nickname, fromServer };
+}
+
+function moveClientTool(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  if (!isAuthorizedForModeration(deps, context)) {
+    return NOT_AUTHORIZED;
+  }
+  const target = resolveModerationTarget(deps, args, context);
+  if (!target) {
+    return { ok: false, error: "Who do you want to move?" };
+  }
+  if (Array.isArray(target)) {
+    return { ok: false, error: `That name matches more than one person.`, candidates: target };
+  }
+  const channelId = readNumber(args.channelId);
+  if (channelId === undefined) {
+    return { ok: false, error: "Give the numeric channel id to move them into." };
+  }
+  deps.moveClient(target.clientId, channelId);
+  auditModeration(deps, context, `moved ${target.nickname} to channel ${channelId}`);
+  return { ok: true, nickname: target.nickname, channelId };
+}
+
+function banClientTool(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  if (!isAuthorizedForModeration(deps, context)) {
+    return NOT_AUTHORIZED;
+  }
+  const target = resolveModerationTarget(deps, args, context);
+  if (!target) {
+    return { ok: false, error: "Who do you want to ban?" };
+  }
+  if (Array.isArray(target)) {
+    return { ok: false, error: `That name matches more than one person.`, candidates: target };
+  }
+  const durationSecs = readNumber(args.durationSecs);
+  const reason = readString(args.reason);
+  deps.banClient(target.clientId, durationSecs, reason);
+  auditModeration(
+    deps,
+    context,
+    `banned ${target.nickname}${durationSecs ? ` for ${durationSecs}s` : " (permanent)"}${reason ? `: ${reason}` : ""}`,
+  );
+  return { ok: true, nickname: target.nickname, durationSecs: durationSecs ?? null };
+}
+
+function unbanClientTool(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  if (!isAuthorizedForModeration(deps, context)) {
+    return NOT_AUTHORIZED;
+  }
+  const banId = readNumber(args.banId);
+  if (banId === undefined) {
+    return { ok: false, error: "Give the ban id to remove (from list_bans)." };
+  }
+  deps.banDel(banId);
+  auditModeration(deps, context, `removed ban ${banId}`);
+  return { ok: true, banId };
+}
+
+function listBansTool(deps: TeamSpeakToolDeps, context: TeamSpeakToolContext): ToolResult {
+  if (!isAuthorizedForModeration(deps, context)) {
+    return NOT_AUTHORIZED;
+  }
+  deps.banList();
+  return {
+    ok: true,
+    note: "Requested the ban list from the server; the response is not parsed back into this conversation yet.",
+  };
+}
+
+function muteClientTool(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  if (!isAuthorizedForModeration(deps, context)) {
+    return NOT_AUTHORIZED;
+  }
+  const target = resolveModerationTarget(deps, args, context);
+  if (!target) {
+    return { ok: false, error: "Who do you want to mute or unmute?" };
+  }
+  if (Array.isArray(target)) {
+    return { ok: false, error: `That name matches more than one person.`, candidates: target };
+  }
+  const muted = readBoolean(args.muted);
+  if (muted === undefined) {
+    return { ok: false, error: "Say whether to mute (true) or unmute (false)." };
+  }
+  deps.muteClient(target.clientId, muted);
+  auditModeration(deps, context, `${muted ? "muted" : "unmuted"} ${target.nickname}`);
+  return { ok: true, nickname: target.nickname, muted };
+}
+
+function editChannelTool(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  if (!isAuthorizedForModeration(deps, context)) {
+    return NOT_AUTHORIZED;
+  }
+  const channelId = readNumber(args.channelId);
+  if (channelId === undefined) {
+    return { ok: false, error: "Give the numeric id of the channel to edit." };
+  }
+  const name = readString(args.name);
+  const topic = readString(args.topic);
+  if (!name && !topic) {
+    return { ok: false, error: "Give a new name or topic to change." };
+  }
+  deps.editChannel(channelId, name, topic);
+  auditModeration(deps, context, `edited channel ${channelId}`);
+  return { ok: true, channelId, name: name ?? null, topic: topic ?? null };
+}
+
+function createChannelTool(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  if (!isAuthorizedForModeration(deps, context)) {
+    return NOT_AUTHORIZED;
+  }
+  const name = readString(args.name);
+  if (!name) {
+    return { ok: false, error: "Give a name for the new channel." };
+  }
+  const parentId = readNumber(args.parentId);
+  deps.createChannel(name, parentId);
+  auditModeration(deps, context, `created channel ${JSON.stringify(name)}`);
+  return { ok: true, name, parentId: parentId ?? null };
+}
+
+function deleteChannelTool(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  if (!isAuthorizedForModeration(deps, context)) {
+    return NOT_AUTHORIZED;
+  }
+  const channelId = readNumber(args.channelId);
+  if (channelId === undefined) {
+    return { ok: false, error: "Give the numeric id of the channel to delete." };
+  }
+  const force = readBoolean(args.force) ?? false;
+  deps.deleteChannel(channelId, force);
+  auditModeration(deps, context, `deleted channel ${channelId}`);
+  return { ok: true, channelId, force };
+}
+
+function editServerTool(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  if (!isAuthorizedForModeration(deps, context)) {
+    return NOT_AUTHORIZED;
+  }
+  const name = readString(args.name);
+  const welcomeMessage = readString(args.welcomeMessage);
+  if (!name && !welcomeMessage) {
+    return { ok: false, error: "Give a new name or welcome message to change." };
+  }
+  deps.editServer(name, welcomeMessage);
+  auditModeration(deps, context, "edited server settings");
+  return { ok: true, name: name ?? null, welcomeMessage: welcomeMessage ?? null };
+}
+
+function addToServerGroupTool(
+  deps: TeamSpeakToolDeps,
+  args: Record<string, unknown>,
+  context: TeamSpeakToolContext,
+): ToolResult {
+  if (!isAuthorizedForModeration(deps, context)) {
+    return NOT_AUTHORIZED;
+  }
+  const target = resolveModerationTarget(deps, args, context);
+  if (!target) {
+    return { ok: false, error: "Who do you want to add?" };
+  }
+  if (Array.isArray(target)) {
+    return { ok: false, error: `That name matches more than one person.`, candidates: target };
+  }
+  const serverGroupId = readNumber(args.serverGroupId);
+  if (serverGroupId === undefined) {
+    return { ok: false, error: "Give the numeric server group id." };
+  }
+  deps.addToServerGroup(serverGroupId, target.clientId);
+  auditModeration(deps, context, `added ${target.nickname} to server group ${serverGroupId}`);
+  return { ok: true, nickname: target.nickname, serverGroupId };
 }
 
 /**

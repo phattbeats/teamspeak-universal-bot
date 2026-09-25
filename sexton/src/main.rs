@@ -58,11 +58,16 @@ use tracing::{debug, error, info, warn};
 
 use tsclientlib::prelude::*;
 use tsclientlib::messages::c2s::{
-    OutChannelListRequestMessage, OutClientMoveMessage, OutClientMovePart,
+    OutBanClientMessage, OutBanClientPart, OutBanDelMessage, OutBanDelPart, OutBanListRequestMessage,
+    OutChannelCreateMessage, OutChannelCreatePart, OutChannelDeleteMessage, OutChannelDeletePart,
+    OutChannelEditMessage, OutChannelEditPart, OutChannelListRequestMessage, OutClientEditMessage,
+    OutClientEditPart, OutClientKickMessage, OutClientKickPart, OutClientMoveMessage, OutClientMovePart,
+    OutServerEditMessage, OutServerEditPart, OutServerGroupAddClientMessage, OutServerGroupAddClientPart,
 };
 use tsclientlib::{
     events::{Event, PropertyId},
-    ChannelId, ClientId, Connection, Identity, MessageHandle, MessageTarget, StreamItem,
+    ChannelId, ClientDbId, ClientId, Connection, Identity, MessageHandle, MessageTarget, Reason,
+    ServerGroupId, StreamItem,
 };
 
 mod audio;
@@ -1222,7 +1227,8 @@ async fn run_once(
         match wake {
             Wake::Cmd(cmd) => {
                 if let Some(cmd) = cmd {
-                    handle_bridge_command(&mut con, own_client_id, mixer, &mut audio_state, cmd).await;
+                    handle_bridge_command(&mut con, own_client_id, mixer, &mut audio_state, event_tx, cmd)
+                        .await;
                 }
                 // `None` means every `cmd_tx` clone (the WS server's) is
                 // gone, which only happens if the WS server task itself
@@ -1603,9 +1609,11 @@ async fn handle_bridge_command(
     own_client_id: ClientId,
     mixer: &Arc<TokioMutex<Mixer>>,
     audio_state: &mut AudioState,
+    event_tx: &broadcast::Sender<bridge_proto::BridgeEvent>,
     cmd: bridge_proto::BridgeCommand,
 ) {
     use bridge_proto::BridgeCommand;
+    use bridge_proto::BridgeEvent::ModerationResult;
     match cmd {
         BridgeCommand::VoiceAudio { samples } => mixer.lock().await.push_voice(&samples),
         BridgeCommand::MusicAudio { samples } => mixer.lock().await.push_music(&samples),
@@ -1668,6 +1676,261 @@ async fn handle_bridge_command(
                 warn!(error = %e, "bridge send_text failed");
             }
         }
+
+        // --- moderation (PHA-3786) ------------------------------------------
+        BridgeCommand::ClientKick { client_id, from_server, reason } => {
+            let reason_kind = if from_server { Reason::KickServer } else { Reason::KickChannel };
+            let cmd = OutClientKickMessage::new(&mut std::iter::once(bridge_proto_client_kick_part(
+                client_id,
+                reason_kind,
+                reason.as_deref(),
+            )));
+            let (ok, detail) = match cmd.send(con) {
+                Ok(()) => (true, format!("kicked client {client_id} ({})", if from_server { "server" } else { "channel" })),
+                Err(e) => (false, format!("client_kick failed: {e}")),
+            };
+            let _ = event_tx.send(ModerationResult { action: "client_kick", ok, detail });
+        }
+        BridgeCommand::BanClient { client_id, duration_secs, reason } => {
+            let part = OutBanClientPart {
+                client_id: ClientId(client_id),
+                // `OutBanClientPart::time` is a `time::Duration` (the `time` 0.3 crate
+                // tsclientlib generates its message structs against), not `std`'s.
+                time: duration_secs.map(|s| time::Duration::seconds(s as i64)),
+                ban_reason: reason.as_deref().map(std::borrow::Cow::Borrowed),
+            };
+            let cmd = OutBanClientMessage::new(&mut std::iter::once(part));
+            let (ok, detail) = match cmd.send(con) {
+                Ok(()) => (true, format!("banned client {client_id}")),
+                Err(e) => (false, format!("ban_client failed: {e}")),
+            };
+            let _ = event_tx.send(ModerationResult { action: "ban_client", ok, detail });
+        }
+        BridgeCommand::BanDel { ban_id } => {
+            let cmd = OutBanDelMessage::new(&mut std::iter::once(OutBanDelPart { ban_id }));
+            let (ok, detail) = match cmd.send(con) {
+                Ok(()) => (true, format!("removed ban {ban_id}")),
+                Err(e) => (false, format!("ban_del failed: {e}")),
+            };
+            let _ = event_tx.send(ModerationResult { action: "ban_del", ok, detail });
+        }
+        BridgeCommand::BanList => {
+            // Fire-and-forget: the response arrives as a `banlist` notify
+            // event this codebase has no listener for yet (same gap noted
+            // on `SayText` above). We report the request as sent, not the
+            // contents.
+            let cmd = OutBanListRequestMessage::new();
+            let (ok, detail) = match cmd.send(con) {
+                Ok(()) => (
+                    true,
+                    "ban list requested; response parsing is not wired up yet".to_string(),
+                ),
+                Err(e) => (false, format!("ban_list request failed: {e}")),
+            };
+            let _ = event_tx.send(ModerationResult { action: "ban_list", ok, detail });
+        }
+        BridgeCommand::ClientMove { client_id, channel_id } => {
+            let part = OutClientMovePart {
+                client_id: ClientId(client_id),
+                channel_id: ChannelId(channel_id),
+                channel_password: None,
+            };
+            let cmd = OutClientMoveMessage::new(&mut std::iter::once(part));
+            let (ok, detail) = match cmd.send(con) {
+                Ok(()) => (true, format!("moved client {client_id} to channel {channel_id}")),
+                Err(e) => (false, format!("client_move failed: {e}")),
+            };
+            let _ = event_tx.send(ModerationResult { action: "client_move", ok, detail });
+        }
+        BridgeCommand::ClientEditMute { client_id, muted } => {
+            let part = OutClientEditPart {
+                client_id: ClientId(client_id),
+                description: None,
+                talk_power_granted: Some(!muted),
+            };
+            let cmd = OutClientEditMessage::new(&mut std::iter::once(part));
+            let (ok, detail) = match cmd.send(con) {
+                Ok(()) => (
+                    true,
+                    format!("{} client {client_id} (talk power)", if muted { "muted" } else { "unmuted" }),
+                ),
+                Err(e) => (false, format!("client_edit_mute failed: {e}")),
+            };
+            let _ = event_tx.send(ModerationResult { action: "client_edit_mute", ok, detail });
+        }
+        BridgeCommand::ChannelEdit { channel_id, name, topic } => {
+            // `OutChannelEditPart` has no `Default` impl (it is a generated,
+            // all-`Option` struct save `channel_id`) so every field beyond
+            // `name`/`topic` — the only ones this tool exposes — is spelled
+            // out as `None`.
+            let part = OutChannelEditPart {
+                channel_id: ChannelId(channel_id),
+                order: None,
+                name: name.as_deref().map(std::borrow::Cow::Borrowed),
+                topic: topic.as_deref().map(std::borrow::Cow::Borrowed),
+                is_default: None,
+                has_password: None,
+                password: None,
+                is_permanent: None,
+                is_semi_permanent: None,
+                codec: None,
+                codec_quality: None,
+                needed_talk_power: None,
+                max_clients: None,
+                max_family_clients: None,
+                codec_latency_factor: None,
+                is_unencrypted: None,
+                delete_delay: None,
+                is_max_clients_unlimited: None,
+                is_max_family_clients_unlimited: None,
+                inherits_max_family_clients: None,
+                phonetic_name: None,
+                description: None,
+            };
+            let cmd = OutChannelEditMessage::new(&mut std::iter::once(part));
+            let (ok, detail) = match cmd.send(con) {
+                Ok(()) => (true, format!("edited channel {channel_id}")),
+                Err(e) => (false, format!("channel_edit failed: {e}")),
+            };
+            let _ = event_tx.send(ModerationResult { action: "channel_edit", ok, detail });
+        }
+        BridgeCommand::ChannelCreate { name, parent_id } => {
+            // Same "no Default" situation as `ChannelEdit` above — only
+            // `name` and `parent_id` are exposed to the tool, the rest of
+            // this generated struct's fields are spelled out as `None`.
+            let part = OutChannelCreatePart {
+                parent_id: parent_id.map(ChannelId),
+                name: std::borrow::Cow::Borrowed(name.as_str()),
+                topic: None,
+                description: None,
+                password: None,
+                codec: None,
+                codec_quality: None,
+                max_clients: None,
+                max_family_clients: None,
+                order: None,
+                has_password: None,
+                is_unencrypted: None,
+                delete_delay: None,
+                is_max_clients_unlimited: None,
+                is_max_family_clients_unlimited: None,
+                inherits_max_family_clients: None,
+                phonetic_name: None,
+                is_permanent: None,
+                is_semi_permanent: None,
+                is_default: None,
+            };
+            let cmd = OutChannelCreateMessage::new(&mut std::iter::once(part));
+            let (ok, detail) = match cmd.send(con) {
+                Ok(()) => (true, format!("created channel {name:?}")),
+                Err(e) => (false, format!("channel_create failed: {e}")),
+            };
+            let _ = event_tx.send(ModerationResult { action: "channel_create", ok, detail });
+        }
+        BridgeCommand::ChannelDelete { channel_id, force } => {
+            let part = OutChannelDeletePart { channel_id: ChannelId(channel_id), force };
+            let cmd = OutChannelDeleteMessage::new(&mut std::iter::once(part));
+            let (ok, detail) = match cmd.send(con) {
+                Ok(()) => (true, format!("deleted channel {channel_id}")),
+                Err(e) => (false, format!("channel_delete failed: {e}")),
+            };
+            let _ = event_tx.send(ModerationResult { action: "channel_delete", ok, detail });
+        }
+        BridgeCommand::ServerEdit { name, welcome_message } => {
+            // Same "no Default" situation — only `name`/`welcome_message`
+            // are exposed to the tool, the rest of this 43-field generated
+            // struct is spelled out as `None`.
+            let part = OutServerEditPart {
+                server_id: None,
+                name: name.as_deref().map(std::borrow::Cow::Borrowed),
+                welcome_message: welcome_message.as_deref().map(std::borrow::Cow::Borrowed),
+                max_clients: None,
+                password: None,
+                hostmessage: None,
+                hostmessage_mode: None,
+                hostbanner_url: None,
+                hostbanner_gfx_url: None,
+                hostbanner_gfx_interval: None,
+                hostbutton_tooltip: None,
+                hostbutton_url: None,
+                hostbutton_gfx_url: None,
+                icon: None,
+                reserved_slots: None,
+                hostbanner_mode: None,
+                nickname: None,
+                max_download_bandwidth_total: None,
+                max_upload_bandwidth_total: None,
+                download_quota: None,
+                upload_quota: None,
+                antiflood_points_tick_reduce: None,
+                antiflood_points_to_command_block: None,
+                antiflood_points_to_ip_block: None,
+                codec_encryption_mode: None,
+                needed_identity_security_level: None,
+                default_server_group: None,
+                default_channel_group: None,
+                default_channel_admin_group: None,
+                complain_autoban_count: None,
+                complain_autoban_time: None,
+                complain_remove_time: None,
+                min_clients_in_channel_before_forced_silence: None,
+                priority_speaker_dimm_modificator: None,
+                phonetic_name: None,
+                temp_channel_default_delete_delay: None,
+                weblist_enabled: None,
+                log_client: None,
+                log_query: None,
+                log_channel: None,
+                log_permissions: None,
+                log_server: None,
+                log_filetransfer: None,
+            };
+            let cmd = OutServerEditMessage::new(&mut std::iter::once(part));
+            let (ok, detail) = match cmd.send(con) {
+                Ok(()) => (true, "edited server".to_string()),
+                Err(e) => (false, format!("server_edit failed: {e}")),
+            };
+            let _ = event_tx.send(ModerationResult { action: "server_edit", ok, detail });
+        }
+        BridgeCommand::ServerGroupAddClient { server_group_id, client_id } => {
+            let client_db_id = match con.get_state() {
+                Ok(state) => state.clients.get(&ClientId(client_id)).map(|c| c.database_id),
+                Err(e) => {
+                    warn!(error = %e, "bridge servergroupaddclient: get_state failed");
+                    None
+                }
+            };
+            let (ok, detail) = match client_db_id {
+                Some(client_db_id) => {
+                    let part = OutServerGroupAddClientPart {
+                        server_group_id: ServerGroupId(server_group_id),
+                        client_db_id,
+                    };
+                    let cmd = OutServerGroupAddClientMessage::new(&mut std::iter::once(part));
+                    match cmd.send(con) {
+                        Ok(()) => (true, format!("added client {client_id} to group {server_group_id}")),
+                        Err(e) => (false, format!("servergroupaddclient failed: {e}")),
+                    }
+                }
+                None => (false, format!("client {client_id} not found; cannot resolve database id")),
+            };
+            let _ = event_tx.send(ModerationResult { action: "server_group_add_client", ok, detail });
+        }
+    }
+}
+
+/// `OutClientKickPart` borrows its `reason_message`, so this stays a
+/// standalone helper rather than inlining into the match arm above — keeps
+/// the borrow scoped to one expression per PHA-3786 kick call.
+fn bridge_proto_client_kick_part(
+    client_id: u16,
+    reason: Reason,
+    reason_message: Option<&str>,
+) -> OutClientKickPart<'_> {
+    OutClientKickPart {
+        client_id: ClientId(client_id),
+        reason,
+        reason_message: reason_message.map(std::borrow::Cow::Borrowed),
     }
 }
 

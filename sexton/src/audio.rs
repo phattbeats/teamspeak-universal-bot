@@ -359,7 +359,23 @@ fn build_roster(state: &tsclientlib::data::Connection, channel: ChannelId) -> Ve
             nickname: c.name.clone(),
             muted: c.input_muted || c.output_muted,
             away: c.away_message.is_some(),
+            server_groups: resolve_server_group_names(state, c),
         })
+        .collect()
+}
+
+/// Server group names for one client (PHA-3786). Carried on the wire so the
+/// TS plugin, which owns `tools.moderation.allowGroups`, can gate
+/// moderation tools without a second round trip.
+fn resolve_server_group_names(
+    state: &tsclientlib::data::Connection,
+    client: &tsclientlib::data::Client,
+) -> Vec<String> {
+    client
+        .server_groups
+        .iter()
+        .filter_map(|id| state.server_groups.get(id))
+        .map(|g| g.name.clone())
         .collect()
 }
 

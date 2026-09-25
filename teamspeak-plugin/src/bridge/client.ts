@@ -10,12 +10,23 @@ import {
   decodeFrame,
   encodeFrame,
   readClientIdHeader,
+  readModerationResult,
   readRoster,
   readSpeakerAudioHeader,
   readStateHeader,
   readTextMessageHeader,
+  TYPE_BAN_CLIENT,
+  TYPE_BAN_DEL,
+  TYPE_BAN_LIST,
+  TYPE_CHANNEL_CREATE,
+  TYPE_CHANNEL_DELETE,
+  TYPE_CHANNEL_EDIT,
   TYPE_CLEAR_VOICE,
+  TYPE_CLIENT_EDIT_MUTE,
+  TYPE_CLIENT_KICK,
+  TYPE_CLIENT_MOVE,
   TYPE_JOIN,
+  TYPE_MODERATION_RESULT,
   TYPE_MUSIC_AUDIO,
   TYPE_MUSIC_GAIN,
   TYPE_MUTE,
@@ -23,6 +34,8 @@ import {
   TYPE_ROSTER,
   TYPE_SAY_TEXT,
   TYPE_SEND_TEXT,
+  TYPE_SERVER_EDIT,
+  TYPE_SERVER_GROUP_ADD_CLIENT,
   TYPE_SPEAKER_AUDIO,
   TYPE_SPEAKER_START,
   TYPE_SPEAKER_STOP,
@@ -30,6 +43,7 @@ import {
   TYPE_TEXT_MESSAGE,
   TYPE_VOICE_AUDIO,
   type BridgeStateHeader,
+  type ModerationResult,
   type RosterEntry,
   type SpeakerAudioHeader,
   type TeamSpeakClientId,
@@ -58,6 +72,8 @@ export type BridgeClientEvents = {
   onRoster?: (roster: RosterEntry[]) => void;
   onTextMessage?: (message: TextMessageHeader) => void;
   onState?: (state: BridgeStateHeader) => void;
+  /** Answer to any moderation command (PHA-3786). */
+  onModerationResult?: (result: ModerationResult) => void;
   onConnected?: () => void;
   onDisconnected?: (reason: string) => void;
   onError?: (error: Error) => void;
@@ -166,6 +182,54 @@ export class TeamSpeakBridgeClient {
     this.send(encodeFrame(TYPE_SEND_TEXT, { target, text }));
   }
 
+  // --- moderation (PHA-3786) -----------------------------------------------
+
+  kickClient(clientId: TeamSpeakClientId, fromServer: boolean, reason?: string): void {
+    this.send(encodeFrame(TYPE_CLIENT_KICK, { clientId, fromServer, reason }));
+  }
+
+  banClient(clientId: TeamSpeakClientId, durationSecs?: number, reason?: string): void {
+    this.send(encodeFrame(TYPE_BAN_CLIENT, { clientId, durationSecs, reason }));
+  }
+
+  banDel(banId: number): void {
+    this.send(encodeFrame(TYPE_BAN_DEL, { banId }));
+  }
+
+  banList(): void {
+    this.send(encodeFrame(TYPE_BAN_LIST, {}));
+  }
+
+  /** Move another client into a channel — distinct from `join`, which moves the bot itself. */
+  moveClient(clientId: TeamSpeakClientId, channelId: number): void {
+    this.send(encodeFrame(TYPE_CLIENT_MOVE, { clientId, channelId }));
+  }
+
+  /** Mute/unmute another client via talk-power revocation (there is no literal server-side mute). */
+  muteClient(clientId: TeamSpeakClientId, muted: boolean): void {
+    this.send(encodeFrame(TYPE_CLIENT_EDIT_MUTE, { clientId, muted }));
+  }
+
+  editChannel(channelId: number, name?: string, topic?: string): void {
+    this.send(encodeFrame(TYPE_CHANNEL_EDIT, { channelId, name, topic }));
+  }
+
+  createChannel(name: string, parentId?: number): void {
+    this.send(encodeFrame(TYPE_CHANNEL_CREATE, { name, parentId }));
+  }
+
+  deleteChannel(channelId: number, force: boolean): void {
+    this.send(encodeFrame(TYPE_CHANNEL_DELETE, { channelId, force }));
+  }
+
+  editServer(name?: string, welcomeMessage?: string): void {
+    this.send(encodeFrame(TYPE_SERVER_EDIT, { name, welcomeMessage }));
+  }
+
+  addToServerGroup(serverGroupId: number, clientId: TeamSpeakClientId): void {
+    this.send(encodeFrame(TYPE_SERVER_GROUP_ADD_CLIENT, { serverGroupId, clientId }));
+  }
+
   private send(frame: Buffer): void {
     if (!this.socket || !this.connected) {
       return;
@@ -232,6 +296,13 @@ export class TeamSpeakBridgeClient {
         const state = readStateHeader(frame.header);
         if (state) {
           events.onState?.(state);
+        }
+        return;
+      }
+      case TYPE_MODERATION_RESULT: {
+        const result = readModerationResult(frame.header);
+        if (result) {
+          events.onModerationResult?.(result);
         }
         return;
       }

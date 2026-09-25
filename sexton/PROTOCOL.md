@@ -31,6 +31,12 @@ Message types the bridge sends (`out`):
 | 0x04 | `roster`       | `[{"clientId":u16,"nickname":string,"muted":bool,"away":bool}]` | —                  |
 | 0x05 | `text_message` | `{"clientId":u16,"nickname":string,"text":string,"target":"channel"\|"server"\|"client"\|"poke"}` | — |
 | 0x06 | `state`        | `{"connected":bool,"channelId":u64,"channelName":string,"ownClientId":u16?}` | —      |
+| 0x07 | `moderation_result` | `{"action":string,"ok":bool,"detail":string}` (PHA-3786, answer to every moderation command below) | — |
+
+`roster`'s `RosterEntry` also grew a `serverGroups` field (PHA-3786):
+`{"clientId":u16,"nickname":string,"muted":bool,"away":bool,"serverGroups":[string]}`.
+The moderation tool gate (`tools.moderation.allowGroups`) lives on the plugin
+side, not here — the Sexton just reports group membership on the wire.
 
 Message types the bridge accepts (`in`):
 
@@ -45,6 +51,24 @@ Message types the bridge accepts (`in`):
 | 0x87 | `mute`        | `{"muted":bool}` (stops/resumes outbound audio; does not touch the TS mute flag) | — |
 | 0x88 | `poke`        | `{"clientId":u16,"text":string}`                  | —                    |
 | 0x89 | `send_text`   | `{"target":"channel"\|"server"\|u16,"text":string}` (numeric string/number targets a client PM) | — |
+| 0x8A | `client_kick` | `{"clientId":u16,"fromServer":bool,"reason":string?}` (PHA-3786) | — |
+| 0x8B | `ban_client`  | `{"clientId":u16,"durationSecs":u64?,"reason":string?}` (PHA-3786; no `durationSecs` = permanent) | — |
+| 0x8C | `ban_del`     | `{"banId":u32}` (PHA-3786) | — |
+| 0x8D | `ban_list`    | `{}` (PHA-3786: requests the ban list; the server's response is not parsed yet, see `moderation_result`'s detail) | — |
+| 0x8E | `client_move` | `{"clientId":u16,"channelId":u64}` (PHA-3786: move another client — distinct from `join`, which moves the bot itself) | — |
+| 0x8F | `client_edit_mute` | `{"clientId":u16,"muted":bool}` (PHA-3786: implemented via talk-power revocation, not a true client-side mute) | — |
+| 0x90 | `channel_edit` | `{"channelId":u64,"name":string?,"topic":string?}` (PHA-3786) | — |
+| 0x91 | `channel_create` | `{"name":string,"parentId":u64?}` (PHA-3786) | — |
+| 0x92 | `channel_delete` | `{"channelId":u64,"force":bool}` (PHA-3786) | — |
+| 0x93 | `server_edit` | `{"name":string?,"welcomeMessage":string?}` (PHA-3786) | — |
+| 0x94 | `server_group_add_client` | `{"serverGroupId":u64,"clientId":u16}` (PHA-3786) | — |
+
+Every 0x8A-0x94 command answers with `moderation_result` (0x07). None of them
+enforce authorization themselves — the Sexton trusts whatever command it is
+given, same failure model as `poke`/`send_text` above (the plugin is the
+bridge's only caller). The server-group allowlist
+(`tools.moderation.{kick,ban,edit,allowGroups}`) is enforced by the plugin
+before it ever sends one of these frames.
 
 No handshake beyond the WebSocket upgrade: on connect the bridge immediately
 sends the current `state` and `roster`, in that order, before any live events.

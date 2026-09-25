@@ -21,6 +21,13 @@ pub struct RosterEntry {
     pub nickname: String,
     pub muted: bool,
     pub away: bool,
+    /// Names of the server groups this client belongs to (PHA-3786). Empty
+    /// by default so old callers that construct a `RosterEntry` without it
+    /// (tests, mostly) keep compiling. The moderation tool gate
+    /// (`tools.moderation.allowGroups`) lives on the TS plugin side, not
+    /// here — the Sexton just reports group membership on the wire.
+    #[serde(rename = "serverGroups", default)]
+    pub server_groups: Vec<String>,
 }
 
 /// Inbound command from the bridge. The Sexton owns the `tsclientlib`
@@ -61,6 +68,44 @@ pub enum BridgeCommand {
     /// `{kind: "server"}` / `{kind: "client", id: <u16>}`); the Sexton
     /// turns it into a `MessageTarget` on the `Connection`.
     SendText { target: SendTarget, text: String },
+
+    // --- moderation (PHA-3786, TOOL-CATALOG.md §4.3) -----------------------
+    // Authorization (server-group allowlist) lives on the TS plugin side,
+    // which owns `tools.moderation.allowGroups` config — the Sexton trusts
+    // whatever bridge command it's given, same failure model as `Poke` and
+    // `SendText` above (the plugin is the bridge's only caller).
+    /// Kick a client from their channel (`from_server=false`) or off the
+    /// server entirely (`from_server=true`).
+    ClientKick { client_id: u16, from_server: bool, reason: Option<String> },
+    /// Ban a client. `duration_secs=None` is a permanent ban.
+    BanClient { client_id: u16, duration_secs: Option<u64>, reason: Option<String> },
+    /// Remove one ban by its `BanId`.
+    BanDel { ban_id: u32 },
+    /// Ask the server for the current ban list. The response is not parsed
+    /// yet (no notify-event listener wired for it) — see
+    /// `BridgeEvent::ModerationResult`'s doc comment.
+    BanList,
+    /// Move another client (not the bot itself — that's `Join`) into a
+    /// different channel.
+    ClientMove { client_id: u16, channel_id: u64 },
+    /// Mute or unmute another client. TeamSpeak's ServerQuery-level API has
+    /// no literal "mute someone else" command; this works by granting or
+    /// revoking talk power (`talk_power_granted`), which is the same
+    /// mechanism TS3AudioBot and other moderation bots use.
+    ClientEditMute { client_id: u16, muted: bool },
+    /// Edit a channel's name and/or topic.
+    ChannelEdit { channel_id: u64, name: Option<String>, topic: Option<String> },
+    /// Create a channel, optionally under a parent.
+    ChannelCreate { name: String, parent_id: Option<u64> },
+    /// Delete a channel. `force=true` deletes it even if clients are still
+    /// inside.
+    ChannelDelete { channel_id: u64, force: bool },
+    /// Edit the virtual server's name and/or welcome message.
+    ServerEdit { name: Option<String>, welcome_message: Option<String> },
+    /// Add a client to a server group. `client_id` is the runtime
+    /// `ClientId`; the Sexton resolves it to the `ClientDbId` the TS3
+    /// command actually needs.
+    ServerGroupAddClient { server_group_id: u64, client_id: u16 },
 }
 
 /// Where a `SendText` lands. The JSON shape mirrors the bridge's
@@ -111,6 +156,12 @@ pub enum BridgeEvent {
         target: &'static str,
     },
     State(StateSnapshot),
+    /// Result of a moderation `BridgeCommand` (PHA-3786). `action` names the
+    /// command (e.g. `"client_kick"`), `detail` is a short human-readable
+    /// outcome. `BanList` always reports `ok: true` with a `detail` noting
+    /// the request was sent but the server's response is not parsed by this
+    /// codebase yet — there is no ban-list notify-event listener wired up.
+    ModerationResult { action: &'static str, ok: bool, detail: String },
 }
 
 /// Snapshot of the Sexton's connection state. The bridge keeps one of
@@ -205,6 +256,7 @@ mod tests {
                 nickname: "Brandon".into(),
                 muted: false,
                 away: false,
+                server_groups: vec![],
             }],
         };
         let frames = s.events();
@@ -238,5 +290,53 @@ mod tests {
         assert!(matches!(cl, SendTarget::Client { id: 42 }));
         let sv: SendTarget = serde_json::from_value(serde_json::json!({"kind":"server"})).unwrap();
         assert!(matches!(sv, SendTarget::Server));
+    }
+
+    #[test]
+    fn client_kick_command_parses_with_fields() {
+        let cmd: BridgeCommand = serde_json::from_value(serde_json::json!({
+            "ClientKick": { "client_id": 7, "from_server": true, "reason": "spamming" }
+        }))
+        .unwrap();
+        match cmd {
+            BridgeCommand::ClientKick { client_id, from_server, reason } => {
+                assert_eq!(client_id, 7);
+                assert!(from_server);
+                assert_eq!(reason.as_deref(), Some("spamming"));
+            }
+            other => panic!("expected ClientKick, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ban_list_command_parses_with_no_fields() {
+        let cmd: BridgeCommand = serde_json::from_value(serde_json::json!("BanList")).unwrap();
+        assert!(matches!(cmd, BridgeCommand::BanList));
+    }
+
+    #[test]
+    fn moderation_result_event_serializes_action_and_detail() {
+        let ev = BridgeEvent::ModerationResult {
+            action: "client_kick",
+            ok: true,
+            detail: "kicked client 7 from channel".into(),
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        let payload = &json["ModerationResult"];
+        assert_eq!(payload["action"], "client_kick");
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["detail"], "kicked client 7 from channel");
+    }
+
+    #[test]
+    fn roster_entry_defaults_server_groups_when_absent() {
+        let entry: RosterEntry = serde_json::from_value(serde_json::json!({
+            "clientId": 4,
+            "nickname": "Brandon",
+            "muted": false,
+            "away": false
+        }))
+        .unwrap();
+        assert!(entry.server_groups.is_empty());
     }
 }

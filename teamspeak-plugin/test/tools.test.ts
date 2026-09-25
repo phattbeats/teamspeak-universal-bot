@@ -18,7 +18,9 @@ import {
   COMPOSE_SONG_TOOL,
   createTeamSpeakToolRegistration,
   JOIN_VOICE_TOOL,
+  KICK_CLIENT_TOOL,
   LEAVE_VOICE_TOOL,
+  MOVE_CLIENT_TOOL,
   PLAY_MUSIC_TOOL,
   POKE_TOOL,
   REPLAY_SONG_TOOL,
@@ -170,6 +172,8 @@ type Harness = {
   logs: string[];
   pokes: { clientId: number; text: string }[];
   logRequests: ReadChannelLogParams[];
+  sentTexts: { target: unknown; text: string }[];
+  moderationCalls: { fn: string; args: unknown[] }[];
   call: (name: string, args?: unknown) => Promise<Record<string, unknown> & { ok: boolean }>;
 };
 
@@ -179,18 +183,27 @@ function createHarness(
     noMusic?: boolean;
     channelName?: string;
     log?: ChannelLogResult;
+    config?: TeamSpeakToolDeps["config"];
+    roster?: RosterEntry[];
   } = {},
 ): Harness {
   const music = new FakeMusic();
   const logs: string[] = [];
   const pokes: { clientId: number; text: string }[] = [];
   const logRequests: ReadChannelLogParams[] = [];
+  const sentTexts: { target: unknown; text: string }[] = [];
+  const moderationCalls: { fn: string; args: unknown[] }[] = [];
   const parkings: { parked: boolean; reason: string }[] = [];
   let parked = false;
+  const recordModeration =
+    (fn: string) =>
+    (...args: unknown[]) => {
+      moderationCalls.push({ fn, args });
+    };
   const deps: TeamSpeakToolDeps = {
-    config: undefined,
+    config: options.config,
     music: options.noMusic ? undefined : (options.music ?? music),
-    roster: () => ROSTER,
+    roster: () => options.roster ?? ROSTER,
     channelName: () => options.channelName ?? "General Shit",
     poke: (clientId, text) => pokes.push({ clientId, text }),
     logDir: "/mnt/user/appdata/sexton",
@@ -219,6 +232,18 @@ function createHarness(
       parkings.push({ parked: next, reason });
     },
     isParked: () => parked,
+    sendText: (target, text) => sentTexts.push({ target, text }),
+    kickClient: recordModeration("kickClient"),
+    banClient: recordModeration("banClient"),
+    banDel: recordModeration("banDel"),
+    banList: recordModeration("banList"),
+    moveClient: recordModeration("moveClient"),
+    muteClient: recordModeration("muteClient"),
+    editChannel: recordModeration("editChannel"),
+    createChannel: recordModeration("createChannel"),
+    deleteChannel: recordModeration("deleteChannel"),
+    editServer: recordModeration("editServer"),
+    addToServerGroup: recordModeration("addToServerGroup"),
   };
   const registration = createTeamSpeakToolRegistration(deps);
   return {
@@ -227,6 +252,8 @@ function createHarness(
     logs,
     pokes,
     logRequests,
+    sentTexts,
+    moderationCalls,
     call: async (name, args) =>
       (await registration.handle(
         { itemId: "item-1", callId: `call-${name}`, name, args: args ?? {} },
@@ -656,5 +683,94 @@ describe("dispatch", () => {
       /^teamspeak tool: play_music caller=Brandon#4 args=\{"query":"smooth jazz"\} ok=true \d+ms$/u,
     );
     expect(harness.logs[1]).toMatch(/ok=false error="No one here is called "nobody"\." \d+ms$/u);
+  });
+});
+
+describe("moderation (PHA-3786)", () => {
+  const AUTHORIZED_ROSTER: RosterEntry[] = [
+    { clientId: 4, nickname: "Brandon", muted: false, away: false, serverGroups: ["Server Admin"] },
+    { clientId: 7, nickname: "[PHATT] Kai_", muted: true, away: false, serverGroups: [] },
+  ];
+
+  it("does not register moderation tools without an allowGroups config (fail closed)", () => {
+    const harness = createHarness({ config: { moderation: { kick: true, ban: true, edit: true } } });
+    const registration = createTeamSpeakToolRegistration(harness.deps);
+    expect(registration.tools.map((t) => t.name)).not.toContain(KICK_CLIENT_TOOL);
+  });
+
+  it("registers only the tool groups whose flag and allowGroups are both set", () => {
+    const names = buildTeamSpeakTools({
+      music: false,
+      moderation: { kick: true, ban: false, edit: false },
+    }).map((t) => t.name);
+    expect(names).toContain(KICK_CLIENT_TOOL);
+    expect(names).toContain(MOVE_CLIENT_TOOL);
+    expect(names).not.toContain("ban_client");
+    expect(names).not.toContain("edit_channel");
+  });
+
+  it("refuses a moderation call from someone not in allowGroups, without touching the bridge", async () => {
+    const harness = createHarness({
+      config: { moderation: { kick: true, allowGroups: ["Server Admin"] } },
+      roster: [
+        { clientId: 4, nickname: "Brandon", muted: false, away: false, serverGroups: [] },
+        { clientId: 7, nickname: "[PHATT] Kai_", muted: true, away: false, serverGroups: [] },
+      ],
+    });
+    const result = await harness.call(KICK_CLIENT_TOOL, { nickname: "Kai" });
+    expect(result.ok).toBe(false);
+    expect(harness.moderationCalls).toEqual([]);
+    expect(harness.sentTexts).toEqual([]);
+  });
+
+  it("refuses every moderation tool when allowGroups is empty, even with the action flag on", async () => {
+    const harness = createHarness({
+      config: { moderation: { kick: true, allowGroups: [] } },
+      roster: AUTHORIZED_ROSTER,
+    });
+    const result = await harness.call(KICK_CLIENT_TOOL, { nickname: "Kai" });
+    expect(result.ok).toBe(false);
+    expect(harness.moderationCalls).toEqual([]);
+  });
+
+  it("kicks, records the bridge call, and writes a channel audit line for an authorized caller", async () => {
+    const harness = createHarness({
+      config: { moderation: { kick: true, allowGroups: ["server admin"] } },
+      roster: AUTHORIZED_ROSTER,
+    });
+    const result = await harness.call(KICK_CLIENT_TOOL, {
+      nickname: "Kai",
+      fromServer: true,
+      reason: "spamming",
+    });
+    expect(result.ok).toBe(true);
+    expect(harness.moderationCalls).toEqual([{ fn: "kickClient", args: [7, true, "spamming"] }]);
+    expect(harness.sentTexts).toHaveLength(1);
+    expect(harness.sentTexts[0]?.target).toBe("channel");
+    expect(harness.sentTexts[0]?.text).toMatch(/^\[moderation\] Brandon: kicked \[PHATT\] Kai_/u);
+  });
+
+  it("moves another client to a numeric channel id", async () => {
+    const harness = createHarness({
+      config: { moderation: { kick: true, allowGroups: ["Server Admin"] } },
+      roster: AUTHORIZED_ROSTER,
+    });
+    const result = await harness.call(MOVE_CLIENT_TOOL, { nickname: "Kai", channelId: 12 });
+    expect(result.ok).toBe(true);
+    expect(harness.moderationCalls).toEqual([{ fn: "moveClient", args: [7, 12] }]);
+  });
+
+  it("rejects an ambiguous target the same way other tools do", async () => {
+    const harness = createHarness({
+      config: { moderation: { kick: true, allowGroups: ["Server Admin"] } },
+      roster: [
+        { clientId: 4, nickname: "Brandon", muted: false, away: false, serverGroups: ["Server Admin"] },
+        { clientId: 7, nickname: "Kai", muted: false, away: false, serverGroups: [] },
+        { clientId: 8, nickname: "Kaitlyn", muted: false, away: false, serverGroups: [] },
+      ],
+    });
+    const result = await harness.call(KICK_CLIENT_TOOL, { nickname: "Ka" });
+    expect(result.ok).toBe(false);
+    expect(harness.moderationCalls).toEqual([]);
   });
 });
