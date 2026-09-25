@@ -17,12 +17,13 @@ import {
   resolveTeamSpeakSecondaryTranscriptionConfig,
   resolveTeamSpeakTranscriptionConfig,
 } from "../src/config.js";
-import { SttProviderRegistry, type SttProviderFactory } from "../src/voice/stt-provider.js";
 import {
-  createDefaultSttProviderRegistry,
-  DEFAULT_SECONDARY_STT_PROVIDER,
-  DEFAULT_STT_PROVIDER,
-} from "../src/voice/stt-registry.js";
+  MINIMAX_ASR_PROVIDER_ID,
+  SttProviderRegistry,
+  WHISPER_LOCAL_PROVIDER_ID,
+  type SttProviderFactory,
+} from "../src/voice/stt-provider.js";
+import { createDefaultSttProviderRegistry } from "../src/voice/stt-registry.js";
 import { sttSlotConfig } from "./stt-fixtures.js";
 
 const primary = (config: Parameters<typeof sttSlotConfig>[0] = {}, env = {}) => ({
@@ -38,12 +39,10 @@ const secondary = (config: Parameters<typeof sttSlotConfig>[0] = {}, env = {}) =
 });
 
 describe("the built-in registry", () => {
-  it("registers whisper-local and minimax-asr, and defaults to whisper-local", () => {
+  it("registers whisper-local and minimax-asr, in that order", () => {
     const registry = createDefaultSttProviderRegistry();
-    expect(registry.names()).toEqual(["whisper-local", "minimax-asr"]);
-    expect(registry.localNames()).toEqual(["whisper-local"]);
-    expect(DEFAULT_STT_PROVIDER).toBe("whisper-local");
-    expect(DEFAULT_SECONDARY_STT_PROVIDER).toBe("minimax-asr");
+    expect(registry.names()).toEqual([WHISPER_LOCAL_PROVIDER_ID, MINIMAX_ASR_PROVIDER_ID]);
+    expect(registry.localNames()).toEqual([WHISPER_LOCAL_PROVIDER_ID]);
   });
 
   it("resolves names case-insensitively and through aliases", () => {
@@ -150,7 +149,7 @@ describe("a provider refuses on its own missing pieces", () => {
     expect(built.ok).toBe(true);
   });
 
-  it("registers an empty registry that refuses everything, rather than guessing", () => {
+  it("refuses everything on an empty registry, rather than guessing a provider", () => {
     const built = new SttProviderRegistry().create(primary());
     expect(built.ok).toBe(false);
     expect(built.ok === false && built.reason).toMatch(/not registered/);
@@ -164,14 +163,14 @@ describe("the config side of the swap", () => {
 
   it("defaults to whisper-local with the settings the lane ran before PHA-3790", () => {
     const resolved = resolveTeamSpeakTranscriptionConfig({});
-    expect(resolved.config.provider).toBe("whisper-local");
-    expect(resolved.config.language).toBe("en");
-    expect(resolved.config.timeoutMs).toBe(15_000);
+    expect(resolved.provider).toBe("whisper-local");
+    expect(resolved.language).toBe("en");
+    expect(resolved.timeoutMs).toBe(15_000);
     // Both of the new knobs are off, so an existing openclaw.json behaves
     // exactly as it did: json responses, no decoder priming.
-    expect(resolved.config.confidence).toBe(false);
-    expect(resolved.config.prompt).toBeUndefined();
-    expect(resolved.config.allowHosted).toBe(false);
+    expect(resolved.confidence).toBe(false);
+    expect(resolved.prompt).toBeUndefined();
+    expect(resolved.allowHosted).toBe(false);
   });
 
   it("carries the whole slot through, including provider-specific extras", () => {
@@ -189,7 +188,7 @@ describe("the config side of the swap", () => {
         options: { beamSize: 5 },
       }),
     );
-    expect(resolved.config).toMatchObject({
+    expect(resolved).toMatchObject({
       provider: "acme-stt",
       baseUrl: "https://acme.example/",
       apiKey: "sk-acme",

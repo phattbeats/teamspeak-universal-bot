@@ -145,11 +145,11 @@ export function createSttTtsLane(
   // primary that cannot be built is not a degraded lane, it is no lane.
   let primaryTranscriber: SttProvider;
   if (params.deps?.createTranscriber) {
-    primaryTranscriber = params.deps.createTranscriber(transcription.config);
+    primaryTranscriber = params.deps.createTranscriber(transcription);
   } else {
     const built = registry.create({
       slot: "primary",
-      config: transcription.config,
+      config: transcription,
       env,
       ...(params.log ? { log: params.log } : {}),
     });

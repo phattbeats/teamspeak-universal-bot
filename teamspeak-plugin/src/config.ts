@@ -538,30 +538,31 @@ export type { ResolvedSttProviderConfig };
  * each provider's own missing-pieces refusal all live at the seam that actually
  * builds the thing (`SttProviderRegistry`, wired in `stt-tts-lane.ts`), which is
  * also the only place that can enforce them. This function's job is now purely
- * to read config and apply the slot-level defaults.
+ * to read config and apply the slot-level defaults — which is why it returns the
+ * config plainly rather than the `{ ok }` union it used to: there is no longer
+ * anything here that can fail, and a union with one arm only invites a caller to
+ * write a branch that never runs.
  */
-export function resolveTeamSpeakTranscriptionConfig(config: TeamSpeakAccountConfig | undefined): {
-  ok: true;
-  config: ResolvedSttProviderConfig;
-} {
+export function resolveTeamSpeakTranscriptionConfig(
+  config: TeamSpeakAccountConfig | undefined,
+): ResolvedSttProviderConfig {
   const raw = config?.voice?.streaming?.transcription;
   return {
-    ok: true,
-    config: {
-      provider: raw?.provider?.trim() || WHISPER_LOCAL_PROVIDER_ID,
-      url: raw?.url?.trim() || undefined,
-      baseUrl: raw?.baseUrl?.trim() || undefined,
-      apiKey: raw?.apiKey?.trim() || undefined,
-      model: raw?.model?.trim() || undefined,
-      language: raw?.language?.trim() || DEFAULT_WHISPER_LANGUAGE,
-      prompt: raw?.prompt?.trim() || undefined,
-      confidence: raw?.confidence === true,
-      timeoutMs: positiveMs(raw?.timeoutMs, DEFAULT_TRANSCRIPTION_TIMEOUT_MS),
-      slowMs: DEFAULT_SECONDARY_SLOW_MS,
-      backoffMs: DEFAULT_SECONDARY_BACKOFF_MS,
-      allowHosted: raw?.allowHosted === true,
-      options: raw?.options ?? {},
-    },
+    provider: raw?.provider?.trim() || WHISPER_LOCAL_PROVIDER_ID,
+    url: raw?.url?.trim() || undefined,
+    baseUrl: raw?.baseUrl?.trim() || undefined,
+    apiKey: raw?.apiKey?.trim() || undefined,
+    model: raw?.model?.trim() || undefined,
+    language: raw?.language?.trim() || DEFAULT_WHISPER_LANGUAGE,
+    prompt: raw?.prompt?.trim() || undefined,
+    confidence: raw?.confidence === true,
+    timeoutMs: positiveMs(raw?.timeoutMs, DEFAULT_TRANSCRIPTION_TIMEOUT_MS),
+    // Hosted-provider health knobs. Harmless for a local provider, which ignores
+    // them; the secondary slot lets config override both.
+    slowMs: DEFAULT_SECONDARY_SLOW_MS,
+    backoffMs: DEFAULT_SECONDARY_BACKOFF_MS,
+    allowHosted: raw?.allowHosted === true,
+    options: raw?.options ?? {},
   };
 }
 

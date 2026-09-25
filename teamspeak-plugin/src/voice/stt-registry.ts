@@ -18,13 +18,10 @@ import { SttProviderRegistry } from "./stt-provider.js";
 import { whisperLocalFactory } from "./whisper-local.js";
 
 export function createDefaultSttProviderRegistry(): SttProviderRegistry {
-  // whisper-local first: `names()` keeps registration order, and the first
-  // registered local provider is what the config resolver defaults to.
+  // whisper-local first: `names()` keeps registration order, so it leads the
+  // "not one of ..." messages, which is also the order an operator should read
+  // them in. The slot *defaults* are named in `config.ts` from the shared id
+  // constants rather than duplicated here — two sources for "the default
+  // provider" is how they drift apart.
   return new SttProviderRegistry().register(whisperLocalFactory).register(miniMaxAsrFactory);
 }
-
-/** The default primary when config names no provider at all. */
-export const DEFAULT_STT_PROVIDER = whisperLocalFactory.id;
-
-/** The default secondary when the escalation block names no provider. */
-export const DEFAULT_SECONDARY_STT_PROVIDER = miniMaxAsrFactory.id;
