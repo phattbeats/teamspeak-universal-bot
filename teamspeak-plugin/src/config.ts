@@ -144,6 +144,14 @@ export type TeamSpeakVoiceConfig = {
    */
   thinking?: string;
   /**
+   * Stream the reply into TTS block by block as the model generates it
+   * (PHA-3792), through the host's `dispatchReplyWithBufferedBlockDispatcher`.
+   * Default true. `false` restores the whole-reply `runCommandFromIngress`
+   * path: first audio waits for the complete answer, but the turn is one
+   * ingress call with no per-turn config copy.
+   */
+  blockStreaming?: boolean;
+  /**
    * Wake-name policy for the stt-tts lane. Unset adapts to the room: off for
    * one human, on for two or more. The realtime lane keeps reading these from
    * `voice.realtime`; both spellings resolve, `voice` wins.

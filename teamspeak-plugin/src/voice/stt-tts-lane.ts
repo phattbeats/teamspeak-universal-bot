@@ -24,7 +24,11 @@ import {
   type ResolvedTeamSpeakTranscriptionConfig,
   type TeamSpeakAccountConfig,
 } from "../config.js";
-import { createTeamSpeakAgentTurn, type TeamSpeakAgentRuntime } from "./agent-turn.js";
+import {
+  createTeamSpeakAgentTurn,
+  type TeamSpeakAgentRuntime,
+  type TeamSpeakReplyRuntime,
+} from "./agent-turn.js";
 import type { RoomPlaybackQueue } from "./room-playback.js";
 import {
   RuntimeSpeechSynthesizer,
@@ -56,8 +60,16 @@ export type SttTtsLaneParams = {
   accountId: string;
   agentId: string;
   sessionKey: string;
-  /** `runtime.agent` and `runtime.tts` from the host PluginRuntime. */
-  runtime: { agent: TeamSpeakAgentRuntime; tts: TeamSpeakTtsRuntime };
+  /**
+   * `runtime.agent`, `runtime.tts` and `runtime.channel.reply` from the host
+   * PluginRuntime. `reply` is what streams the answer into TTS (PHA-3792);
+   * without it the lane falls back to the whole-reply ingress path.
+   */
+  runtime: {
+    agent: TeamSpeakAgentRuntime;
+    tts: TeamSpeakTtsRuntime;
+    reply?: TeamSpeakReplyRuntime | undefined;
+  };
   humanParticipantCount: () => number;
   onTerminalError?: ((error: Error) => void) | undefined;
   log?: ((message: string) => void) | undefined;
@@ -167,6 +179,8 @@ export function createSttTtsLane(
     params.deps?.runAgentTurn ??
     createTeamSpeakAgentTurn({
       agent: params.runtime.agent,
+      ...(params.runtime.reply ? { reply: params.runtime.reply } : {}),
+      blockStreaming: params.config.voice?.blockStreaming !== false,
       cfg: params.cfg,
       accountId: params.accountId,
       agentId: params.agentId,

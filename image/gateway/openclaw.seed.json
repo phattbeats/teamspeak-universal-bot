@@ -10,6 +10,7 @@
       "channel": "General Shit",
       "voice": {
         "mode": "stt-tts",
+        "blockStreaming": true,
         "requireWakeName": true,
         "wakeNames": [
           "Sexton",
