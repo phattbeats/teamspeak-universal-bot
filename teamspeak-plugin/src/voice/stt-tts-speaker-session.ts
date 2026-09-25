@@ -35,7 +35,12 @@ import type { RoomPlaybackQueue } from "./room-playback.js";
 import { SpeakerSegmenter, type SpeakerSegment } from "./segmenter.js";
 import { SpeechPipeline } from "./speech-pipeline.js";
 import type { SpeechSynthesizer } from "./speech.js";
-import type { SegmentTranscriber, TranscriptionRequest } from "./whisper-local.js";
+import type {
+  SttProvider,
+  SttProviderKind,
+  SttRequest,
+  SttResult,
+} from "./stt-provider.js";
 import { WakeGate } from "./wake-gate.js";
 
 export type TeamSpeakVoiceAgentTurnHooks = {
@@ -77,7 +82,7 @@ export type TeamSpeakSttTtsSessionParams = {
   /** Wake names to accept once the gate is active. Empty disables matching. */
   wakeNames: string[];
   segmentation: ResolvedTeamSpeakSegmentationConfig;
-  transcriber: SegmentTranscriber;
+  transcriber: SttProvider;
   synthesizer: SpeechSynthesizer;
   runAgentTurn: TeamSpeakVoiceAgentTurn;
   /**
@@ -287,12 +292,18 @@ export class TeamSpeakSttTtsSpeakerSession {
     // still synthesizing its trailing chunks pays the full sttMs on top of
     // that wait -- the 2-3s of unexplained firstAudioMs seen in live logs.
     const sttStartedAt = this.now();
-    const transcription = transcribeSegment(this.params.transcriber, {
-      pcm48kMono: segment.pcm48kMono,
-      label: this.nickname,
-      durationMs: segment.durationMs,
-      clientId: this.clientId,
-    }).then((heard) => ({ heard, sttMs: this.now() - sttStartedAt }));
+    const transcription = this.params.transcriber
+      .transcribe({
+        pcm48kMono: segment.pcm48kMono,
+        label: this.nickname,
+        durationMs: segment.durationMs,
+        clientId: this.clientId,
+      })
+      // `heard.ms` is the provider's own time; `sttMs` is what this lane waited,
+      // which includes any queue wait inside the concurrency limiter. They are
+      // the same number on a quiet channel and diverge under load, so both are
+      // kept rather than one standing in for the other.
+      .then((heard) => ({ heard, sttMs: this.now() - sttStartedAt }));
     // A rejection is handled inside runTurn (awaited there); this keeps the
     // pre-queue promise from reporting as unhandled while it waits its turn.
     transcription.catch(() => undefined);
@@ -312,7 +323,7 @@ export class TeamSpeakSttTtsSpeakerSession {
   private async runTurn(
     segment: SpeakerSegment,
     generation: number,
-    transcription: Promise<{ heard: Awaited<ReturnType<typeof transcribeSegment>>; sttMs: number }>,
+    transcription: Promise<{ heard: SttResult; sttMs: number }>,
   ): Promise<void> {
     if (this.isStopped() || generation !== this.generation) {
       return;
@@ -324,12 +335,16 @@ export class TeamSpeakSttTtsSpeakerSession {
     const { heard, sttMs } = await transcription;
     const transcript = heard.text;
     const sttProvider = heard.provider;
+    // Absent unless the provider was asked for a score; see `whisper-local.ts`
+    // for what that costs.
+    const sttConfidence =
+      heard.confidence === undefined ? "" : ` sttConfidence=${heard.confidence.toFixed(2)}`;
     if (this.isStopped() || generation !== this.generation) {
       return;
     }
     if (!transcript) {
       this.params.log?.(
-        `teamspeak voice: empty transcript clientId=${this.clientId} segmentMs=${Math.round(segment.durationMs)} sttMs=${Math.round(sttMs)} sttProvider=${sttProvider}`,
+        `teamspeak voice: empty transcript clientId=${this.clientId} segmentMs=${Math.round(segment.durationMs)} sttMs=${Math.round(sttMs)} sttProvider=${sttProvider}${sttConfidence}`,
       );
       return;
     }
@@ -454,7 +469,8 @@ export class TeamSpeakSttTtsSpeakerSession {
         `agentMs=${this.lastTimings.agentMs} firstBlockMs=${firstBlockMs} ttsMs=${this.lastTimings.ttsMs} ` +
         `firstAudioMs=${this.lastTimings.firstAudioMs} ttsChunks=${speech.spokenChunks}/${speech.totalChunks} ` +
         `replyPath=${outcome.path ?? "unknown"} blocks=${outcome.blocks ?? 0} ` +
-        `sttProvider=${sttProvider} speechProvider=${speech.speechProvider ?? this.params.synthesizer.id} ` +
+        `sttProvider=${sttProvider}${sttConfidence} sttMsProvider=${Math.round(heard.ms)} ` +
+        `speechProvider=${speech.speechProvider ?? this.params.synthesizer.id} ` +
         // No prompt/output token counts or cost here: neither reply path
         // returns usage to the caller (PHA-3789 finding, see
         // TOOL-CATALOG.md §4.6). requestedModel/Thinking are the ask, not
@@ -550,32 +566,6 @@ export function resolveSttTtsWakeNamePolicy(
 }
 
 /**
- * Read a transcript plus the provider that produced it.
- *
- * `SegmentTranscriber` only promises `transcribe`, and the routing transcriber
- * is the one implementation that can also say *who* answered. Feature-detecting
- * here keeps `sttProvider` honest on both paths — it reports the real provider
- * when routing is on, and the plain transcriber's own id when it is off —
- * without forcing every implementation to carry the richer method.
- */
-export async function transcribeSegment(
-  transcriber: SegmentTranscriber,
-  request: TranscriptionRequest,
-): Promise<{ text: string; provider: string }> {
-  const detailed = (
-    transcriber as SegmentTranscriber & {
-      transcribeDetailed?: (
-        request: TranscriptionRequest,
-      ) => Promise<{ text: string; provider: string }>;
-    }
-  ).transcribeDetailed;
-  if (typeof detailed === "function") {
-    return await detailed.call(transcriber, request);
-  }
-  return { text: await transcriber.transcribe(request), provider: transcriber.id };
-}
-
-/**
  * Caps whisper requests to what the server can actually run at once (PHA-3607).
  *
  * whisper.cpp's server has no request-level parallelism — one process, one
@@ -592,26 +582,31 @@ export async function transcribeSegment(
  * one, and evicting it immediately (an empty transcript, same as silence)
  * costs nothing next to leaving it to time out on its own turn.
  */
-export class ConcurrencyLimitedTranscriber implements SegmentTranscriber {
+export class ConcurrencyLimitedTranscriber implements SttProvider {
   readonly id: string;
+  readonly kind: SttProviderKind;
   private inFlight = 0;
   private readonly waiting: Array<(proceed: boolean) => void> = [];
 
   constructor(
-    private readonly inner: SegmentTranscriber,
+    private readonly inner: SttProvider,
     private readonly maxInFlight = 1,
     private readonly maxQueueDepth = 1,
     private readonly log?: (message: string) => void,
   ) {
     this.id = inner.id;
+    this.kind = inner.kind;
   }
 
-  async transcribe(request: TranscriptionRequest): Promise<string> {
-    const { text } = await this.transcribeDetailed(request);
-    return text;
+  isBackedOff(): boolean {
+    return this.inner.isBackedOff?.() ?? false;
   }
 
-  async transcribeDetailed(request: TranscriptionRequest): Promise<{ text: string; provider: string }> {
+  backoffRemainingMs(): number {
+    return this.inner.backoffRemainingMs?.() ?? 0;
+  }
+
+  async transcribe(request: SttRequest): Promise<SttResult> {
     if (this.inFlight >= this.maxInFlight) {
       if (this.waiting.length >= this.maxQueueDepth) {
         const evicted = this.waiting.shift();
@@ -624,12 +619,15 @@ export class ConcurrencyLimitedTranscriber implements SegmentTranscriber {
         this.waiting.push(resolve);
       });
       if (!proceed) {
-        return { text: "", provider: this.id };
+        return { text: "", provider: this.id, ms: 0 };
       }
     }
     this.inFlight += 1;
     try {
-      return await transcribeSegment(this.inner, request);
+      // The inner result passes through untouched: its `ms` is provider time,
+      // and the queue wait ahead of it is already reported separately as
+      // `queueWaitMs`. Folding the two together would hide which one grew.
+      return await this.inner.transcribe(request);
     } finally {
       this.inFlight -= 1;
       const next = this.waiting.shift();

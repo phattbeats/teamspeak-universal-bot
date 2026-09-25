@@ -20,7 +20,7 @@ import { createSttTtsLane, resolveTeamSpeakWakeNames } from "../src/voice/stt-tt
 import type { SpeechSynthesisOutcome, SpeechSynthesizer } from "../src/voice/speech.js";
 import type { TeamSpeakVoiceAgentTurn } from "../src/voice/stt-tts-speaker-session.js";
 import { TeamSpeakVoiceRuntime, type VoiceSpeakerSession } from "../src/voice/voice-runtime.js";
-import type { SegmentTranscriber, TranscriptionRequest } from "../src/voice/whisper-local.js";
+import type { SttProvider, SttRequest, SttResult } from "../src/voice/stt-provider.js";
 import { MockBridge, rosterEntry, toneFrame48k } from "./mock-bridge.js";
 
 const FRAME_20MS = toneFrame48k();
@@ -31,16 +31,17 @@ const GUEST = 9;
 /** A one-second reply, so a chunked enqueue is observable on the wire. */
 const REPLY_PCM = Buffer.alloc(BRIDGE_FRAME_BYTES * 50, 3);
 
-class FakeTranscriber implements SegmentTranscriber {
+class FakeTranscriber implements SttProvider {
   readonly id = "whisper-local";
-  readonly requests: TranscriptionRequest[] = [];
+  readonly kind = "local" as const;
+  readonly requests: SttRequest[] = [];
   /** Transcripts handed out in order; the last one repeats. */
   constructor(private readonly transcripts: string[]) {}
 
-  async transcribe(request: TranscriptionRequest): Promise<string> {
+  async transcribe(request: SttRequest): Promise<SttResult> {
     this.requests.push(request);
     const index = Math.min(this.requests.length - 1, this.transcripts.length - 1);
-    return this.transcripts[index] ?? "";
+    return { text: this.transcripts[index] ?? "", provider: this.id, ms: 11 };
   }
 }
 
@@ -488,6 +489,94 @@ describe("stt-tts lane construction", () => {
     }
     expect(refused.reason).toContain("deepgram");
     expect(refused.reason).toContain("whisper-local");
+  });
+
+  /** The lane with no fake transcriber injected, so the registry does the choosing. */
+  const laneFromConfig = (
+    voice: NonNullable<TeamSpeakAccountConfig["voice"]>,
+    env: Record<string, string | undefined> = {},
+    log?: (message: string) => void,
+  ) =>
+    createSttTtsLane({
+      cfg: {} as never,
+      config: baseConfig({ voice }),
+      accountId: "default",
+      agentId: "sexton",
+      sessionKey: "teamspeak:default",
+      runtime: {
+        agent: { runCommandFromIngress: async () => ({ payloads: [] }) },
+        tts: {
+          prepareTtsRequest: () => ({ cfg: {}, directives: { cleanedText: "", overrides: {} } }),
+          textToSpeech: async () => ({ success: false }),
+        },
+      },
+      humanParticipantCount: () => 1,
+      env,
+      ...(log ? { log } : {}),
+      deps: { createSynthesizer: () => new FakeSynthesizer() },
+    });
+
+  it("refuses a hosted primary until the persona opts in, then builds it (PHA-3790)", () => {
+    const refused = laneFromConfig(
+      { mode: "stt-tts", streaming: { transcription: { provider: "minimax", apiKey: "k" } } },
+    );
+    expect(refused.ok).toBe(false);
+    expect(refused.ok === false && refused.reason).toMatch(/allowHosted/);
+
+    // Same config plus the one explicit key. No code change in between: that is
+    // the whole claim of §4.7.
+    const allowed = laneFromConfig({
+      mode: "stt-tts",
+      streaming: {
+        transcription: { provider: "minimax", apiKey: "k", allowHosted: true },
+      },
+    });
+    expect(allowed.ok).toBe(true);
+    expect(allowed.ok === true && allowed.lane.transcriberId).toBe("minimax-asr");
+  });
+
+  it("swaps the primary by name with no other config change", () => {
+    const lane = laneFromConfig({
+      mode: "stt-tts",
+      streaming: { transcription: { provider: "whisper" } },
+    });
+    expect(lane.ok === true && lane.lane.transcriberId).toBe("whisper-local");
+  });
+
+  it("wires the router when the secondary builds, and reports both ids", () => {
+    const lane = laneFromConfig(
+      {
+        mode: "stt-tts",
+        streaming: { secondaryTranscription: {} },
+      },
+      { MINIMAX_API_KEY: "sk-cp-live-key" },
+    );
+    expect(lane.ok === true && lane.lane.transcriberId).toBe("whisper-local+minimax-asr");
+  });
+
+  it("warns but keeps the lane when the secondary cannot be built", () => {
+    // Losing the upgrade must not lose the channel: the primary on its own is a
+    // complete transcriber, so an unbuildable secondary is a log line.
+    const logs: string[] = [];
+    const lane = laneFromConfig(
+      { mode: "stt-tts", streaming: { secondaryTranscription: {} } },
+      {},
+      (message) => logs.push(message),
+    );
+    expect(lane.ok).toBe(true);
+    expect(lane.ok === true && lane.lane.transcriberId).toBe("whisper-local");
+    expect(logs.join(" ")).toMatch(/secondary transcription disabled.*needs an apiKey/);
+  });
+
+  it("leaves the secondary off entirely when no block asked for it", () => {
+    const logs: string[] = [];
+    const lane = laneFromConfig(
+      { mode: "stt-tts" },
+      { MINIMAX_API_KEY: "sk-cp-live-key" },
+      (message) => logs.push(message),
+    );
+    expect(lane.ok === true && lane.lane.transcriberId).toBe("whisper-local");
+    expect(logs.join(" ")).not.toMatch(/secondary/);
   });
 
   it("defaults wake names to the routed agent name plus OpenClaw", () => {

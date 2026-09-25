@@ -7,6 +7,13 @@
  * path, and the only place that can be enforced is at the point the transcriber
  * is built.
  *
+ * Since PHA-3790 both transcriber slots come out of an `SttProviderRegistry`
+ * (`stt-registry.ts`) by the name in config, so swapping either one is a config
+ * edit and this file does not know which provider it got. What it still owns is
+ * the shape of the refusal: an unbuildable *primary* stops the lane, an
+ * unbuildable *secondary* only warns, because the primary alone is a complete
+ * transcriber.
+ *
  * Known v1 gap, stated rather than hidden: the realtime tools from PHA-3176
  * (`play_music`, `what_did_i_miss`, `who_is_here`, `poke`) are registered on a
  * *provider session*, and this lane has none. Voice turns here reach the agent's
@@ -21,7 +28,7 @@ import {
   resolveTeamSpeakSpeechConfig,
   resolveTeamSpeakTranscriptionConfig,
   resolveTeamSpeakWakeConfig,
-  type ResolvedTeamSpeakTranscriptionConfig,
+  type ResolvedSttProviderConfig,
   type TeamSpeakAccountConfig,
 } from "../config.js";
 import {
@@ -40,15 +47,15 @@ import {
   TeamSpeakSttTtsSpeakerSession,
   type TeamSpeakVoiceAgentTurn,
 } from "./stt-tts-speaker-session.js";
-import { MiniMaxAsrTranscriber } from "./minimax-asr.js";
 import { RoutingTranscriber } from "./stt-routing.js";
-import { LocalWhisperTranscriber, type SegmentTranscriber } from "./whisper-local.js";
+import type { SttProvider, SttProviderRegistry } from "./stt-provider.js";
+import { createDefaultSttProviderRegistry } from "./stt-registry.js";
 
 /** Injectable seams; production leaves these unset. */
 export type SttTtsLaneDeps = {
-  createTranscriber?:
-    | ((config: ResolvedTeamSpeakTranscriptionConfig) => SegmentTranscriber)
-    | undefined;
+  createTranscriber?: ((config: ResolvedSttProviderConfig) => SttProvider) | undefined;
+  /** Registry to pick providers from. Defaults to the built-in one. */
+  sttRegistry?: SttProviderRegistry | undefined;
   createSynthesizer?: (() => SpeechSynthesizer) | undefined;
   runAgentTurn?: TeamSpeakVoiceAgentTurn | undefined;
   removeFile?: ((path: string) => Promise<void> | void) | undefined;
@@ -122,10 +129,9 @@ export function resolveTeamSpeakWakeNames(params: {
 export function createSttTtsLane(
   params: SttTtsLaneParams,
 ): { ok: true; lane: SttTtsLane } | { ok: false; reason: string } {
-  const transcription = resolveTeamSpeakTranscriptionConfig(params.config, params.env);
-  if (!transcription.ok) {
-    return transcription;
-  }
+  const env = params.env ?? process.env;
+  const registry = params.deps?.sttRegistry ?? createDefaultSttProviderRegistry();
+  const transcription = resolveTeamSpeakTranscriptionConfig(params.config);
   const speech = resolveTeamSpeakSpeechConfig(params.config);
   const segmentation = resolveTeamSpeakSegmentationConfig(params.config);
   const wakeConfig = resolveTeamSpeakWakeConfig(params.config);
@@ -134,28 +140,50 @@ export function createSttTtsLane(
     agentId: params.agentId,
   });
 
-  const primaryTranscriber =
-    params.deps?.createTranscriber?.(transcription.config) ??
-    new LocalWhisperTranscriber({
-      config: transcription.config,
+  // The primary slot. An unknown name, or a hosted provider without
+  // `allowHosted`, refuses the lane outright: transcription is the lane, so a
+  // primary that cannot be built is not a degraded lane, it is no lane.
+  let primaryTranscriber: SttProvider;
+  if (params.deps?.createTranscriber) {
+    primaryTranscriber = params.deps.createTranscriber(transcription);
+  } else {
+    const built = registry.create({
+      slot: "primary",
+      config: transcription,
+      env,
       ...(params.log ? { log: params.log } : {}),
     });
+    if (!built.ok) {
+      return { ok: false, reason: `voice.streaming.transcription: ${built.reason}` };
+    }
+    primaryTranscriber = built.provider;
+  }
 
-  // The hosted second opinion (PHA-3428 item 3). Absent unless configured, and
-  // a misconfiguration warns rather than refusing to start: whisper on its own
-  // is a complete transcriber, so losing the upgrade must not lose the lane.
-  const secondary = resolveTeamSpeakSecondaryTranscriptionConfig(params.config, params.env);
-  let transcriber: SegmentTranscriber = primaryTranscriber;
+  // The second opinion (PHA-3428 item 3). Absent unless configured, and a
+  // failure to build it warns rather than refusing to start: the primary on its
+  // own is a complete transcriber, so losing the upgrade must not lose the lane.
+  const secondary = resolveTeamSpeakSecondaryTranscriptionConfig(params.config);
+  let transcriber: SttProvider = primaryTranscriber;
   if (secondary.ok) {
-    transcriber = new RoutingTranscriber({
-      primary: primaryTranscriber,
-      secondary: new MiniMaxAsrTranscriber({
-        config: secondary.config,
-        ...(params.log ? { log: params.log } : {}),
-      }),
-      config: secondary.routing,
+    const built = registry.create({
+      slot: "secondary",
+      config: secondary.config,
+      env,
       ...(params.log ? { log: params.log } : {}),
     });
+    if (built.ok) {
+      transcriber = new RoutingTranscriber({
+        primary: primaryTranscriber,
+        secondary: built.provider,
+        config: secondary.routing,
+        ...(params.log ? { log: params.log } : {}),
+      });
+    } else {
+      params.log?.(
+        `teamspeak voice: secondary transcription disabled - voice.streaming.secondaryTranscription: ` +
+          `${built.reason} Staying on ${primaryTranscriber.id} only.`,
+      );
+    }
   } else if (secondary.reason) {
     params.log?.(`teamspeak voice: secondary transcription disabled - ${secondary.reason}`);
   }

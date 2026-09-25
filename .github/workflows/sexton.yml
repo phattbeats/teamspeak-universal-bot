@@ -82,8 +82,63 @@ jobs:
       # Cargo.toml — both have to be inside the build context. Matches
       # `sexton/deploy/sexton-compose.yml`'s `build:` context/dockerfile
       # split.
-      - name: Build image (no push — no registry credentials wired yet)
+      - name: Build image
         run: docker build -t phattbeats/sexton:ci -f sexton/Dockerfile .
+
+      # PHA-3798: this image now defaults to the env->argv wrapper
+      # (`sexton/docker-entrypoint.sh`), not the `sexton` binary directly —
+      # a BYO deploy with no TS_BRIDGE_CHANNEL set should fail loudly at
+      # startup, not launch `sexton` with an empty --channel and let
+      # tsclientlib fail confusingly later.
+      - name: Verify the env->argv wrapper fails closed with no channel set
+        run: |
+          set +e
+          out=$(docker run --rm phattbeats/sexton:ci 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          [ "$status" -ne 0 ] || { echo "expected a non-zero exit with no TS_BRIDGE_CHANNEL"; exit 1; }
+          echo "$out" | grep -q "TS_BRIDGE_CHANNEL is required"
+
+      - name: Verify probe-channels/send-test still reachable via --entrypoint
+        run: |
+          docker run --rm --entrypoint probe-channels phattbeats/sexton:ci --help >/dev/null
+          docker run --rm --entrypoint send-test phattbeats/sexton:ci --help >/dev/null
+
+  publish-ts-bridge:
+    # PHA-3798: the standalone bridge half, published for a bring-your-own-
+    # OpenClaw attach (someone else's gateway, this container is just the
+    # TeamSpeak client). Separate from `combined-image` below, which is the
+    # all-in-one Sexton/Bexton deploy and is not meant for a stranger's box.
+    # Only runs on main (not PRs — forked PRs don't get GITHUB_TOKEN package
+    # write, and there's no reason to publish a tag per PR push here).
+    needs: docker
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: sexton/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/phattbeats/plnt-ts-bridge:latest
+            ghcr.io/phattbeats/plnt-ts-bridge:${{ github.sha }}
 
   combined-image:
     # PHA-3580: the `docker` job above only ever compile-checked the old
@@ -163,3 +218,16 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # PHA-3798: dist/ is committed (npm:/npm-pack:/git: installs need a
+      # compiled openclaw.extensions counterpart present at install time —
+      # see package-entry-resolution.ts / plugin-peer-link.ts upstream, and
+      # scripts/build.mjs's header comment for why this is a plain rebuild
+      # rather than a prepack/prepare lifecycle hook). A PR that changes
+      # src/ without regenerating dist/ would otherwise ship a stale
+      # compiled plugin to every non---link install silently.
+      - name: Build and check dist/ is committed
+        run: |
+          npm run build
+          git diff --exit-code -- dist \
+            || { echo "::error::dist/ is stale — run 'npm run build' in teamspeak-plugin/ and commit the result"; exit 1; }

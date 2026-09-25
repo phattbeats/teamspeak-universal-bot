@@ -11,6 +11,11 @@
  * encryption, autoJoin/followUsers by Discord user id) are replaced by their
  * TeamSpeak equivalents rather than carried over meaninglessly.
  */
+import {
+  MINIMAX_ASR_PROVIDER_ID,
+  WHISPER_LOCAL_PROVIDER_ID,
+  type ResolvedSttProviderConfig,
+} from "./voice/stt-provider.js";
 
 export type TeamSpeakVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
 
@@ -76,21 +81,58 @@ export type TeamSpeakVoiceRealtimeConfig = {
  * this mirrors that shape rather than inventing a second vocabulary. Only one
  * of the two blocks is read, chosen by `voice.mode`.
  */
+/**
+ * One STT provider slot (PHA-3790).
+ *
+ * The same shape serves both slots and every registered provider, so choosing a
+ * different transcriber is a config edit rather than a code change — see
+ * `voice/stt-provider.ts` for the contract and `voice/stt-registry.ts` for the
+ * names. Fields a given provider does not use are simply ignored by it: `url`
+ * is whisper's, `baseUrl`/`apiKey` belong to a hosted provider, and each
+ * provider applies its own defaults.
+ */
 export type TeamSpeakVoiceStreamingTranscriptionConfig = {
   /**
-   * Transcription provider id. Only local providers are accepted: the lane's
-   * whole point is that the hot mic never leaves the house, and that promise is
-   * made to the channel in the welcome notice, not just to the budget.
+   * Registered transcription provider name. Default: "whisper-local".
+   *
+   * A `kind: "hosted"` provider is refused in this slot unless `allowHosted` is
+   * also set: the lane's whole point is that the hot mic never leaves the house,
+   * and that promise is made to the channel in the welcome notice, not just to
+   * the budget.
    */
   provider?: string;
   /** whisper.cpp server endpoint. Default: http://whisper:8080/inference. */
   url?: string;
+  /** API base for a hosted provider, without the /v1 suffix. */
+  baseUrl?: string;
+  /** API key for a hosted provider. */
+  apiKey?: string;
   /** Model name passed through to the server, when it hosts more than one. */
   model?: string;
   /** ISO-639-1 language hint, or "auto". Default: "en". */
   language?: string;
+  /**
+   * Decoder priming text — names, jargon, the bot's own wake words. whisper.cpp
+   * takes it as an initial prompt; MiniMax `asr-1.0` has no such parameter and
+   * ignores it. Unset by default: priming changes what comes back, so it is an
+   * operator's decision, not a default.
+   */
+  prompt?: string;
+  /**
+   * Ask the provider to score the transcript. Off by default because whisper
+   * only scores under `response_format=verbose_json`, measured at about +1.8s
+   * on every turn (the table is in `voice/whisper-local.ts`).
+   */
+  confidence?: boolean;
   /** Per-segment transcription timeout. Default: 15000ms. */
   timeoutMs?: number;
+  /**
+   * Permit a hosted provider in this slot, sending speaker audio to a metered
+   * third party on every turn. Default: false.
+   */
+  allowHosted?: boolean;
+  /** Provider-specific extras, passed through to the provider untouched. */
+  options?: Record<string, unknown>;
 };
 
 export type TeamSpeakVoiceStreamingSpeechConfig = {
@@ -483,110 +525,74 @@ export const DEFAULT_SEGMENT_HANGOVER_MS = 600;
 export const DEFAULT_MIN_SEGMENT_MS = 320;
 export const DEFAULT_MAX_SEGMENT_MS = 20_000;
 
-/**
- * Transcription providers this lane will run.
- *
- * This list is the $0 ceiling and the privacy promise expressed as code. Every
- * transcription provider OpenClaw registers (deepgram, openai, elevenlabs,
- * mistral) is metered and hosted, so an unrecognized id is refused at startup
- * rather than silently costing money and shipping the channel's hot mic to a
- * third party. Adding an id here is a deliberate act.
- */
-export const LOCAL_TRANSCRIPTION_PROVIDERS = ["whisper-local"] as const;
-
-export type TeamSpeakLocalTranscriptionProvider =
-  (typeof LOCAL_TRANSCRIPTION_PROVIDERS)[number];
-
-export function isLocalTranscriptionProvider(
-  provider: string | undefined,
-): provider is TeamSpeakLocalTranscriptionProvider {
-  return LOCAL_TRANSCRIPTION_PROVIDERS.includes(
-    (provider ?? "").trim().toLowerCase() as TeamSpeakLocalTranscriptionProvider,
-  );
-}
-
-export type ResolvedTeamSpeakTranscriptionConfig = {
-  provider: TeamSpeakLocalTranscriptionProvider;
-  url: string;
-  model: string | undefined;
-  language: string;
-  timeoutMs: number;
-};
+/** Re-exported so a caller needs one import for a slot config and its resolver. */
+export type { ResolvedSttProviderConfig };
 
 /**
- * Resolve the transcription block, or explain why the lane cannot start.
+ * Resolve the transcription block into the generic provider-slot shape.
  *
- * Returning a reason rather than throwing keeps the failure at the same place
- * every other unstartable account reports: a warning plus a runtime that never
- * opens, instead of an exception out of `startAccount`.
+ * Note what is NOT here any more: the old `LOCAL_TRANSCRIPTION_PROVIDERS` array
+ * and its name check. Validating the provider name in this file is what made
+ * `sttProvider` a label rather than a switch — the name was checked here and
+ * then ignored at construction. Name resolution, the local/hosted refusal, and
+ * each provider's own missing-pieces refusal all live at the seam that actually
+ * builds the thing (`SttProviderRegistry`, wired in `stt-tts-lane.ts`), which is
+ * also the only place that can enforce them. This function's job is now purely
+ * to read config and apply the slot-level defaults — which is why it returns the
+ * config plainly rather than the `{ ok }` union it used to: there is no longer
+ * anything here that can fail, and a union with one arm only invites a caller to
+ * write a branch that never runs.
  */
 export function resolveTeamSpeakTranscriptionConfig(
   config: TeamSpeakAccountConfig | undefined,
-  env: Record<string, string | undefined> = process.env,
-): { ok: true; config: ResolvedTeamSpeakTranscriptionConfig } | { ok: false; reason: string } {
+): ResolvedSttProviderConfig {
   const raw = config?.voice?.streaming?.transcription;
-  const provider = raw?.provider?.trim() || LOCAL_TRANSCRIPTION_PROVIDERS[0];
-  if (!isLocalTranscriptionProvider(provider)) {
-    return {
-      ok: false,
-      reason:
-        `voice.streaming.transcription.provider="${provider}" is not a local transcriber. ` +
-        `voice.mode=stt-tts only runs local speech-to-text (${LOCAL_TRANSCRIPTION_PROVIDERS.join(", ")}); ` +
-        "every registered OpenClaw transcription provider is metered and hosted.",
-    };
-  }
   return {
-    ok: true,
-    config: {
-      provider,
-      url: raw?.url?.trim() || env.TEAMSPEAK_WHISPER_URL?.trim() || DEFAULT_WHISPER_URL,
-      model: raw?.model?.trim() || undefined,
-      language: raw?.language?.trim() || DEFAULT_WHISPER_LANGUAGE,
-      timeoutMs: positiveMs(raw?.timeoutMs, DEFAULT_TRANSCRIPTION_TIMEOUT_MS),
-    },
+    provider: raw?.provider?.trim() || WHISPER_LOCAL_PROVIDER_ID,
+    url: raw?.url?.trim() || undefined,
+    baseUrl: raw?.baseUrl?.trim() || undefined,
+    apiKey: raw?.apiKey?.trim() || undefined,
+    model: raw?.model?.trim() || undefined,
+    language: raw?.language?.trim() || DEFAULT_WHISPER_LANGUAGE,
+    prompt: raw?.prompt?.trim() || undefined,
+    confidence: raw?.confidence === true,
+    timeoutMs: positiveMs(raw?.timeoutMs, DEFAULT_TRANSCRIPTION_TIMEOUT_MS),
+    // Hosted-provider health knobs. Harmless for a local provider, which ignores
+    // them; the secondary slot lets config override both.
+    slowMs: DEFAULT_SECONDARY_SLOW_MS,
+    backoffMs: DEFAULT_SECONDARY_BACKOFF_MS,
+    allowHosted: raw?.allowHosted === true,
+    options: raw?.options ?? {},
   };
 }
 
 /**
- * The hosted SECONDARY transcriber (PHA-3428 item 3).
+ * The SECONDARY transcriber (PHA-3428 item 3).
  *
- * Deliberately a separate block from `transcription`, not a relaxation of
- * `LOCAL_TRANSCRIPTION_PROVIDERS`. That list is the privacy promise expressed
- * as code and it still refuses a hosted *primary* at startup; this is an
- * explicitly opt-in second opinion that is absent unless someone configures a
- * key. Omit the block and the lane behaves exactly as it did before.
+ * Deliberately a separate block from `transcription` rather than a mode of it.
+ * Escalation is a different decision from selection: the primary slot answers
+ * "who transcribes", this one answers "who gets a second look, and when". Omit
+ * the block and the lane behaves exactly as it did before it existed.
  */
-export type TeamSpeakVoiceStreamingSecondaryTranscriptionConfig = {
-  /** Secondary provider id. Only "minimax-asr" is implemented. */
-  provider?: string;
-  /** API base, without the /v1 suffix. Default: https://api.minimax.io. */
-  baseUrl?: string;
-  /** API key. Falls back to MINIMAX_API_KEY in the environment. */
-  apiKey?: string;
-  /** ASR model. MiniMax accepts only "asr-1.0" today; that is the default. */
-  model?: string;
-  /** ISO-639-1 language hint, or "auto". Default: "en". */
-  language?: string;
-  /** Per-segment timeout. Default: 8000ms. */
-  timeoutMs?: number;
-  /** A success slower than this parks the provider anyway. Default: 3000ms. */
-  slowMs?: number;
-  /** How long a failure parks the provider. Default: 600000ms (10 min). */
-  backoffMs?: number;
-  /** Segments longer than this always escalate. Default: 8000ms. */
-  longSegmentMs?: number;
-  /**
-   * An empty whisper transcript escalates only when the segment was at least
-   * this long. Below it, an empty is room tone, not a miss. Default: 1500ms.
-   */
-  emptyEscalationMinMs?: number;
-  /** Consecutive empty escalations before a speaker is suppressed. Default: 3. */
-  maxFruitlessEscalations?: number;
-  /** How long that suppression lasts. Default: 120000ms. */
-  fruitlessCooldownMs?: number;
-};
+export type TeamSpeakVoiceStreamingSecondaryTranscriptionConfig =
+  TeamSpeakVoiceStreamingTranscriptionConfig & {
+    /** A success slower than this parks the provider anyway. Default: 3000ms. */
+    slowMs?: number;
+    /** How long a failure parks the provider. Default: 600000ms (10 min). */
+    backoffMs?: number;
+    /** Segments longer than this always escalate. Default: 8000ms. */
+    longSegmentMs?: number;
+    /**
+     * An empty primary transcript escalates only when the segment was at least
+     * this long. Below it, an empty is room tone, not a miss. Default: 1500ms.
+     */
+    emptyEscalationMinMs?: number;
+    /** Consecutive empty escalations before a speaker is suppressed. Default: 3. */
+    maxFruitlessEscalations?: number;
+    /** How long that suppression lasts. Default: 120000ms. */
+    fruitlessCooldownMs?: number;
+  };
 
-export const SECONDARY_TRANSCRIPTION_PROVIDERS = ["minimax-asr"] as const;
 export const DEFAULT_MINIMAX_ASR_BASE_URL = "https://api.minimax.io";
 /** The API rejects every other id; probed 2026-09-13. */
 export const DEFAULT_MINIMAX_ASR_MODEL = "asr-1.0";
@@ -598,17 +604,6 @@ export const DEFAULT_EMPTY_ESCALATION_MIN_MS = 1_500;
 export const DEFAULT_MAX_FRUITLESS_ESCALATIONS = 3;
 export const DEFAULT_FRUITLESS_COOLDOWN_MS = 120_000;
 
-export type ResolvedTeamSpeakSecondaryTranscriptionConfig = {
-  provider: string;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  language: string;
-  timeoutMs: number;
-  slowMs: number;
-  backoffMs: number;
-};
-
 export type ResolvedTeamSpeakRoutingConfig = {
   longSegmentMs: number;
   emptyEscalationMinMs: number;
@@ -619,17 +614,17 @@ export type ResolvedTeamSpeakRoutingConfig = {
 /**
  * Resolve the secondary block.
  *
- * Three results, not two: absent (no block, no key — the ordinary case),
- * configured, or misconfigured. A misconfiguration returns a reason so the lane
- * can warn instead of silently running without the second opinion someone
- * thought they had turned on — but it never blocks the lane from starting,
- * because whisper alone is a complete, working transcriber.
+ * Two results, not three: absent (the ordinary case) or configured. The old
+ * third result — misconfigured, for an unimplemented provider name or a missing
+ * key — is gone from here, because both of those are now the registry's and the
+ * provider factory's answer to give at construction time. What stays here is the
+ * one rule that is genuinely about config and nothing else: an absent block
+ * means off.
  */
 export function resolveTeamSpeakSecondaryTranscriptionConfig(
   config: TeamSpeakAccountConfig | undefined,
-  env: Record<string, string | undefined> = process.env,
 ):
-  | { ok: true; config: ResolvedTeamSpeakSecondaryTranscriptionConfig; routing: ResolvedTeamSpeakRoutingConfig }
+  | { ok: true; config: ResolvedSttProviderConfig; routing: ResolvedTeamSpeakRoutingConfig }
   | { ok: false; reason: string | undefined } {
   const raw = config?.voice?.streaming?.secondaryTranscription;
   if (!raw) {
@@ -640,35 +635,24 @@ export function resolveTeamSpeakSecondaryTranscriptionConfig(
     // env var may supply the *key*, but only this block may grant the *intent*.
     return { ok: false, reason: undefined };
   }
-  const apiKey = raw.apiKey?.trim() || env.MINIMAX_API_KEY?.trim() || "";
-  const provider = raw.provider?.trim() || SECONDARY_TRANSCRIPTION_PROVIDERS[0];
-  if (!SECONDARY_TRANSCRIPTION_PROVIDERS.includes(provider as (typeof SECONDARY_TRANSCRIPTION_PROVIDERS)[number])) {
-    return {
-      ok: false,
-      reason:
-        `voice.streaming.secondaryTranscription.provider="${provider}" is not implemented ` +
-        `(${SECONDARY_TRANSCRIPTION_PROVIDERS.join(", ")}).`,
-    };
-  }
-  if (!apiKey) {
-    return {
-      ok: false,
-      reason:
-        "voice.streaming.secondaryTranscription is configured but no apiKey was found " +
-        "(set it there or as MINIMAX_API_KEY); staying on whisper-local only.",
-    };
-  }
   return {
     ok: true,
     config: {
-      provider,
-      baseUrl: (raw.baseUrl?.trim() || DEFAULT_MINIMAX_ASR_BASE_URL).replace(/\/+$/, "").replace(/\/v1$/, ""),
-      apiKey,
-      model: raw.model?.trim() || DEFAULT_MINIMAX_ASR_MODEL,
+      provider: raw.provider?.trim() || MINIMAX_ASR_PROVIDER_ID,
+      url: raw.url?.trim() || undefined,
+      baseUrl: raw.baseUrl?.trim() || undefined,
+      apiKey: raw.apiKey?.trim() || undefined,
+      model: raw.model?.trim() || undefined,
       language: raw.language?.trim() || DEFAULT_WHISPER_LANGUAGE,
+      prompt: raw.prompt?.trim() || undefined,
+      confidence: raw.confidence === true,
       timeoutMs: positiveMs(raw.timeoutMs, DEFAULT_SECONDARY_TIMEOUT_MS),
       slowMs: positiveMs(raw.slowMs, DEFAULT_SECONDARY_SLOW_MS),
       backoffMs: positiveMs(raw.backoffMs, DEFAULT_SECONDARY_BACKOFF_MS),
+      // Meaningless in this slot: escalating to a hosted second opinion is the
+      // point of the block, and the registry only gates the primary.
+      allowHosted: true,
+      options: raw.options ?? {},
     },
     routing: {
       longSegmentMs: positiveMs(raw.longSegmentMs, DEFAULT_LONG_SEGMENT_MS),

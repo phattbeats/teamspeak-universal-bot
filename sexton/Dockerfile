@@ -39,8 +39,16 @@ COPY --from=builder /build/target/release/bridge-test /usr/local/bin/bridge-test
 # image/Dockerfile and docs/universal-bot/TOOL-CATALOG.md section 3). Same
 # destination filename as before, so nothing downstream changes.
 COPY personas/sexton/avatar.png /usr/local/share/sexton-avatar/brandon.png
+COPY sexton/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 ENV RUST_LOG=info
+# PHA-3798: this image is published standalone as ghcr.io/phattbeats/plnt-ts-bridge
+# for a bring-your-own-OpenClaw deploy (someone else's gateway, this
+# container is just the TeamSpeak client half). /data is where the pinned
+# TS identity and the chat-history logs live; back it up or lose the bot's
+# TeamSpeak UID on the next recreate.
+VOLUME ["/data"]
 # The audio/voice bridge WebSocket (PROTOCOL.md) — local-only, never publish
 # this port outside the compose network (formerly ts-bridge's EXPOSE).
 EXPOSE 9099
-ENTRYPOINT ["/usr/local/bin/sexton"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

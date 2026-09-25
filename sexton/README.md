@@ -168,6 +168,9 @@ See `deploy/sexton-compose.yml`. The image is `phattbeats/sexton:latest`, built 
 - logs persisted at `/mnt/user/appdata/sexton` (mounted at `/var/sexton-logs`)
 - the audio bridge's WebSocket exposed to sibling containers on `:9099` (PHA-3342)
 
+`sexton-compose.yml` overrides the image's entrypoint to invoke the binary with explicit
+flags directly:
+
 ```
 sexton -a teamspeak6-server -p 9987 -n Sexton -c "General Shit" \
        -i "$(cat /run/secrets/sexton-identity)" \
@@ -179,11 +182,49 @@ sexton -a teamspeak6-server -p 9987 -n Sexton -c "General Shit" \
 
 PHATT-RAID has no `docker compose` plugin, so production runs the equivalent `docker run` in
 `deploy/deploy.sh` (copied to `/mnt/user/appdata/sexton/deploy.sh` on the box). Keep it and the
-compose file in step.
+compose file in step. **Superseded by `image/deploy.sh` (PHA-3428)** — both are kept as the
+record of the settings that were proven here, not as a thing to still run.
 
 PHA-3342: the build context moved from `sexton/` to the repo root (the Sexton now has a
 workspace path dependency on `bridge-proto`) — see `Dockerfile`'s header comment and
 `deploy/sexton-compose.yml`'s `build:` stanza.
+
+### Standalone / bring-your-own-OpenClaw (PHA-3798)
+
+This same `Dockerfile` is also published as `ghcr.io/phattbeats/plnt-ts-bridge` — the
+bridge half alone, for someone who already runs their own OpenClaw gateway elsewhere and
+just wants a TeamSpeak client to point its `teamspeak` channel plugin at (see
+[`docs/universal-bot/BYO-OPENCLAW.md`](../docs/universal-bot/BYO-OPENCLAW.md)). The default
+entrypoint there is `sexton/docker-entrypoint.sh`, an env→argv wrapper (`TS_BRIDGE_*`), not
+the binary directly — `docker run ghcr.io/phattbeats/plnt-ts-bridge` with no args and no env
+now fails loudly (`TS_BRIDGE_CHANNEL is required`) instead of launching `sexton` with an
+empty `--channel` and failing confusingly later inside tsclientlib. The internal deploy above
+is unaffected: `sexton-compose.yml` already overrides `entrypoint:` to call the binary
+directly, and `image/Dockerfile` (the all-in-one Sexton/Bexton image) builds its own copy of
+`sexton` from `rust-builder` and never uses this `Dockerfile` or its entrypoint at all.
+
+| env var | flag | default |
+| --- | --- | --- |
+| `TS_BRIDGE_ADDRESS` | `--address` | `teamspeak6-server` |
+| `TS_BRIDGE_PORT` | `--port` | `9987` |
+| `TS_BRIDGE_PUBLIC_FALLBACK=1` | `--public-fallback` | unset |
+| `TS_BRIDGE_NICKNAME` | `--nickname` | `Sexton` |
+| `TS_BRIDGE_CHANNEL` | `--channel` | **required** |
+| `TS_BRIDGE_CHANNEL_PASSWORD` | `--channel-password` | unset |
+| `TS_BRIDGE_IDENTITY_FILE` | `--identity` (file contents) | `/data/identity.txt` |
+| `TS_BRIDGE_AVATAR_PATH` | `--avatar-path` | unset (no avatar) |
+| `TS_BRIDGE_LOG_DIR` | `--log-dir` | unset (binary default) |
+| `TS_BRIDGE_NO_CATCHUP=1` | `--no-catchup` | unset |
+| `TS_BRIDGE_WS_BIND` | `--ws-bind` | unset (binary default `0.0.0.0:9099`) |
+| `TS_BRIDGE_DUCK_GAIN` | `--duck-gain` | unset (binary default `0.25`) |
+
+`TS_BRIDGE_IDENTITY_FILE` is read on every start, not generated for you: with nothing at that
+path the binary mints a new TeamSpeak identity and logs it once
+(`identity=<counter>V<key>`, warn level) — copy that exact string into the mounted file before
+the *next* restart, or the bot gets a new TeamSpeak UID (and drops out of any server group
+it was granted) every time the container recreates. `probe-channels` and `send-test` are
+still reachable with `docker run --entrypoint probe-channels ...` — only the default
+entrypoint changed.
 
 ## Liveness
 
