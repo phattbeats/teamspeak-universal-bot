@@ -218,3 +218,16 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # PHA-3798: dist/ is committed (npm:/npm-pack:/git: installs need a
+      # compiled openclaw.extensions counterpart present at install time —
+      # see package-entry-resolution.ts / plugin-peer-link.ts upstream, and
+      # scripts/build.mjs's header comment for why this is a plain rebuild
+      # rather than a prepack/prepare lifecycle hook). A PR that changes
+      # src/ without regenerating dist/ would otherwise ship a stale
+      # compiled plugin to every non---link install silently.
+      - name: Build and check dist/ is committed
+        run: |
+          npm run build
+          git diff --exit-code -- dist \
+            || { echo "::error::dist/ is stale — run 'npm run build' in teamspeak-plugin/ and commit the result"; exit 1; }
