@@ -29,6 +29,7 @@
     "src/channel.ts",
     "src/runtime.ts",
     "src/accounts.ts",
-    "src/bridge/ws-socket.ts"
+    "src/bridge/ws-socket.ts",
+    "src/tools/persona-tools.ts"
   ]
 }

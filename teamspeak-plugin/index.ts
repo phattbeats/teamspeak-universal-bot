@@ -1,6 +1,7 @@
 // TeamSpeak plugin entrypoint registers its OpenClaw integration.
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 import { createTeamSpeakAgentTools } from "./src/tools/agent-tools.js";
+import { createTeamSpeakPersonaTools } from "./src/tools/persona-tools.js";
 
 export default defineBundledChannelEntry({
   id: "teamspeak",
@@ -30,7 +31,7 @@ export default defineBundledChannelEntry({
    * the host rejects the registration outright.
    */
   registerFull: (api) => {
-    for (const tool of createTeamSpeakAgentTools()) {
+    for (const tool of [...createTeamSpeakAgentTools(), ...createTeamSpeakPersonaTools()]) {
       api.registerTool(tool, { name: tool.name });
     }
   },
