@@ -58,6 +58,13 @@ export type TeamSpeakSttTtsSessionParams = {
   transcriber: SegmentTranscriber;
   synthesizer: SpeechSynthesizer;
   runAgentTurn: TeamSpeakVoiceAgentTurn;
+  /**
+   * Model and thinking level the turn ran with, for the per-turn log line
+   * only (PHA-3789). Not the actual model selected by fallback/rotation --
+   * `runCommandFromIngress` does not return that to the ingress caller, only
+   * `payloads`. Labeled "requested" in the log for that reason.
+   */
+  agentTurnLabel?: { model?: string | undefined; thinking?: string | undefined } | undefined;
   playback: RoomPlaybackQueue;
   humanParticipantCount: () => number;
   onTerminalError?: ((error: Error) => void) | undefined;
@@ -382,12 +389,19 @@ export class TeamSpeakSttTtsSpeakerSession {
       ttsMs: Math.round(firstChunkTtsMs ?? 0),
       firstAudioMs: firstAudioMs ?? Math.round(this.now() - segment.closedAt),
     };
+    const requestedModel = this.params.agentTurnLabel?.model ?? "default";
+    const requestedThinking = this.params.agentTurnLabel?.thinking ?? "default";
     this.params.log?.(
       `teamspeak voice: stt-tts turn clientId=${this.clientId} nickname=${this.nickname} ` +
         `segmentMs=${this.lastTimings.segmentMs} sttMs=${this.lastTimings.sttMs} ` +
         `agentMs=${this.lastTimings.agentMs} ttsMs=${this.lastTimings.ttsMs} ` +
         `firstAudioMs=${this.lastTimings.firstAudioMs} ttsChunks=${spokenChunks}/${chunks.length} ` +
-        `sttProvider=${sttProvider} speechProvider=${speechProvider ?? this.params.synthesizer.id}${this.lastFuzzyHearing ? ` wakeHeardAs=${JSON.stringify(this.lastFuzzyHearing)}` : ""}`,
+        `sttProvider=${sttProvider} speechProvider=${speechProvider ?? this.params.synthesizer.id} ` +
+        // No prompt/output token counts or cost here: runCommandFromIngress
+        // does not return usage to the ingress caller (PHA-3789 finding,
+        // see TOOL-CATALOG.md §4.6). requestedModel/Thinking are the
+        // ingress ask, not necessarily what the host actually ran.
+        `requestedModel=${requestedModel} requestedThinking=${requestedThinking}${this.lastFuzzyHearing ? ` wakeHeardAs=${JSON.stringify(this.lastFuzzyHearing)}` : ""}`,
     );
   }
 
