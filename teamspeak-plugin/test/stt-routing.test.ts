@@ -8,24 +8,18 @@
  */
 import { describe, expect, it } from "vitest";
 
-import {
-  resolveTeamSpeakSecondaryTranscriptionConfig,
-  type ResolvedTeamSpeakSecondaryTranscriptionConfig,
-} from "../src/config.js";
+import { resolveTeamSpeakSecondaryTranscriptionConfig } from "../src/config.js";
 import { MiniMaxAsrTranscriber, readMiniMaxAsrBody } from "../src/voice/minimax-asr.js";
 import { RoutingTranscriber } from "../src/voice/stt-routing.js";
-import type { SegmentTranscriber } from "../src/voice/whisper-local.js";
+import type { SttProvider } from "../src/voice/stt-provider.js";
+import { sttSlotConfig } from "./stt-fixtures.js";
 
-const CONFIG: ResolvedTeamSpeakSecondaryTranscriptionConfig = {
+const CONFIG = sttSlotConfig({
   provider: "minimax-asr",
-  baseUrl: "https://api.minimax.io",
-  apiKey: "test-key",
   model: "asr-1.0",
-  language: "en",
   timeoutMs: 8_000,
-  slowMs: 3_000,
-  backoffMs: 600_000,
-};
+  allowHosted: true,
+});
 const ROUTING = {
   longSegmentMs: 8_000,
   emptyEscalationMinMs: 1_500,
@@ -42,9 +36,10 @@ function segmentPcm(): Buffer {
   return pcm;
 }
 
-const whisperHearing = (text: string): SegmentTranscriber => ({
+const whisperHearing = (text: string): SttProvider => ({
   id: "whisper-local",
-  transcribe: async () => text,
+  kind: "local",
+  transcribe: async () => ({ text, provider: "whisper-local", ms: 1 }),
 });
 
 const body = (text: string): string => JSON.stringify({ text, duration: 1, trace_id: "t" });
@@ -64,6 +59,8 @@ function harness(options: {
   const calls: { url: string; body: FormData }[] = [];
   const secondary = new MiniMaxAsrTranscriber({
     config: CONFIG,
+    baseUrl: "https://api.minimax.io",
+    apiKey: "test-key",
     now: () => clock,
     log: (message) => logs.push(message),
     fetchFn: async (url, init) => {
@@ -88,7 +85,7 @@ function harness(options: {
       clock += ms;
     },
     hear: (durationMs: number, prefer?: "secondary", label = "Brandon") =>
-      router.transcribeDetailed({
+      router.transcribe({
         pcm48kMono: segmentPcm(),
         label,
         durationMs,
@@ -128,7 +125,7 @@ describe("MiniMax ASR response parsing", () => {
 describe("routing to the secondary transcriber", () => {
   it("never calls the hosted provider on an ordinary turn", async () => {
     const h = harness({ whisper: "sexton what time is it" });
-    await expect(h.hear(2_000)).resolves.toEqual({
+    await expect(h.hear(2_000)).resolves.toMatchObject({
       text: "sexton what time is it",
       provider: "whisper-local",
       escalated: false,
@@ -145,7 +142,7 @@ describe("routing to the secondary transcriber", () => {
 
   it("escalates a long segment, where whisper degrades", async () => {
     const h = harness({ whisper: "the worse transcript" });
-    await expect(h.hear(9_000)).resolves.toEqual({
+    await expect(h.hear(9_000)).resolves.toMatchObject({
       text: "the second opinion",
       provider: "minimax-asr",
       escalated: true,
@@ -155,7 +152,7 @@ describe("routing to the secondary transcriber", () => {
   it("rescues an empty transcript on a segment long enough to have held speech", async () => {
     // The exact symptom PHA-3428 opened with: `empty transcript segmentMs=2120`.
     const h = harness({ whisper: "" });
-    await expect(h.hear(2_120)).resolves.toEqual({
+    await expect(h.hear(2_120)).resolves.toMatchObject({
       text: "the second opinion",
       provider: "minimax-asr",
       escalated: true,
@@ -188,7 +185,7 @@ describe("routing to the secondary transcriber", () => {
 describe("the secondary failing never costs the turn", () => {
   it("keeps whisper's transcript when MiniMax errors", async () => {
     const h = harness({ whisper: "whisper still heard this", reply: () => response(500, "boom") });
-    await expect(h.hear(9_000)).resolves.toEqual({
+    await expect(h.hear(9_000)).resolves.toMatchObject({
       text: "whisper still heard this",
       provider: "whisper-local",
       escalated: true,
@@ -234,43 +231,34 @@ describe("the secondary failing never costs the turn", () => {
 });
 
 describe("the secondary is off unless it is deliberately configured", () => {
+  // The key-missing and unknown-name refusals moved to the registry and the
+  // provider factory with PHA-3790; they are covered in stt-registry.test.ts.
+  // What belongs to config, and only to config, is the opt-in itself.
   it("stays off when no block is present, even with MINIMAX_API_KEY in scope", () => {
     // The key IS exported on the live container for TTS. Sending channel audio
     // to a third party must not switch itself on as a side effect of that.
-    const resolved = resolveTeamSpeakSecondaryTranscriptionConfig(
-      {},
-      { MINIMAX_API_KEY: "sk-cp-live-key" },
-    );
+    const resolved = resolveTeamSpeakSecondaryTranscriptionConfig({});
     expect(resolved.ok).toBe(false);
     expect(resolved.ok === false && resolved.reason).toBeUndefined();
   });
 
-  it("takes the key from the environment once the block opts in", () => {
-    const resolved = resolveTeamSpeakSecondaryTranscriptionConfig(
-      { voice: { streaming: { secondaryTranscription: {} } } },
-      { MINIMAX_API_KEY: "sk-cp-live-key" },
-    );
+  it("defaults to minimax-asr once the block opts in, with no key of its own", () => {
+    const resolved = resolveTeamSpeakSecondaryTranscriptionConfig({
+      voice: { streaming: { secondaryTranscription: {} } },
+    });
     expect(resolved.ok).toBe(true);
-    expect(resolved.ok === true && resolved.config.apiKey).toBe("sk-cp-live-key");
-    expect(resolved.ok === true && resolved.config.model).toBe("asr-1.0");
+    expect(resolved.ok === true && resolved.config.provider).toBe("minimax-asr");
+    // The env fallback is the factory's job, so config leaves this unset rather
+    // than reading process.env behind the caller's back.
+    expect(resolved.ok === true && resolved.config.apiKey).toBeUndefined();
   });
 
-  it("explains itself when opted in with no key anywhere", () => {
-    const resolved = resolveTeamSpeakSecondaryTranscriptionConfig(
-      { voice: { streaming: { secondaryTranscription: {} } } },
-      {},
-    );
-    expect(resolved.ok).toBe(false);
-    expect(resolved.ok === false && resolved.reason).toMatch(/apiKey/);
-  });
-
-  it("refuses an unimplemented secondary provider", () => {
-    const resolved = resolveTeamSpeakSecondaryTranscriptionConfig(
-      { voice: { streaming: { secondaryTranscription: { provider: "deepgram" } } } },
-      { MINIMAX_API_KEY: "k" },
-    );
-    expect(resolved.ok).toBe(false);
-    expect(resolved.ok === false && resolved.reason).toMatch(/not implemented/);
+  it("carries a different provider name straight through for the registry to resolve", () => {
+    const resolved = resolveTeamSpeakSecondaryTranscriptionConfig({
+      voice: { streaming: { secondaryTranscription: { provider: "deepgram" } } },
+    });
+    expect(resolved.ok).toBe(true);
+    expect(resolved.ok === true && resolved.config.provider).toBe("deepgram");
   });
 });
 

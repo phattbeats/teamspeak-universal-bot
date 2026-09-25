@@ -11,18 +11,15 @@ import {
   LocalWhisperTranscriber,
   normalizeTranscript,
   readTranscriptText,
+  readWhisperConfidence,
   SPEAKER_CLIENT_ID_HEADER,
   type WhisperFetch,
 } from "../src/voice/whisper-local.js";
 import { toneFrame48k } from "./mock-bridge.js";
+import { sttSlotConfig } from "./stt-fixtures.js";
 
-const CONFIG = {
-  provider: "whisper-local" as const,
-  url: "http://whisper:8080/inference",
-  model: undefined,
-  language: "en",
-  timeoutMs: 15_000,
-};
+const URL = "http://whisper:8080/inference";
+const CONFIG = sttSlotConfig();
 
 function speech(frames = 50): Buffer {
   return Buffer.concat(Array.from({ length: frames }, () => toneFrame48k()));
@@ -51,13 +48,18 @@ function stubFetch(
 describe("LocalWhisperTranscriber", () => {
   it("posts a 16 kHz mono WAV and returns the transcript", async () => {
     const { fetchFn, calls } = stubFetch(JSON.stringify({ text: " what did I miss " }));
-    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, fetchFn });
+    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, url: URL, fetchFn });
 
-    const text = await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt" });
+    const heard = await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt" });
 
-    expect(text).toBe("what did I miss");
+    expect(heard.text).toBe("what did I miss");
+    expect(heard.provider).toBe("whisper-local");
+    expect(heard.ms).toBeGreaterThanOrEqual(0);
+    // json, not verbose_json: the score is not worth +1.8s a turn by default.
+    expect(calls[0]?.form.get("response_format")).toBe("json");
+    expect(heard.confidence).toBeUndefined();
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe(CONFIG.url);
+    expect(calls[0]?.url).toBe(URL);
 
     const file = calls[0]?.form.get("file");
     expect(file).toBeInstanceOf(Blob);
@@ -74,7 +76,7 @@ describe("LocalWhisperTranscriber", () => {
 
   it("sends the speaker's clientId as a header for a coalescing proxy to key on (PHA-3607)", async () => {
     const { fetchFn, calls } = stubFetch(JSON.stringify({ text: "hey" }));
-    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, fetchFn });
+    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, url: URL, fetchFn });
 
     await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt", clientId: 42 });
 
@@ -83,7 +85,7 @@ describe("LocalWhisperTranscriber", () => {
 
   it("omits the header when no clientId is known", async () => {
     const { fetchFn, calls } = stubFetch(JSON.stringify({ text: "hey" }));
-    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, fetchFn });
+    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, url: URL, fetchFn });
 
     await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt" });
 
@@ -93,7 +95,8 @@ describe("LocalWhisperTranscriber", () => {
   it("omits the language field when the operator asked for auto-detect", async () => {
     const { fetchFn, calls } = stubFetch(JSON.stringify({ text: "hola" }));
     const transcriber = new LocalWhisperTranscriber({
-      config: { ...CONFIG, language: "auto" },
+      config: sttSlotConfig({ language: "auto" }),
+      url: URL,
       fetchFn,
     });
 
@@ -102,12 +105,12 @@ describe("LocalWhisperTranscriber", () => {
   });
 
   it("reports the provider id used by the lane and by !sexton status", () => {
-    expect(new LocalWhisperTranscriber({ config: CONFIG }).id).toBe("whisper-local");
+    expect(new LocalWhisperTranscriber({ config: CONFIG, url: URL }).id).toBe("whisper-local");
   });
 
   it("raises the server's own message on a non-2xx response", async () => {
     const { fetchFn } = stubFetch("model not loaded\nstack...", { ok: false, status: 500 });
-    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, fetchFn });
+    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, url: URL, fetchFn });
 
     await expect(transcriber.transcribe({ pcm48kMono: speech(), label: "phatt" })).rejects.toThrow(
       /whisper-local HTTP 500 .*model not loaded/,
@@ -116,10 +119,94 @@ describe("LocalWhisperTranscriber", () => {
 
   it("returns nothing for a segment with no samples", async () => {
     const { fetchFn, calls } = stubFetch(JSON.stringify({ text: "should not be asked" }));
-    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, fetchFn });
+    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, url: URL, fetchFn });
 
-    expect(await transcriber.transcribe({ pcm48kMono: Buffer.alloc(0), label: "phatt" })).toBe("");
+    expect((await transcriber.transcribe({ pcm48kMono: Buffer.alloc(0), label: "phatt" })).text).toBe("");
     expect(calls).toHaveLength(0);
+  });
+
+  it("primes the decoder with the configured prompt, and lets a request override it", async () => {
+    const { fetchFn, calls } = stubFetch(JSON.stringify({ text: "sexton" }));
+    const transcriber = new LocalWhisperTranscriber({
+      config: sttSlotConfig({ prompt: "Sexton, Bexton, Trixie" }),
+      url: URL,
+      fetchFn,
+    });
+
+    await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt" });
+    expect(calls[0]?.form.get("prompt")).toBe("Sexton, Bexton, Trixie");
+
+    await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt", prompt: "just this" });
+    expect(calls[1]?.form.get("prompt")).toBe("just this");
+  });
+
+  it("omits the prompt field entirely when none is configured", async () => {
+    const { fetchFn, calls } = stubFetch(JSON.stringify({ text: "hi" }));
+    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, url: URL, fetchFn });
+
+    await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt" });
+    expect(calls[0]?.form.get("prompt")).toBeNull();
+  });
+
+  it("takes a per-request language over the configured one", async () => {
+    const { fetchFn, calls } = stubFetch(JSON.stringify({ text: "hola" }));
+    const transcriber = new LocalWhisperTranscriber({ config: CONFIG, url: URL, fetchFn });
+
+    await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt", lang: "es" });
+    expect(calls[0]?.form.get("language")).toBe("es");
+  });
+
+  it("asks for verbose_json and scores the transcript only when confidence is on", async () => {
+    const { fetchFn, calls } = stubFetch(
+      JSON.stringify({
+        text: "what did I miss",
+        segments: [{ text: "what did I miss", avg_logprob: -0.2231435513 }],
+      }),
+    );
+    const transcriber = new LocalWhisperTranscriber({
+      config: sttSlotConfig({ confidence: true }),
+      url: URL,
+      fetchFn,
+    });
+
+    const heard = await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt" });
+    expect(calls[0]?.form.get("response_format")).toBe("verbose_json");
+    // exp(-0.2231435513) = 0.8
+    expect(heard.confidence).toBeCloseTo(0.8, 5);
+  });
+
+  it("leaves confidence undefined when the build answered without a score", async () => {
+    const { fetchFn } = stubFetch(JSON.stringify({ text: "what did I miss" }));
+    const transcriber = new LocalWhisperTranscriber({
+      config: sttSlotConfig({ confidence: true }),
+      url: URL,
+      fetchFn,
+    });
+
+    // A missing score is not a low one, so it must not arrive as 0.
+    expect(
+      (await transcriber.transcribe({ pcm48kMono: speech(), label: "phatt" })).confidence,
+    ).toBeUndefined();
+  });
+});
+
+describe("readWhisperConfidence", () => {
+  it("averages avg_logprob across segments", () => {
+    // exp((-0.1 + -0.3) / 2) = exp(-0.2)
+    const score = readWhisperConfidence(
+      JSON.stringify({ segments: [{ avg_logprob: -0.1 }, { avg_logprob: -0.3 }] }),
+    );
+    expect(score).toBeCloseTo(Math.exp(-0.2), 6);
+  });
+
+  it("reads a single-segment verbose response off the top level", () => {
+    expect(readWhisperConfidence(JSON.stringify({ text: "hi", avg_logprob: 0 }))).toBe(1);
+  });
+
+  it("returns undefined rather than a number it does not have", () => {
+    expect(readWhisperConfidence(JSON.stringify({ text: "hi" }))).toBeUndefined();
+    expect(readWhisperConfidence("plain text body")).toBeUndefined();
+    expect(readWhisperConfidence("{not json")).toBeUndefined();
   });
 });
 

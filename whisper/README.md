@@ -46,10 +46,13 @@ PHA-3177, expressed as a container:
   does not ship your voice to a third party. Anything hosted here breaks a
   stated promise, not just a budget line.
 
-The plugin enforces this: `voice.streaming.transcription.provider` must be a
-local id, and the account refuses to start otherwise
-(`src/config.ts`, `LOCAL_TRANSCRIPTION_PROVIDERS`, in
-[phattbeats/openclaw-teamspeak-plugin](https://github.com/phattbeats/openclaw-teamspeak-plugin)).
+The plugin enforces this: `voice.streaming.transcription.provider` must name a
+provider the STT registry declares `kind: "local"`, or the account refuses to
+start. Since PHA-3790 that is a slot rule rather than a hardcoded allowlist — a
+hosted provider *can* be the primary, but only when the same config block also
+says `allowHosted: true`, which is a deliberate act with a name on it. See
+`teamspeak-plugin/src/voice/stt-provider.ts` and `stt-registry.ts`, and
+[docs/universal-bot/STT-PROVIDERS.md](../docs/universal-bot/STT-PROVIDERS.md).
 
 ## What runs
 

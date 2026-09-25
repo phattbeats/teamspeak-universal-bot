@@ -293,11 +293,38 @@ issue against `openclaw` core for `maxOutputTokens` override + usage-on-result
 if the `requestedModel`/`requestedThinking` log line, once it has a few days
 of live data, shows spend that's worth capping rather than just watching.
 
-### 4.7 STT as a connector
-`sttProvider` is already a switch. Make it a contract:
-`transcribe(pcm, {lang, prompt}) -> {text, confidence?, ms}` with
-`whisper-local` (pool container), `minimax`, and room for a hosted one.
-Config per persona; no code change to swap.
+### 4.7 STT as a connector — **done (PHA-3790)**
+Full write-up: [STT-PROVIDERS.md](STT-PROVIDERS.md).
+
+The premise turned out to be half wrong, which is the interesting part.
+`sttProvider` was *not* already a switch — the name was validated in
+`config.ts` against a hardcoded `LOCAL_TRANSCRIPTION_PROVIDERS` array and then
+ignored by `stt-tts-lane.ts`, which built whisper as primary and MiniMax as
+secondary no matter what config said. It was a label.
+
+Shipped:
+
+| Piece | Where |
+| --- | --- |
+| `transcribe(request) -> {text, provider, ms, confidence?, escalated?}` | `src/voice/stt-provider.ts` |
+| Name → factory registry, aliases, `kind: local \| hosted` | `src/voice/stt-registry.ts` |
+| `whisper-local` (whisper pool, PHA-3598/3607), `minimax-asr` | their own modules, each with its own defaults and refusals |
+| Both slots chosen by name from per-account config | `voice.streaming.transcription` / `.secondaryTranscription` |
+
+Three notes worth keeping:
+
+- **The privacy promise moved rather than left.** `LOCAL_TRANSCRIPTION_PROVIDERS`
+  was the $0 / audio-stays-home rule as code; an open registry would have
+  dropped it. Each factory now declares `kind`, and a hosted provider is refused
+  in the *primary* slot unless the account sets `allowHosted: true`. Default
+  behaviour is unchanged; the override is a named key, not a source edit.
+- **`confidence` is real but off.** whisper only scores under `verbose_json`,
+  measured at +1.8s per turn. `transcription.confidence: true` turns it on.
+  The escalation router still does not read it, for exactly that reason.
+- **`prompt` is wired and unset.** whisper takes an initial prompt; MiniMax has
+  no such parameter and ignores it. Priming with the bot's own wake names is the
+  obvious use (see the sexton/bexton cross-wake in PHA-3605) but it changes what
+  comes back, so it stays an operator decision rather than a default.
 
 ## 5. Things found on the way
 
