@@ -210,6 +210,78 @@ async fn dispatch(
                 }
             }
         }
+        // --- moderation (PHA-3786) ------------------------------------------
+        TYPE_CLIENT_KICK => {
+            if let Ok(h) = serde_json::from_value::<ClientKickHeader>(frame.header) {
+                let _ = cmd_tx.send(BridgeCommand::ClientKick {
+                    client_id: h.client_id,
+                    from_server: h.from_server,
+                    reason: h.reason,
+                });
+            }
+        }
+        TYPE_BAN_CLIENT => {
+            if let Ok(h) = serde_json::from_value::<BanClientHeader>(frame.header) {
+                let _ = cmd_tx.send(BridgeCommand::BanClient {
+                    client_id: h.client_id,
+                    duration_secs: h.duration_secs,
+                    reason: h.reason,
+                });
+            }
+        }
+        TYPE_BAN_DEL => {
+            if let Ok(h) = serde_json::from_value::<BanDelHeader>(frame.header) {
+                let _ = cmd_tx.send(BridgeCommand::BanDel { ban_id: h.ban_id });
+            }
+        }
+        TYPE_BAN_LIST => {
+            let _ = cmd_tx.send(BridgeCommand::BanList);
+        }
+        TYPE_CLIENT_MOVE => {
+            if let Ok(h) = serde_json::from_value::<ClientMoveHeader>(frame.header) {
+                let _ = cmd_tx
+                    .send(BridgeCommand::ClientMove { client_id: h.client_id, channel_id: h.channel_id });
+            }
+        }
+        TYPE_CLIENT_EDIT_MUTE => {
+            if let Ok(h) = serde_json::from_value::<ClientEditMuteHeader>(frame.header) {
+                let _ = cmd_tx.send(BridgeCommand::ClientEditMute { client_id: h.client_id, muted: h.muted });
+            }
+        }
+        TYPE_CHANNEL_EDIT => {
+            if let Ok(h) = serde_json::from_value::<ChannelEditHeader>(frame.header) {
+                let _ = cmd_tx.send(BridgeCommand::ChannelEdit {
+                    channel_id: h.channel_id,
+                    name: h.name,
+                    topic: h.topic,
+                });
+            }
+        }
+        TYPE_CHANNEL_CREATE => {
+            if let Ok(h) = serde_json::from_value::<ChannelCreateHeader>(frame.header) {
+                let _ = cmd_tx.send(BridgeCommand::ChannelCreate { name: h.name, parent_id: h.parent_id });
+            }
+        }
+        TYPE_CHANNEL_DELETE => {
+            if let Ok(h) = serde_json::from_value::<ChannelDeleteHeader>(frame.header) {
+                let _ =
+                    cmd_tx.send(BridgeCommand::ChannelDelete { channel_id: h.channel_id, force: h.force });
+            }
+        }
+        TYPE_SERVER_EDIT => {
+            if let Ok(h) = serde_json::from_value::<ServerEditHeader>(frame.header) {
+                let _ =
+                    cmd_tx.send(BridgeCommand::ServerEdit { name: h.name, welcome_message: h.welcome_message });
+            }
+        }
+        TYPE_SERVER_GROUP_ADD_CLIENT => {
+            if let Ok(h) = serde_json::from_value::<ServerGroupAddClientHeader>(frame.header) {
+                let _ = cmd_tx.send(BridgeCommand::ServerGroupAddClient {
+                    server_group_id: h.server_group_id,
+                    client_id: h.client_id,
+                });
+            }
+        }
         other => debug!("unknown inbound frame type 0x{other:02x}, ignoring"),
     }
 }
@@ -250,6 +322,11 @@ fn encode_event(ev: &BridgeEvent) -> Vec<u8> {
                 &[],
             )
         }
+        BridgeEvent::ModerationResult { action, ok, detail } => encode_frame(
+            TYPE_MODERATION_RESULT,
+            &ModerationResultHeader { action, ok: *ok, detail: detail.clone() },
+            &[],
+        ),
     }
 }
 
@@ -267,12 +344,19 @@ mod tests {
             channel_name: "General Shit".into(),
             own_client_id: Some(11),
             roster: vec![
-                RosterEntry { client_id: 11, nickname: "Sexton".into(), muted: false, away: false },
+                RosterEntry {
+                    client_id: 11,
+                    nickname: "Sexton".into(),
+                    muted: false,
+                    away: false,
+                    server_groups: vec![],
+                },
                 RosterEntry {
                     client_id: 42,
                     nickname: "brandon".into(),
                     muted: false,
                     away: false,
+                    server_groups: vec![],
                 },
             ],
         };

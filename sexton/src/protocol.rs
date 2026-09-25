@@ -27,6 +27,8 @@ pub const TYPE_SPEAKER_STOP: u8 = 0x03;
 pub const TYPE_ROSTER: u8 = 0x04;
 pub const TYPE_TEXT_MESSAGE: u8 = 0x05;
 pub const TYPE_STATE: u8 = 0x06;
+/// PHA-3786: result of a moderation command.
+pub const TYPE_MODERATION_RESULT: u8 = 0x07;
 
 pub const TYPE_VOICE_AUDIO: u8 = 0x81;
 pub const TYPE_MUSIC_AUDIO: u8 = 0x82;
@@ -37,6 +39,19 @@ pub const TYPE_JOIN: u8 = 0x86;
 pub const TYPE_MUTE: u8 = 0x87;
 pub const TYPE_POKE: u8 = 0x88;
 pub const TYPE_SEND_TEXT: u8 = 0x89;
+
+// --- moderation (PHA-3786) --------------------------------------------------
+pub const TYPE_CLIENT_KICK: u8 = 0x8A;
+pub const TYPE_BAN_CLIENT: u8 = 0x8B;
+pub const TYPE_BAN_DEL: u8 = 0x8C;
+pub const TYPE_BAN_LIST: u8 = 0x8D;
+pub const TYPE_CLIENT_MOVE: u8 = 0x8E;
+pub const TYPE_CLIENT_EDIT_MUTE: u8 = 0x8F;
+pub const TYPE_CHANNEL_EDIT: u8 = 0x90;
+pub const TYPE_CHANNEL_CREATE: u8 = 0x91;
+pub const TYPE_CHANNEL_DELETE: u8 = 0x92;
+pub const TYPE_SERVER_EDIT: u8 = 0x93;
+pub const TYPE_SERVER_GROUP_ADD_CLIENT: u8 = 0x94;
 
 /// A decoded inbound frame, header-parsed but payload left raw. Same shape
 /// as `bridge_proto::RawFrame` — kept separate so the public WS protocol
@@ -123,6 +138,14 @@ pub struct TextMessageHeader {
     pub target: &'static str,
 }
 
+/// PHA-3786: outbound answer to any moderation command.
+#[derive(Serialize)]
+pub struct ModerationResultHeader {
+    pub action: &'static str,
+    pub ok: bool,
+    pub detail: String,
+}
+
 #[derive(Serialize)]
 pub struct StateHeader {
     pub connected: bool,
@@ -175,6 +198,84 @@ pub struct SendTextHeader {
 #[derive(Deserialize)]
 pub struct VoiceAudioHeader {
     pub count: usize,
+}
+
+// --- moderation (PHA-3786) --------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ClientKickHeader {
+    #[serde(rename = "clientId")]
+    pub client_id: u16,
+    #[serde(rename = "fromServer")]
+    pub from_server: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct BanClientHeader {
+    #[serde(rename = "clientId")]
+    pub client_id: u16,
+    #[serde(rename = "durationSecs")]
+    pub duration_secs: Option<u64>,
+    pub reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct BanDelHeader {
+    #[serde(rename = "banId")]
+    pub ban_id: u32,
+}
+
+#[derive(Deserialize)]
+pub struct ClientMoveHeader {
+    #[serde(rename = "clientId")]
+    pub client_id: u16,
+    #[serde(rename = "channelId")]
+    pub channel_id: u64,
+}
+
+#[derive(Deserialize)]
+pub struct ClientEditMuteHeader {
+    #[serde(rename = "clientId")]
+    pub client_id: u16,
+    pub muted: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ChannelEditHeader {
+    #[serde(rename = "channelId")]
+    pub channel_id: u64,
+    pub name: Option<String>,
+    pub topic: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ChannelCreateHeader {
+    pub name: String,
+    #[serde(rename = "parentId")]
+    pub parent_id: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub struct ChannelDeleteHeader {
+    #[serde(rename = "channelId")]
+    pub channel_id: u64,
+    pub force: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ServerEditHeader {
+    pub name: Option<String>,
+    #[serde(rename = "welcomeMessage")]
+    pub welcome_message: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ServerGroupAddClientHeader {
+    #[serde(rename = "serverGroupId")]
+    pub server_group_id: u64,
+    #[serde(rename = "clientId")]
+    pub client_id: u16,
 }
 
 /// PCM16LE payload bytes -> i16 samples.

@@ -241,6 +241,33 @@ export type TeamSpeakBandConfig = {
   keepSongs?: number;
 };
 
+/**
+ * Moderation tool gate (PHA-3786, TOOL-CATALOG.md §4.3): kick, ban, move
+ * others, mute, channel/server edit. Fails closed — an empty/absent
+ * `allowGroups` disables every moderation tool regardless of the per-action
+ * flags below, since there is nobody it would be safe to run them for.
+ */
+export type TeamSpeakModerationConfig = {
+  /** Register `kick_client`/`move_client` (default: false). */
+  kick?: boolean;
+  /** Register `ban_client`/`unban_client`/`list_bans` (default: false). */
+  ban?: boolean;
+  /**
+   * Register `mute_client`/`edit_channel`/`create_channel`/`delete_channel`/
+   * `edit_server`/`add_to_server_group` (default: false).
+   */
+  edit?: boolean;
+  /**
+   * TeamSpeak server group names allowed to invoke any moderation tool,
+   * matched case-insensitively against the invoking client's
+   * `RosterEntry.serverGroups`. Brandon/host prerequisite: the Sexton/Bexton
+   * TS identity itself needs the underlying TS permissions granted via a
+   * server group for these bridge commands to actually take effect — this
+   * config only gates who may *ask* the bot to use them.
+   */
+  allowGroups?: string[];
+};
+
 /** Realtime voice tool settings (PHA-3176). */
 export type TeamSpeakToolsConfig = {
   /** Register the TeamSpeak realtime tools at all (default: true). */
@@ -257,6 +284,7 @@ export type TeamSpeakToolsConfig = {
   catchUpMaxLines?: number;
   music?: TeamSpeakMusicConfig;
   band?: TeamSpeakBandConfig;
+  moderation?: TeamSpeakModerationConfig;
 };
 
 export type TeamSpeakAccountConfig = {

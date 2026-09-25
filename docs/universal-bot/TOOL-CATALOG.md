@@ -158,24 +158,73 @@ Three different operations that are easy to conflate:
 | `resume` | none | `{ resumed }` | `ok:false` if nothing is paused |
 | `seek` | `seconds` (number, >= 0) | `{ title, seconds }` | restarts ffmpeg with `-ss` on the same resolved stream; `ok:false` if nothing is playing |
 
-### 4.3 Moderation (gated: only on request from an allowed server group)
-| Tool | Status | Path |
-| --- | --- | --- |
-| `kick_from_channel` | new | tsclientlib `clientkick` reasonid=4 |
-| `kick_from_server` | new | `clientkick` reasonid=5 |
-| `ban` (duration, reason) | new | `banclient` |
-| `unban`, `list_bans` | new | `bandel`, `banlist` |
-| `move_client` | new | `clientmove` (others, not self) |
-| `mute_client` / server-mute | new | `clientedit`/permission |
-| `channel_create/edit/delete` | new | `channeledit` etc. (PHA-3424: description edits ping everyone; keep off by default) |
-| `server_edit` (name, welcome, max clients) | new | `serveredit` |
-| `set_server_group` | new | `servergroupaddclient` |
-| `whoami_permissions` | new | so the bot can say "I'm not allowed to" instead of failing |
+### 4.3 Moderation (PHA-3786 — gated: only on request from an allowed server group)
 
-Prerequisites: bot identity needs a server group with those permissions
-(`[Brandon/host]` step), an `allowGroups` config, and an audit line in the
-chat log for every mod action. Second path if we want it later: enable TS6
-WebQuery and hand the bot an API key.
+Status: **have**, Path A (tsclientlib, no server change). `bridge-proto`'s
+`BridgeCommand` grew 11 moderation variants; `sexton/src/main.rs` executes
+them against the live `tsclientlib::Connection` and answers every one with a
+`BridgeEvent::ModerationResult { action, ok, detail }` (wire type `0x07`, see
+`sexton/PROTOCOL.md`). `RosterEntry` grew a `serverGroups: string[]` field so
+the plugin can see group membership without a second round trip.
+
+| Tool | Params | Config gate | Notes |
+| --- | --- | --- | --- |
+| `kick_client` | `nickname`, `fromServer?` (default false), `reason?` | `moderation.kick` | `fromServer=false` kicks from the channel only |
+| `move_client` | `nickname`, `channelId` (numeric) | `moderation.kick` | Moves someone else, unlike `move_to_channel` (§4.1) which moves the bot itself. No channel-name lookup yet — needs a numeric id (see §4.1's `list_channels` for how to get one once it lands) |
+| `ban_client` | `nickname`, `durationSecs?`, `reason?` | `moderation.ban` | No `durationSecs` = permanent |
+| `unban_client` | `banId` | `moderation.ban` | `banId` comes from `list_bans` |
+| `list_bans` | none | `moderation.ban` | Requests the server's ban list, but the response is **not parsed back** into the conversation — there is no ban-list notify-event listener wired up yet. The tool reports the request was sent, not the contents |
+| `mute_client` | `nickname`, `muted` | `moderation.edit` | Implemented via **talk-power revocation** (`OutClientEditMessage`'s `talk_power_granted`), not a literal server-side voice mute — TeamSpeak's ServerQuery API has no such command. The target visibly loses/regains permission to talk |
+| `edit_channel` | `channelId`, `name?`, `topic?` | `moderation.edit` | Numeric id only |
+| `create_channel` | `name`, `parentId?` | `moderation.edit` | |
+| `delete_channel` | `channelId`, `force?` (default false) | `moderation.edit` | `force=true` deletes even with clients still inside |
+| `edit_server` | `name?`, `welcomeMessage?` | `moderation.edit` | Only these two fields are exposed; `OutServerEditPart` has 43, the rest stay untouched |
+| `add_to_server_group` | `nickname`, `serverGroupId` (numeric) | `moderation.edit` | Sexton resolves the target's `ClientDbId` server-side before sending `servergroupaddclient` |
+
+**Authorization** (`tools.moderation` in `openclaw.json`):
+
+```json5
+channels.teamspeak.tools.moderation: {
+  kick: true,
+  ban: false,
+  edit: false,
+  allowGroups: ["Server Admin"],
+}
+```
+
+- `kick`/`ban`/`edit` gate which tool *groups* get registered at all (per the
+  table above).
+- `allowGroups` gates *who* may invoke any registered moderation tool: the
+  invoking client's `RosterEntry.serverGroups` must contain one of these
+  names (case-insensitive). This is checked twice — once to decide whether
+  to register the tools, once again per call, since registration only proves
+  *some* group is configured, not that *this particular caller* is in it.
+- **Fails closed**: an empty or absent `allowGroups` disables every
+  moderation tool regardless of the `kick`/`ban`/`edit` flags, because there
+  would be nobody it is safe to run them for.
+- The Sexton's Rust bridge itself does **no** authorization — it executes
+  whatever `BridgeCommand` it's given, same trust model as the existing
+  `poke`/`send_text` commands (the plugin is the bridge's only caller). All
+  enforcement lives in `teamspeak-plugin/src/tools/registry.ts`.
+- Every successful moderation call sends an audit line to the channel via
+  the existing `send_text` bridge command (`[moderation] <caller>: <action>
+  ...`) rather than inventing a new logging path — the separate logger bot
+  that already writes `<logDir>/<channel>/YYYY-MM-DD.md` picks it up the same
+  as any other channel message.
+
+**Prerequisite (`[Brandon/host]`, not done by this change):** the
+Sexton/Bexton TS identities need an actual TeamSpeak server group carrying
+the underlying kick/ban/move/edit permissions. The `allowGroups` config above
+only gates who may *ask* the bot to moderate — the bot's own TS account still
+needs the server-side permission to act, or every command above will fail at
+the TeamSpeak server with a permission error (reported back as
+`ModerationResult { ok: false, .. }`).
+
+**Path B (deferred):** TS6 WebQuery on `:10080` would let the moderation
+surface run over a real permission-scoped HTTP API instead of borrowing the
+bot's own client connection, but `teamspeak6-server` currently refuses
+connections on that port — WebQuery is not enabled on the server today. That
+needs Brandon to enable it and mint a scoped API key; not attempted here.
 
 ### 4.4 Persona
 | Tool | Status | Notes |

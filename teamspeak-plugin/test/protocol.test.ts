@@ -69,7 +69,13 @@ describe("bridge frame codec", () => {
       { clientId: 2, nickname: "sexton", muted: true, away: true },
     ]);
     expect(roster?.map((entry) => entry.clientId)).toEqual([1, 2]);
-    expect(roster?.[1]).toEqual({ clientId: 2, nickname: "sexton", muted: true, away: true });
+    expect(roster?.[1]).toEqual({
+      clientId: 2,
+      nickname: "sexton",
+      muted: true,
+      away: true,
+      serverGroups: [],
+    });
   });
 
   it("defaults an unrecognized text target to the channel", () => {

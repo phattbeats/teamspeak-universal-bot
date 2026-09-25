@@ -64,7 +64,18 @@
       "play_source",
       "pause",
       "resume",
-      "seek"
+      "seek",
+      "kick_client",
+      "move_client",
+      "ban_client",
+      "unban_client",
+      "list_bans",
+      "mute_client",
+      "edit_channel",
+      "create_channel",
+      "delete_channel",
+      "edit_server",
+      "add_to_server_group"
     ]
   }
 }
