@@ -87,6 +87,16 @@ WAKE_NAMES=${WAKE_NAMES:-}
 # is what supplies its wake aliases/excludes — see that script's step 3.
 # Explicit env overrides still win either way (empty is a valid explicit
 # value: WAKE_ALIASES= to force none).
+#
+# Captured BEFORE the defaulting below touches them: once WAKE_ALIASES has
+# been assigned its persona default, an explicit "WAKE_ALIASES=" from the
+# caller and "the script defaulted it" are the same bash value (empty
+# string) and `${WAKE_ALIASES:+...}` at the docker run call below cannot
+# tell them apart — it would silently drop a caller's explicit "force none"
+# and let run-gateway.sh's persona-pack fallback win instead, which is
+# exactly the bug this sentinel avoids.
+_WAKE_ALIASES_SET=${WAKE_ALIASES+1}
+_EXCLUDE_WAKE_NAMES_SET=${EXCLUDE_WAKE_NAMES+1}
 if [ "$PERSONA" = sexton ]; then
   WAKE_ALIASES=${WAKE_ALIASES-section,sections,sex and,sexin,saxton,sex ton,sex done}
   EXCLUDE_WAKE_NAMES=${EXCLUDE_WAKE_NAMES-Bexton,band leader,maestro}
@@ -234,8 +244,8 @@ docker run -d \
   -e SEXTON_GATEWAY_PORT="$GATEWAY_PORT" \
   -e SEXTON_AGENT_ID="$AGENT_ID" \
   ${WAKE_NAMES:+-e SEXTON_WAKE_NAMES="$WAKE_NAMES"} \
-  ${WAKE_ALIASES:+-e SEXTON_WAKE_ALIASES="$WAKE_ALIASES"} \
-  ${EXCLUDE_WAKE_NAMES:+-e SEXTON_EXCLUDE_WAKE_NAMES="$EXCLUDE_WAKE_NAMES"} \
+  ${_WAKE_ALIASES_SET:+-e SEXTON_WAKE_ALIASES="$WAKE_ALIASES"} \
+  ${_EXCLUDE_WAKE_NAMES_SET:+-e SEXTON_EXCLUDE_WAKE_NAMES="$EXCLUDE_WAKE_NAMES"} \
   -e SEXTON_NO_CATCHUP="$SEXTON_NO_CATCHUP" \
   ${TTS_VOICE_ID:+-e SEXTON_TTS_VOICE_ID="$TTS_VOICE_ID"} \
   ${BAND_ENABLED:+-e SEXTON_BAND_ENABLED="$BAND_ENABLED"} \
