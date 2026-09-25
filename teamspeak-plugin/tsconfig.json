@@ -17,7 +17,9 @@
       "openclaw/plugin-sdk/realtime-voice": ["./test/sdk-stubs/realtime-voice.ts"],
       "openclaw/plugin-sdk/config-contracts": ["./test/sdk-stubs/config-contracts.ts"],
       "openclaw/plugin-sdk/runtime-env": ["./test/sdk-stubs/runtime-env.ts"],
-      "openclaw/plugin-sdk/tool-results": ["./test/sdk-stubs/tool-results.ts"]
+      "openclaw/plugin-sdk/tool-results": ["./test/sdk-stubs/tool-results.ts"],
+      "openclaw/plugin-sdk/channel-core": ["./test/sdk-stubs/channel-core.ts"],
+      "openclaw/plugin-sdk/runtime-store": ["./test/sdk-stubs/runtime-store.ts"]
     }
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "*.ts"],
@@ -27,9 +29,7 @@
     "channel-plugin-api.ts",
     "runtime-setter-api.ts",
     "src/channel.ts",
-    "src/runtime.ts",
     "src/accounts.ts",
-    "src/bridge/ws-socket.ts",
-    "src/tools/persona-tools.ts"
+    "src/bridge/ws-socket.ts"
   ]
 }

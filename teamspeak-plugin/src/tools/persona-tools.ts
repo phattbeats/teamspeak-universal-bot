@@ -9,10 +9,10 @@
  *
  * All five need the trusted `PluginRuntime` (config read/mutate, workspace
  * path resolution), which is only available once the host has called
- * `setTeamSpeakRuntime` — i.e. never in a standalone unit test. That is why
- * this file, like `runtime.ts`, is excluded from the package's standalone
- * `tsconfig.json` (see the README's note on the two tsconfigs) and is instead
- * covered by the vitest suite through a stubbed runtime.
+ * `setTeamSpeakRuntime` — i.e. never in a standalone unit test. Standalone,
+ * `runtime.ts` resolves against `test/sdk-stubs/{channel-core,runtime-store}.ts`
+ * (see the README's note on the two tsconfigs) and the vitest suite swaps it
+ * for a fake via `vi.mock`.
  */
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { getOptionalTeamSpeakRuntime } from "../runtime.js";
