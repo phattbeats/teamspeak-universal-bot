@@ -305,6 +305,20 @@ if ! node -e '
       ts.tools.band = band;
     }
     cfg.channels = { ...(cfg.channels || {}), teamspeak: ts };
+    // PHA-3792: the voice lane streams the reply into TTS per block. The
+    // plugin forces block streaming on per voice turn and carries its own
+    // sentence-sized chunking on a per-turn config copy, so these defaults
+    // are the fallback for a host that ignores the copy (a prepared reply
+    // runtime in scope) -- not the switch. Only written when unset, so an
+    // operator who tuned them keeps their numbers.
+    cfg.agents = cfg.agents || {};
+    cfg.agents.defaults = cfg.agents.defaults || {};
+    if (!cfg.agents.defaults.blockStreamingChunk) {
+      cfg.agents.defaults.blockStreamingChunk = { minChars: 24, maxChars: 400, breakPreference: "sentence" };
+    }
+    if (!cfg.agents.defaults.blockStreamingCoalesce) {
+      cfg.agents.defaults.blockStreamingCoalesce = { minChars: 24, maxChars: 400, idleMs: 0 };
+    }
     fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
   '
   chmod 0600 "$OPENCLAW_CONFIG_PATH"

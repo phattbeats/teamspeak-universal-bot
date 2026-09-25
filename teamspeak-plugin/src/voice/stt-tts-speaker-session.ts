@@ -30,23 +30,45 @@ import type {
   ResolvedTeamSpeakSegmentationConfig,
   TeamSpeakVoiceRealtimeConfig,
 } from "../config.js";
-import { bridgePcmDurationMs, chunkBridgePcm } from "./audio.js";
 import { evaluateFuzzyWakeName } from "./fuzzy-wake.js";
 import type { RoomPlaybackQueue } from "./room-playback.js";
 import { SpeakerSegmenter, type SpeakerSegment } from "./segmenter.js";
-import { splitIntoSpeechChunks, type SpeechSynthesizer } from "./speech.js";
+import { SpeechPipeline } from "./speech-pipeline.js";
+import type { SpeechSynthesizer } from "./speech.js";
 import type { SegmentTranscriber, TranscriptionRequest } from "./whisper-local.js";
 import { WakeGate } from "./wake-gate.js";
 
-/** One agent turn: heard text in, speakable text out. */
-export type TeamSpeakVoiceAgentTurn = (params: {
-  clientId: TeamSpeakClientId;
-  nickname: string;
-  /** Transcript with any leading/trailing wake name already removed. */
-  message: string;
-  /** The wake name that opened the gate, when one was required. */
-  wakeName?: string;
-}) => Promise<string>;
+export type TeamSpeakVoiceAgentTurnHooks = {
+  /** Reply text as it streams in, in order (PHA-3792). Optional for a turn to call. */
+  onBlock?: ((text: string) => void) | undefined;
+};
+
+export type TeamSpeakVoiceAgentTurnOutcome = {
+  text: string;
+  path?: "block-stream" | "ingress" | undefined;
+  blocks?: number | undefined;
+};
+
+/**
+ * One agent turn: heard text in, speakable text out.
+ *
+ * A turn may stream: if it calls `hooks.onBlock` the session starts speaking
+ * that text immediately, and the returned text is only used for what the
+ * blocks did not already cover. A turn that ignores the hooks and returns a
+ * plain string (the ingress fallback, and every test double written before
+ * PHA-3792) is spoken whole at the end, as before.
+ */
+export type TeamSpeakVoiceAgentTurn = (
+  params: {
+    clientId: TeamSpeakClientId;
+    nickname: string;
+    /** Transcript with any leading/trailing wake name already removed. */
+    message: string;
+    /** The wake name that opened the gate, when one was required. */
+    wakeName?: string;
+  },
+  hooks: TeamSpeakVoiceAgentTurnHooks,
+) => Promise<string | TeamSpeakVoiceAgentTurnOutcome>;
 
 export type TeamSpeakSttTtsSessionParams = {
   client: RosterEntry;
@@ -320,118 +342,123 @@ export class TeamSpeakSttTtsSpeakerSession {
       return;
     }
 
-    const agentStartedAt = this.now();
-    const reply = await this.params.runAgentTurn({
-      clientId: this.clientId,
-      nickname: this.nickname,
-      message: gated.message,
-      ...(gated.wakeName ? { wakeName: gated.wakeName } : {}),
+    // Speech starts before the agent turn ends (PHA-3792). The pipeline is
+    // built first so a block that arrives mid-generation has somewhere to go;
+    // it synthesizes in order with one call prefetched ahead of playback
+    // (PHA-3789) and puts frames on the room queue as each chunk lands. A
+    // turn that does not stream (ingress fallback, older doubles) delivers
+    // nothing through `onBlock`, and its returned text is pushed whole below
+    // -- the pre-PHA-3792 behavior, unchanged.
+    const isLive = () => !this.isStopped() && generation === this.generation;
+    const pipeline = new SpeechPipeline({
+      synthesizer: this.params.synthesizer,
+      playback: this.params.playback,
+      ownerKey: this.playbackOwnerKey,
+      isLive,
+      now: this.now,
+      ...(this.params.log ? { log: this.params.log } : {}),
     });
-    const agentMs = this.now() - agentStartedAt;
-    if (this.isStopped() || generation !== this.generation) {
-      return;
-    }
-    if (!reply.trim()) {
-      this.params.log?.(
-        `teamspeak voice: agent turn produced nothing speakable clientId=${this.clientId} agentMs=${Math.round(agentMs)}`,
+    let streamedText = "";
+    let firstBlockAt: number | undefined;
+    const agentStartedAt = this.now();
+    let outcome: TeamSpeakVoiceAgentTurnOutcome;
+    try {
+      const raw = await this.params.runAgentTurn(
+        {
+          clientId: this.clientId,
+          nickname: this.nickname,
+          message: gated.message,
+          ...(gated.wakeName ? { wakeName: gated.wakeName } : {}),
+        },
+        {
+          onBlock: (text) => {
+            if (!isLive()) {
+              return;
+            }
+            firstBlockAt ??= this.now();
+            streamedText += text;
+            pipeline.push(text);
+          },
+        },
       );
-      return;
+      outcome = typeof raw === "string" ? { text: raw } : raw;
+    } catch (error) {
+      // Let the pipeline drain what it already has before failing the turn;
+      // a block that was spoken should not be cut off by the model's error.
+      await pipeline.finish();
+      this.params.playback.release(this.playbackOwnerKey);
+      throw error;
     }
-
-    // Pipelined synthesis (PHA-3607, "streaming TTS"): one T2A call per
-    // sentence instead of one for the whole reply, so playback of sentence one
-    // starts while sentence two is still being synthesized. There is no host
-    // support for token-level streaming synthesis (see speech.ts), so this is
-    // the honest version of it -- real first-audio win, at the cost of a
-    // little more *total* synthesis time on a multi-sentence reply.
-    const chunks = splitIntoSpeechChunks(reply);
-    let firstChunkTtsMs: number | undefined;
-    let firstAudioMs: number | undefined;
-    let speechProvider: string | undefined;
-    let totalAudioMs = 0;
-    let spokenChunks = 0;
-
-    // Prefetch: chunk N+1 is already synthesizing while chunk N's frames go on
-    // the wire (PHA-3789 latency pass). Synthesis calls still start in order,
-    // so `spoken` order is unchanged; only the inter-chunk gap shrinks. First
-    // audio is untouched -- that is bounded by agentMs + first-chunk ttsMs.
-    const synthesize = (index: number) => {
-      const startedAt = this.now();
-      return this.params.synthesizer
-        .synthesize(chunks[index] as string)
-        .then((outcome) => ({ outcome, ttsMs: this.now() - startedAt }));
-    };
-    let pending = chunks.length > 0 ? synthesize(0) : undefined;
-    for (let index = 0; index < chunks.length && pending; index += 1) {
-      const current = pending;
-      pending = index + 1 < chunks.length ? synthesize(index + 1) : undefined;
-      // A prefetch that fails after we stop or break must not surface as an
-      // unhandled rejection; its outcome is only read if the loop reaches it.
-      pending?.catch(() => undefined);
-      const { outcome: chunkSpeech, ttsMs: chunkTtsMs } = await current;
-      if (index === 0) {
-        firstChunkTtsMs = chunkTtsMs;
-      }
-      if (this.isStopped() || generation !== this.generation) {
-        return;
-      }
-      if (chunkSpeech.status === "empty") {
-        continue;
-      }
-      if (chunkSpeech.status === "failed") {
-        // The first chunk failing fails the turn, same as the old one-call
-        // behavior. A later chunk failing does not retroactively fail a turn
-        // that already spoke something -- stop here and keep what played.
-        if (spokenChunks === 0) {
-          throw new Error(`speech synthesis failed: ${chunkSpeech.error}`);
+    const agentMs = this.now() - agentStartedAt;
+    if (isLive()) {
+      const reply = outcome.text.trim();
+      if (!streamedText) {
+        if (reply) {
+          pipeline.push(reply);
         }
-        this.params.log?.(
-          `teamspeak voice: speech chunk failed clientId=${this.clientId} chunk=${index + 1}/${chunks.length}: ${chunkSpeech.error}`,
-        );
-        break;
+      } else if (reply.replace(/\s+/g, "") !== streamedText.replace(/\s+/g, "")) {
+        // The blocks and the returned text disagree; the returned text is the
+        // fuller record (an aborted stream falls back to a final payload
+        // there), so speak whatever the blocks did not already cover.
+        const tail = reply.startsWith(streamedText) ? reply.slice(streamedText.length).trim() : "";
+        if (tail) {
+          pipeline.push(tail);
+        } else if (!reply.startsWith(streamedText)) {
+          this.params.log?.(
+            `teamspeak voice: streamed blocks and final reply differ clientId=${this.clientId} streamedChars=${streamedText.length} replyChars=${reply.length}; keeping the streamed blocks`,
+          );
+        }
       }
-      for (const frame of chunkBridgePcm(chunkSpeech.pcm48kMono)) {
-        this.params.playback.enqueue(this.playbackOwnerKey, frame);
-      }
-      spokenChunks += 1;
-      totalAudioMs += bridgePcmDurationMs(chunkSpeech.pcm48kMono);
-      speechProvider ??= chunkSpeech.provider;
-      // The moment this fires is the real "first audio" instant: the bridge
-      // starts streaming these frames out while later chunks are still being
-      // synthesized, so this must be stamped here, not after the whole loop.
-      firstAudioMs ??= Math.round(this.now() - segment.closedAt);
     }
+    const speech = await pipeline.finish();
     // The utterance is complete the moment the last chunk is queued: unlike a
     // realtime provider there is no later "response done" event to wait for,
     // and holding the lane past the last frame would block the next speaker
     // for nothing.
     this.params.playback.release(this.playbackOwnerKey);
-    if (spokenChunks === 0) {
+    if (!isLive()) {
+      return;
+    }
+    if (speech.error !== undefined) {
+      throw new Error(`speech synthesis failed: ${speech.error}`);
+    }
+    if (speech.totalChunks === 0) {
+      this.params.log?.(
+        `teamspeak voice: agent turn produced nothing speakable clientId=${this.clientId} agentMs=${Math.round(agentMs)} path=${outcome.path ?? "unknown"}`,
+      );
+      return;
+    }
+    if (speech.spokenChunks === 0) {
       return;
     }
 
     // Stamped at the *end* of our own speech, not the start: the speaker is
     // silent while the answer plays, and that silence is not dead air.
-    this.conversationIdleFrom = this.now() + totalAudioMs;
+    this.conversationIdleFrom = this.now() + speech.totalAudioMs;
     this.lastTimings = {
       segmentMs: Math.round(segment.durationMs),
       sttMs: Math.round(sttMs),
       agentMs: Math.round(agentMs),
-      ttsMs: Math.round(firstChunkTtsMs ?? 0),
-      firstAudioMs: firstAudioMs ?? Math.round(this.now() - segment.closedAt),
+      ttsMs: Math.round(speech.firstChunkTtsMs ?? 0),
+      firstAudioMs: Math.round((speech.firstAudioAt ?? this.now()) - segment.closedAt),
     };
+    // How long into the agent turn the first block landed: the number that
+    // shows the streaming win, since ttsMs now starts here rather than after
+    // agentMs. Equal to agentMs on a turn that did not stream.
+    const firstBlockMs = Math.round((firstBlockAt ?? agentStartedAt + agentMs) - agentStartedAt);
     const requestedModel = this.params.agentTurnLabel?.model ?? "default";
     const requestedThinking = this.params.agentTurnLabel?.thinking ?? "default";
     this.params.log?.(
       `teamspeak voice: stt-tts turn clientId=${this.clientId} nickname=${this.nickname} ` +
         `segmentMs=${this.lastTimings.segmentMs} queueWaitMs=${Math.round(queueWaitMs)} sttMs=${this.lastTimings.sttMs} ` +
-        `agentMs=${this.lastTimings.agentMs} ttsMs=${this.lastTimings.ttsMs} ` +
-        `firstAudioMs=${this.lastTimings.firstAudioMs} ttsChunks=${spokenChunks}/${chunks.length} ` +
-        `sttProvider=${sttProvider} speechProvider=${speechProvider ?? this.params.synthesizer.id} ` +
-        // No prompt/output token counts or cost here: runCommandFromIngress
-        // does not return usage to the ingress caller (PHA-3789 finding,
-        // see TOOL-CATALOG.md §4.6). requestedModel/Thinking are the
-        // ingress ask, not necessarily what the host actually ran.
+        `agentMs=${this.lastTimings.agentMs} firstBlockMs=${firstBlockMs} ttsMs=${this.lastTimings.ttsMs} ` +
+        `firstAudioMs=${this.lastTimings.firstAudioMs} ttsChunks=${speech.spokenChunks}/${speech.totalChunks} ` +
+        `replyPath=${outcome.path ?? "unknown"} blocks=${outcome.blocks ?? 0} ` +
+        `sttProvider=${sttProvider} speechProvider=${speech.speechProvider ?? this.params.synthesizer.id} ` +
+        // No prompt/output token counts or cost here: neither reply path
+        // returns usage to the caller (PHA-3789 finding, see
+        // TOOL-CATALOG.md §4.6). requestedModel/Thinking are the ask, not
+        // necessarily what the host actually ran.
         `requestedModel=${requestedModel} requestedThinking=${requestedThinking}${this.lastFuzzyHearing ? ` wakeHeardAs=${JSON.stringify(this.lastFuzzyHearing)}` : ""}`,
     );
   }

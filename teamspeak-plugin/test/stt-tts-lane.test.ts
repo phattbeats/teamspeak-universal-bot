@@ -97,6 +97,13 @@ function createHarness(params: {
   config?: TeamSpeakAccountConfig;
   transcripts?: string[];
   reply?: string;
+  /**
+   * A streaming turn (PHA-3792): each entry is delivered through `onBlock`,
+   * then the turn parks on `streamGate` before resolving with the joined text
+   * -- the model is "still generating" until the test releases it.
+   */
+  stream?: string[];
+  streamGate?: Promise<void>;
 } = {}): Harness {
   const config = params.config ?? baseConfig();
   const bridge = new MockBridge();
@@ -104,12 +111,19 @@ function createHarness(params: {
   const synthesizer = new FakeSynthesizer();
   const turns: Array<{ nickname: string; message: string; wakeName?: string }> = [];
   const logs: string[] = [];
-  const runAgentTurn: TeamSpeakVoiceAgentTurn = async (turn) => {
+  const runAgentTurn: TeamSpeakVoiceAgentTurn = async (turn, hooks) => {
     turns.push({
       nickname: turn.nickname,
       message: turn.message,
       ...(turn.wakeName ? { wakeName: turn.wakeName } : {}),
     });
+    if (params.stream) {
+      for (const block of params.stream) {
+        hooks.onBlock?.(block);
+      }
+      await params.streamGate;
+      return { text: params.stream.join("\n"), path: "block-stream", blocks: params.stream.length };
+    }
     return params.reply ?? "nothing much";
   };
 
@@ -371,6 +385,41 @@ describe("stt-tts lane over the mock bridge", () => {
       Buffer.concat([REPLY_PCM, REPLY_PCM]),
     );
     expect(chatty.logs.some((line) => line.includes("ttsChunks=2/2"))).toBe(true);
+  });
+
+  it("starts speaking the first block while the agent turn is still running (PHA-3792)", async () => {
+    let finishGenerating: () => void = () => undefined;
+    const streaming = createHarness({
+      stream: ["The first block is a whole sentence.", "The second block is another one."],
+      streamGate: new Promise<void>((resolve) => {
+        finishGenerating = resolve;
+      }),
+    });
+    joinRoom(streaming, [PHATT]);
+    streaming.bridge.clearSent();
+
+    speak(streaming, PHATT);
+    await settle();
+    // The agent turn has not resolved, and the first block is already on the
+    // wire: synthesized and enqueued during agentMs, not after it.
+    expect(streaming.turns).toHaveLength(1);
+    expect(streaming.synthesizer.spoken).toEqual([
+      "The first block is a whole sentence.",
+      "The second block is another one.",
+    ]);
+    expect(streaming.bridge.sentOfType(TYPE_VOICE_AUDIO)).toHaveLength(100);
+    expect(streaming.logs.some((line) => line.includes("stt-tts turn "))).toBe(false);
+
+    finishGenerating();
+    await settle();
+    await settle();
+    // The returned text matched the blocks, so nothing was spoken twice.
+    expect(streaming.synthesizer.spoken).toHaveLength(2);
+    expect(streaming.bridge.sentOfType(TYPE_VOICE_AUDIO)).toHaveLength(100);
+    const line = streaming.logs.find((entry) => entry.includes("stt-tts turn "));
+    expect(line).toContain("ttsChunks=2/2");
+    expect(line).toContain("replyPath=block-stream blocks=2");
+    expect(line).toMatch(/firstBlockMs=\d+/);
   });
 
   it("transcribes the next utterance while the previous answer is still synthesizing (PHA-3789)", async () => {

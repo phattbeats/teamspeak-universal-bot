@@ -148,7 +148,13 @@ function startTeamSpeakSttTtsRuntime(params: {
     accountId: account.accountId,
     agentId: params.agentId,
     sessionKey: params.sessionKey ?? `teamspeak:${account.accountId}`,
-    runtime: { agent: hostRuntime.agent, tts: hostRuntime.tts },
+    runtime: {
+      agent: hostRuntime.agent,
+      tts: hostRuntime.tts,
+      // The block-streaming reply path (PHA-3792). Optional-chained: a host
+      // older than the reply runtime still gets the ingress fallback.
+      ...(hostRuntime.channel?.reply ? { reply: hostRuntime.channel.reply } : {}),
+    },
     humanParticipantCount: () => runtime?.humanParticipantCount() ?? 0,
     onTerminalError: (error) => logger.warn(`teamspeak: stt-tts turn failed: ${error.message}`),
     log: (message) => logger.info(message),
