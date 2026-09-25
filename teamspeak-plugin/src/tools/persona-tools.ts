@@ -24,7 +24,7 @@ export const SET_VOICE_TOOL = "set_voice";
 export const SET_WAKE_NAMES_TOOL = "set_wake_names";
 export const SET_FOLLOW_UP_WINDOW_TOOL = "set_follow_up_window";
 
-const PERSONA_FILES = ["SOUL.md", "AGENTS.md", "IDENTITY.md", "HUMAN.md"] as const;
+const PERSONA_FILES = ["SOUL.md", "AGENTS.md", "IDENTITY.md", "USER.md", "HUMAN.md"] as const;
 /** Keep a persona summary well inside a voice turn's token budget. */
 const MAX_FILE_CHARS = 2000;
 
@@ -49,7 +49,7 @@ export function createTeamSpeakPersonaTools(): AgentTool[] {
       name: SHOW_PERSONA_TOOL,
       label: SHOW_PERSONA_TOOL,
       description:
-        "Read back a summary of your own configured persona: SOUL.md, AGENTS.md, IDENTITY.md and HUMAN.md from your workspace. Use it when someone asks who you are, what your instructions say, or how you're configured — that is a legitimate question here, not the internals you otherwise keep quiet about.",
+        "Read back a summary of your own configured persona: SOUL.md, AGENTS.md, IDENTITY.md, USER.md (the room's regulars) and HUMAN.md from your workspace. Use it when someone asks who you are, what your instructions say, or how you're configured — that is a legitimate question here, not the internals you otherwise keep quiet about.",
       parameters: { type: "object", properties: {} },
       execute: async () => jsonResult(await showPersona()),
     },
