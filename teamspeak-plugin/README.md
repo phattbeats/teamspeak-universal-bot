@@ -344,6 +344,41 @@ Mount the logger's log volume into the gateway container read-only, or set
 `TEAMSPEAK_SEXTON_LOG_DIR`. With no log present the tool answers "nothing
 logged yet" rather than failing.
 
+## `npm:`/`npm-pack:`/`git:` installs now ship a compiled entry (PHA-3798)
+
+The whole section below is the PHA-3326-era record of why only `--link` worked, and it is
+still an accurate description of *that* configuration — this package shipped no `dist/`
+until now. As of PHA-3798, `dist/` is a committed build output
+(`npm run build` → `scripts/build.mjs`, an esbuild transpile, CI-enforced not to drift from
+`src/`), and OpenClaw infers the compiled `dist/index.js` counterpart from the `.ts` entry
+already in `package.json#openclaw.extensions` — no manifest change needed. That satisfies
+the built-runtime-entry check `--link` was previously the only source exempt from, so
+`npm:@openclaw/teamspeak` (once published to the npm registry), `npm-pack:<path-to-tgz>`,
+and `git:` installs should now load the plugin the same way `--link` does. The
+`openclaw/plugin-sdk/*` subpath imports do **not** need any special handling for these
+kinds either: OpenClaw creates/repairs a `node_modules/openclaw` symlink into the running
+Gateway's own package for every managed install kind that declares `openclaw` as a
+dependency (this package already does, as a `peerDependency`) — that mechanism was already
+running for `npm:`/`npm-pack:`/`git:` installs even before this change, it just never got
+past the missing-`dist/` check to matter.
+
+**Not yet verified against a real Gateway** — the build produces syntactically valid ESM
+(`node --check` on every emitted file, `ws` import preserved) and the SDK-resolution
+mechanism is read from OpenClaw's own source (`src/plugins/plugin-peer-link.ts`,
+`src/plugins/package-entry-resolution.ts`), but no one has run
+`openclaw plugins install npm-pack:...` or `git:...` against this package end to end yet.
+Do that before calling PHA-3798 item 1 done, ideally from a machine that is not also running
+the live PHATT-RAID `--link` install (don't `--force` over the production install record).
+
+`index.ts` and `src/channel.ts` (and everything downstream of them) are transpiled by
+esbuild, not type-checked: they import `openclaw/plugin-sdk/channel-entry-contract`,
+`channel-core`, `realtime-bootstrap-context`, and `routing`, none of which
+`tsconfig.json`'s standalone stub set fully models — which is exactly why
+`tsconfig.json`'s own `exclude` list already keeps those files out of `npm run typecheck`
+(PHA-3787). The build doesn't newly weaken anything here; it just also doesn't type-check
+what was already excluded. `npm run typecheck` remains the real type-safety gate for
+everything it *does* cover.
+
 ## Installing as a managed plugin (recommended, PHA-3326)
 
 `openclaw plugins install --link <path>` is a real managed install — it
