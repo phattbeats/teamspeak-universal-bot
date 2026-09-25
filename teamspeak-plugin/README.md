@@ -502,9 +502,12 @@ deliberately:
   plugin's wiring, not the provider stack.
 
 Not covered here, and needing a real gateway: the live provider connection, and
-`src/channel.ts` / `src/accounts.ts` / `src/bridge/ws-socket.ts` / `src/runtime.ts`,
-which import SDK subpaths that are not stubbed and are excluded from the
-standalone typecheck. For the stt-tts lane that also means the two host seams it
+`src/channel.ts` / `src/accounts.ts` / `src/bridge/ws-socket.ts`, which import
+SDK subpaths that are not stubbed and are excluded from the standalone
+typecheck. (`src/runtime.ts` typechecks standalone against
+`test/sdk-stubs/channel-core.ts` and `runtime-store.ts`, which are types-only /
+a one-slot holder — enough for `src/tools/persona-tools.ts` to be included, not
+a claim about the host runtime.) For the stt-tts lane that also means the two host seams it
 hangs off — `runtime.agent.runCommandFromIngress` and `runtime.tts.textToSpeech`
 — are exercised here only through the structural types in `src/voice/agent-turn.ts`
 and `src/voice/speech.ts`, and against fakes.
