@@ -48,29 +48,36 @@
  * not punished for the silence.
  *
  * If the trade is ever worth re-opening, the seam is `shouldEscalate`, and the
- * cost to re-measure is the table above.
+ * cost to re-measure is the table above. Since PHA-3790 the primary *can* hand
+ * the router a `confidence` — `transcription.confidence: true` turns it on, at
+ * the price in the table — so the condition can now be written without new
+ * plumbing. It still is not, because the price has not changed.
+ *
+ * ## A composite is a provider too
+ *
+ * This class implements the same `SttProvider` contract as the two providers it
+ * sits between (PHA-3790), which is why nothing downstream has to know whether
+ * routing is on. `ms` is the router's own total — primary plus any escalation —
+ * because that is what the turn actually waited for.
  */
 import type { ResolvedTeamSpeakRoutingConfig } from "../config.js";
-import type { MiniMaxAsrTranscriber } from "./minimax-asr.js";
-import type { SegmentTranscriber, TranscriptionRequest } from "./whisper-local.js";
-
-export type TranscriptionOutcome = {
-  text: string;
-  /** Provider whose text this is, for `sttProvider` in the turn log. */
-  provider: string;
-  /** True when the secondary was consulted, whatever it returned. */
-  escalated: boolean;
-};
+import {
+  elapsedMs,
+  type SttProvider,
+  type SttProviderKind,
+  type SttRequest,
+  type SttResult,
+} from "./stt-provider.js";
 
 export type RoutingTranscriberParams = {
-  primary: SegmentTranscriber;
-  secondary: MiniMaxAsrTranscriber;
+  primary: SttProvider;
+  secondary: SttProvider;
   config: ResolvedTeamSpeakRoutingConfig;
   now?: (() => number) | undefined;
   log?: ((message: string) => void) | undefined;
 };
 
-export class RoutingTranscriber implements SegmentTranscriber {
+export class RoutingTranscriber implements SttProvider {
   /** Per-speaker record of escalations that came back with nothing. */
   private readonly fruitless = new Map<string, { count: number; suppressedUntil: number }>();
   private readonly now: () => number;
@@ -83,52 +90,60 @@ export class RoutingTranscriber implements SegmentTranscriber {
     return `${this.params.primary.id}+${this.params.secondary.id}`;
   }
 
-  async transcribe(request: TranscriptionRequest): Promise<string> {
-    return (await this.transcribeDetailed(request)).text;
+  /**
+   * Hosted if *either* leg is: a composite that can send audio off the box is
+   * not a local transcriber, whichever leg usually answers.
+   */
+  get kind(): SttProviderKind {
+    return this.params.primary.kind === "hosted" || this.params.secondary.kind === "hosted"
+      ? "hosted"
+      : "local";
   }
 
-  async transcribeDetailed(request: TranscriptionRequest): Promise<TranscriptionOutcome> {
+  async transcribe(request: SttRequest): Promise<SttResult> {
+    const startedAt = this.now();
     const { primary, secondary, config } = this.params;
+    const ms = (): number => elapsedMs(startedAt, this.now);
 
     // The history tools want the better transcript and can afford the wait.
-    if (request.prefer === "secondary" && !secondary.isBackedOff()) {
+    if (request.prefer === "secondary" && !isBackedOff(secondary)) {
       const forced = await this.trySecondary(request);
       if (forced !== undefined) {
-        return { text: forced, provider: secondary.id, escalated: true };
+        return { ...forced, ms: ms(), escalated: true };
       }
     }
 
-    const text = await primary.transcribe(request);
-    if (!this.shouldEscalate({ text, request })) {
-      return { text, provider: primary.id, escalated: false };
+    const first = await primary.transcribe(request);
+    if (!this.shouldEscalate({ text: first.text, request })) {
+      return { ...first, ms: ms(), escalated: false };
     }
-    if (secondary.isBackedOff()) {
+    if (isBackedOff(secondary)) {
       this.params.log?.(
         `teamspeak voice: stt escalation skipped, ${secondary.id} backed off for ` +
-          `${Math.round(secondary.backoffRemainingMs() / 1000)}s more`,
+          `${Math.round((secondary.backoffRemainingMs?.() ?? 0) / 1000)}s more`,
       );
-      return { text, provider: primary.id, escalated: false };
+      return { ...first, ms: ms(), escalated: false };
     }
     if (this.isFutile(request.label)) {
-      return { text, provider: primary.id, escalated: false };
+      return { ...first, ms: ms(), escalated: false };
     }
 
     const better = await this.trySecondary(request);
     if (better === undefined) {
-      // The secondary failed and said why in its own log line. whisper's answer
-      // is still the answer — an escalation is an upgrade attempt, never a
-      // reason to lose the turn.
-      return { text, provider: primary.id, escalated: true };
+      // The secondary failed and said why in its own log line. The primary's
+      // answer is still the answer — an escalation is an upgrade attempt, never
+      // a reason to lose the turn.
+      return { ...first, ms: ms(), escalated: true };
     }
-    if (!better) {
+    if (!better.text) {
       // Both heard silence. That is agreement, not a failure, and the segment
       // really was noise — but a speaker who is *only* ever noise should stop
       // costing us a round trip a second.
       this.noteFruitless(request.label);
-      return { text: "", provider: secondary.id, escalated: true };
+      return { ...better, text: "", ms: ms(), escalated: true };
     }
     this.fruitless.delete(request.label);
-    return { text: better, provider: secondary.id, escalated: true };
+    return { ...better, ms: ms(), escalated: true };
   }
 
   /** True while this speaker is suppressed for producing nothing repeatedly. */
@@ -163,18 +178,20 @@ export class RoutingTranscriber implements SegmentTranscriber {
     this.fruitless.set(label, state);
   }
 
-  /** Returns the transcript, or undefined when the secondary failed outright. */
-  private async trySecondary(request: TranscriptionRequest): Promise<string | undefined> {
+  /** Returns the secondary's result, or undefined when it failed outright. */
+  private async trySecondary(request: SttRequest): Promise<SttResult | undefined> {
     try {
       return await this.params.secondary.transcribe(request);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.params.log?.(`teamspeak voice: stt secondary failed, keeping whisper: ${message}`);
+      this.params.log?.(
+        `teamspeak voice: stt secondary failed, keeping ${this.params.primary.id}: ${message}`,
+      );
       return undefined;
     }
   }
 
-  private shouldEscalate(input: { text: string; request: TranscriptionRequest }): boolean {
+  private shouldEscalate(input: { text: string; request: SttRequest }): boolean {
     const durationMs = input.request.durationMs ?? 0;
     if (durationMs > this.params.config.longSegmentMs) {
       return true;
@@ -184,4 +201,9 @@ export class RoutingTranscriber implements SegmentTranscriber {
     // would put the cost right back on the noise floor.
     return !input.text && durationMs >= this.params.config.emptyEscalationMinMs;
   }
+}
+
+/** A provider that cannot park itself is never parked. */
+function isBackedOff(provider: SttProvider): boolean {
+  return provider.isBackedOff?.() ?? false;
 }

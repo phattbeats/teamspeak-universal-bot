@@ -6,55 +6,44 @@
  * constraint is the opposite on both axes: $0 marginal cost, and speaker audio
  * that never leaves the house, which is a promise the channel notice makes out
  * loud. So the transcriber is a whisper.cpp sidecar on the TS6 Docker network
- * and this file is its client.
+ * and this file is its client. Since PHA-3598/3607 that sidecar is the shared
+ * `whisper` pool container, one server per bot.
  *
  * Scope note: PHA-3228 explicitly allows a teamspeak-local module here instead
  * of a general `realtimeTranscriptionProviders` entry, because the SDK's
  * provider contract is a *streaming* one (`connect`/`sendAudio`/`close`) and
  * whisper.cpp's server is request/response over finished segments. The seam is
- * the `SegmentTranscriber` interface below: lifting this to a real provider
- * later means implementing that interface elsewhere, not touching the lane.
+ * the `SttProvider` contract in `stt-provider.ts` (PHA-3790): lifting this to a
+ * real host provider later means implementing that interface elsewhere, not
+ * touching the lane.
+ *
+ * ## Confidence costs 1.8 seconds a turn
+ *
+ * whisper.cpp will score a transcript — `avg_logprob`, `no_speech_prob` — but
+ * only under `response_format=verbose_json`, and that format is not free.
+ * Measured on the live container against one 3.29s clip, alternating formats:
+ *
+ *     json          1664ms   1939ms   2085ms
+ *     verbose_json  3417ms   3727ms
+ *
+ * Roughly +1.8s on EVERY turn. So `json` is the default and `SttResult.confidence`
+ * is normally absent; `transcription.confidence: true` buys the score back for an
+ * operator who wants it, at that price. `stt-routing.ts` documents why the router
+ * does not take the trade.
  */
-import type { ResolvedTeamSpeakTranscriptionConfig } from "../config.js";
+import { DEFAULT_WHISPER_URL } from "../config.js";
 import { convertBridgePcm48kMonoToSttPcm16k, encodeWavPcm16Mono } from "./audio.js";
+import {
+  elapsedMs,
+  WHISPER_LOCAL_PROVIDER_ID,
+  type ResolvedSttProviderConfig,
+  type SttProvider,
+  type SttProviderFactory,
+  type SttRequest,
+  type SttResult,
+} from "./stt-provider.js";
 
-export type TranscriptionRequest = {
-  /** One closed utterance, in the bridge's native 48 kHz mono PCM16. */
-  pcm48kMono: Buffer;
-  /** Speaker label, for logs only; the transcriber is per-segment, not per-person. */
-  label: string;
-  /**
-   * The TS6 roster clientId of the speaker, when known. TeamSpeak assigns
-   * this per session on its own server, so sexton and bexton — two
-   * independent bridge connections into the same channel — see the identical
-   * value for the identical human. Sent as a header so a coalescing whisper
-   * front end (PHA-3607: "one transcription per utterance fanned out to both
-   * bots") can recognize that two nearly-simultaneous requests are the same
-   * utterance and decode it once instead of twice. Purely advisory: a plain
-   * whisper.cpp server ignores unknown headers, so this is a no-op unless the
-   * transcriber URL actually points at the coalescing proxy.
-   */
-  clientId?: number | undefined;
-  /**
-   * Segment length. Optional because a plain transcriber has no use for it;
-   * `RoutingTranscriber` reads it to decide whether a long segment, or an
-   * unexpected empty, is worth a second opinion (PHA-3428 item 3).
-   */
-  durationMs?: number;
-  /**
-   * Ask for the hosted secondary directly, for callers that want the better
-   * transcript and can afford the wait — the history tools. Ignored when no
-   * secondary is configured, or when it is backed off.
-   */
-  prefer?: "secondary";
-};
-
-export type SegmentTranscriber = {
-  /** Provider id, surfaced in `!sexton status` and asserted on in tests. */
-  readonly id: string;
-  /** Returns the transcript, or an empty string when the segment held no speech. */
-  transcribe(request: TranscriptionRequest): Promise<string>;
-};
+export { WHISPER_LOCAL_PROVIDER_ID };
 
 /** Injectable for tests; production uses the global fetch. */
 export type WhisperFetch = (
@@ -66,8 +55,11 @@ export type WhisperFetch = (
 export const SPEAKER_CLIENT_ID_HEADER = "x-speaker-client-id";
 
 export type LocalWhisperTranscriberParams = {
-  config: ResolvedTeamSpeakTranscriptionConfig;
+  config: ResolvedSttProviderConfig;
+  /** Endpoint, already defaulted by the factory. */
+  url: string;
   fetchFn?: WhisperFetch | undefined;
+  now?: (() => number) | undefined;
   log?: ((message: string) => void) | undefined;
 };
 
@@ -91,36 +83,49 @@ const NON_SPEECH_TRANSCRIPTS = new Set([
   "thanks for watching!",
 ]);
 
-export class LocalWhisperTranscriber implements SegmentTranscriber {
+export class LocalWhisperTranscriber implements SttProvider {
+  readonly kind = "local" as const;
   private readonly fetchFn: WhisperFetch;
+  private readonly now: () => number;
 
   constructor(private readonly params: LocalWhisperTranscriberParams) {
     this.fetchFn = params.fetchFn ?? (defaultWhisperFetch as WhisperFetch);
+    this.now = params.now ?? Date.now;
   }
 
   get id(): string {
-    return this.params.config.provider;
+    return WHISPER_LOCAL_PROVIDER_ID;
   }
 
-  async transcribe(request: TranscriptionRequest): Promise<string> {
+  async transcribe(request: SttRequest): Promise<SttResult> {
+    const startedAt = this.now();
     const pcm16k = convertBridgePcm48kMonoToSttPcm16k(request.pcm48kMono);
     if (pcm16k.length === 0) {
-      return "";
+      return { text: "", provider: this.id, ms: elapsedMs(startedAt, this.now) };
     }
     const wav = encodeWavPcm16Mono(pcm16k);
     const config = this.params.config;
+    const wantsConfidence = config.confidence;
 
     const form = new FormData();
     // `new Uint8Array(wav)` rather than the Buffer: Buffer is backed by
     // ArrayBufferLike, which BlobPart does not accept under strict lib types.
     form.append("file", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "segment.wav");
-    form.append("response_format", "json");
+    form.append("response_format", wantsConfidence ? "verbose_json" : "json");
     form.append("temperature", "0");
-    if (config.language && config.language !== "auto") {
-      form.append("language", config.language);
+    const language = request.lang?.trim() || config.language;
+    if (language && language !== "auto") {
+      form.append("language", language);
     }
     if (config.model) {
       form.append("model", config.model);
+    }
+    // whisper.cpp takes an initial prompt to prime the decoder with names and
+    // jargon. A build that does not know the field ignores it, so this is safe
+    // to send whenever one is configured.
+    const prompt = request.prompt?.trim() || config.prompt?.trim();
+    if (prompt) {
+      form.append("prompt", prompt);
     }
 
     const controller = new AbortController();
@@ -129,7 +134,7 @@ export class LocalWhisperTranscriber implements SegmentTranscriber {
       // Deliberately the plain fetch, not `fetchWithSsrFGuard`: the whole point
       // of this call is that it targets a private-network sidecar, which is
       // exactly what the SSRF guard exists to refuse.
-      const response = await this.fetchFn(config.url, {
+      const response = await this.fetchFn(this.params.url, {
         method: "POST",
         body: form,
         signal: controller.signal,
@@ -140,15 +145,43 @@ export class LocalWhisperTranscriber implements SegmentTranscriber {
       const body = await response.text();
       if (!response.ok) {
         throw new Error(
-          `whisper-local HTTP ${response.status} from ${config.url}: ${firstLine(body)}`,
+          `whisper-local HTTP ${response.status} from ${this.params.url}: ${firstLine(body)}`,
         );
       }
-      return normalizeTranscript(readTranscriptText(body));
+      const confidence = wantsConfidence ? readWhisperConfidence(body) : undefined;
+      return {
+        text: normalizeTranscript(readTranscriptText(body)),
+        provider: this.id,
+        ms: elapsedMs(startedAt, this.now),
+        ...(confidence !== undefined ? { confidence } : {}),
+      };
     } finally {
       clearTimeout(timeout);
     }
   }
 }
+
+/**
+ * Registry entry. The whisper URL is defaulted here rather than in `config.ts`
+ * because it is whisper's own knowledge — a provider added later brings its own
+ * defaults the same way, without a config change.
+ */
+export const whisperLocalFactory: SttProviderFactory = {
+  id: WHISPER_LOCAL_PROVIDER_ID,
+  kind: "local",
+  aliases: ["whisper", "whisper-cpp"],
+  create: (context) => ({
+    ok: true,
+    provider: new LocalWhisperTranscriber({
+      config: context.config,
+      url:
+        context.config.url?.trim() ||
+        context.env.TEAMSPEAK_WHISPER_URL?.trim() ||
+        DEFAULT_WHISPER_URL,
+      ...(context.log ? { log: context.log } : {}),
+    }),
+  }),
+};
 
 const defaultWhisperFetch = (
   url: string,
@@ -188,6 +221,62 @@ export function readTranscriptText(body: string): string {
     }
   }
   return "";
+}
+
+/**
+ * Turn `verbose_json`'s per-segment `avg_logprob` into one 0..1 confidence.
+ *
+ * `avg_logprob` is the mean log probability of the chosen tokens, so `exp` of it
+ * is the geometric-mean token probability — the closest thing whisper gives to
+ * "how sure was it". Segments are averaged unweighted: a long utterance whose
+ * middle went to mush should read as unsure even when the ends were clean.
+ * Returns undefined when the build answered without the field, because a
+ * missing score is not a low one.
+ */
+export function readWhisperConfidence(body: string): number | undefined {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  const logprobs: number[] = [];
+  for (const segment of collectSegments(parsed)) {
+    if (!segment || typeof segment !== "object") {
+      continue;
+    }
+    const value = (segment as Record<string, unknown>).avg_logprob;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      logprobs.push(value);
+    }
+  }
+  if (logprobs.length === 0) {
+    return undefined;
+  }
+  const mean = logprobs.reduce((sum, value) => sum + value, 0) / logprobs.length;
+  return Math.min(1, Math.max(0, Math.exp(mean)));
+}
+
+function collectSegments(parsed: unknown): unknown[] {
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return [];
+  }
+  const record = parsed as Record<string, unknown>;
+  for (const key of ["segments", "transcription"]) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+  // A single-segment verbose response carries the fields at the top level.
+  return typeof record.avg_logprob === "number" ? [record] : [];
 }
 
 function readSegmentText(entry: unknown): string {
