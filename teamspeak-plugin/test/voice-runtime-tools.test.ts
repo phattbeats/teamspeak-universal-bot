@@ -9,9 +9,12 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  TYPE_JOIN,
+  TYPE_LIST_CHANNELS,
   TYPE_MUSIC_AUDIO,
   TYPE_MUSIC_GAIN,
   TYPE_POKE,
+  TYPE_SEND_TEXT,
   type RosterEntry,
 } from "../src/bridge/protocol.js";
 import type { TeamSpeakAccountConfig } from "../src/config.js";
@@ -22,7 +25,7 @@ import {
   TeamSpeakVoiceRuntime,
   type VoiceSpeakerSession,
 } from "../src/voice/voice-runtime.js";
-import { MockBridge, rosterEntry } from "./mock-bridge.js";
+import { channelInfo, MockBridge, rosterEntry } from "./mock-bridge.js";
 
 class StubSpeakerSession implements VoiceSpeakerSession {
   label: string;
@@ -311,7 +314,101 @@ describe("TeamSpeakVoiceRuntime realtime tools", () => {
       "poke",
       "leave_voice",
       "join_voice",
+      "list_channels",
+      "move_to_channel",
+      "where_is",
+      "send_text",
     ]);
     runtime.stop();
+  });
+
+  describe("channel and presence tools over the bridge (PHA-3784)", () => {
+    /**
+     * `listChannels()` round-trips through the bridge with no request id, so
+     * every test here has to send `TYPE_LIST_CHANNELS`, then deliver the
+     * `channel_tree` reply itself — the mock bridge does not answer on its
+     * own, unlike `roster`/`state` which `beforeEach` primes once.
+     */
+    const TREE = [
+      channelInfo(1, "General Shit", [rosterEntry(11, "brandon"), rosterEntry(12, "Kai")]),
+      channelInfo(2, "AFK", [rosterEntry(20, "Steve")]),
+    ];
+
+    it("list_channels asks the bridge and reports occupants per channel", async () => {
+      const resultPromise = harness.call("list_channels");
+      expect(harness.bridge.sentOfType(TYPE_LIST_CHANNELS)).toHaveLength(1);
+      harness.bridge.deliver({ type: "channel_tree", channels: TREE });
+      const result = await resultPromise;
+
+      expect(result).toMatchObject({ ok: true, count: 2 });
+      expect(result.channels).toEqual([
+        { channelId: 1, name: "General Shit", occupantCount: 2, occupants: ["brandon", "Kai"] },
+        { channelId: 2, name: "AFK", occupantCount: 1, occupants: ["Steve"] },
+      ]);
+    });
+
+    it("move_to_channel by name sends a join for the resolved channel id", async () => {
+      const resultPromise = harness.call("move_to_channel", { channel: "afk" });
+      harness.bridge.deliver({ type: "channel_tree", channels: TREE });
+      const result = await resultPromise;
+
+      expect(result).toMatchObject({ ok: true, channel: "AFK", channelId: 2 });
+      expect(harness.bridge.sentOfType(TYPE_JOIN).at(-1)?.header).toEqual({ channel: "2" });
+    });
+
+    it("move_to_channel by numeric id resolves against the tree too", async () => {
+      const resultPromise = harness.call("move_to_channel", { channel: "1" });
+      harness.bridge.deliver({ type: "channel_tree", channels: TREE });
+      const result = await resultPromise;
+
+      expect(result).toMatchObject({ ok: true, channel: "General Shit", channelId: 1 });
+    });
+
+    it("move_to_channel follow moves to wherever the named person currently is", async () => {
+      const resultPromise = harness.call("move_to_channel", { follow: "steve" });
+      harness.bridge.deliver({ type: "channel_tree", channels: TREE });
+      const result = await resultPromise;
+
+      expect(result).toMatchObject({ ok: true, channel: "AFK", channelId: 2, following: "Steve" });
+      expect(harness.bridge.sentOfType(TYPE_JOIN).at(-1)?.header).toEqual({ channel: "2" });
+    });
+
+    it("where_is finds a nickname anywhere on the server", async () => {
+      const resultPromise = harness.call("where_is", { nickname: "steve" });
+      harness.bridge.deliver({ type: "channel_tree", channels: TREE });
+      const result = await resultPromise;
+
+      expect(result).toMatchObject({ ok: true, nickname: "Steve", channel: "AFK", channelId: 2 });
+    });
+
+    it("where_is reports no match instead of guessing", async () => {
+      const resultPromise = harness.call("where_is", { nickname: "nobody" });
+      harness.bridge.deliver({ type: "channel_tree", channels: TREE });
+      const result = await resultPromise;
+
+      expect(result.ok).toBe(false);
+    });
+
+    it("send_text sends a channel-targeted frame by default", async () => {
+      harness.bridge.clearSent();
+      const result = await harness.call("send_text", { text: "back in five" });
+
+      expect(result).toMatchObject({ ok: true, target: "channel" });
+      expect(harness.bridge.sentOfType(TYPE_SEND_TEXT)[0]?.header).toEqual({
+        target: "channel",
+        text: "back in five",
+      });
+    });
+
+    it("send_text sends a client-targeted frame resolved by nickname", async () => {
+      harness.bridge.clearSent();
+      const result = await harness.call("send_text", { text: "hey", target: "client", nickname: "kai" });
+
+      expect(result).toMatchObject({ ok: true, target: "client", nickname: "Kai" });
+      expect(harness.bridge.sentOfType(TYPE_SEND_TEXT)[0]?.header).toEqual({
+        target: 12,
+        text: "hey",
+      });
+    });
   });
 });

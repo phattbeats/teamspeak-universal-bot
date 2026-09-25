@@ -106,6 +106,27 @@ pub enum BridgeCommand {
     /// `ClientId`; the Sexton resolves it to the `ClientDbId` the TS3
     /// command actually needs.
     ServerGroupAddClient { server_group_id: u64, client_id: u16 },
+    /// Ask for the full channel tree — every channel on the server with
+    /// who currently occupies it (PHA-3784: `list_channels`, `where_is`,
+    /// and `move_to_channel`'s `follow <nickname>` all need to see
+    /// channels other than the Sexton's own). The Sexton answers with a
+    /// `BridgeEvent::ChannelTree` pushed back over the same broadcast
+    /// channel `Join`/`Poke` results would use if they had any — there is
+    /// no request/response correlation because `ws_server::run` only ever
+    /// serves the one bridge client a live Sexton has.
+    ListChannels,
+}
+
+/// One channel and who is sitting in it, as of the last `ListChannels`
+/// request (PHA-3784). `channel_id` is the `u64` inside `ChannelId` so it
+/// round-trips through `Join { channel: "<id>" }`, which already accepts a
+/// numeric channel spec via `audio::resolve_channel_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelInfo {
+    #[serde(rename = "channelId")]
+    pub channel_id: u64,
+    pub name: String,
+    pub occupants: Vec<RosterEntry>,
 }
 
 /// Where a `SendText` lands. The JSON shape mirrors the bridge's
@@ -162,6 +183,8 @@ pub enum BridgeEvent {
     /// the request was sent but the server's response is not parsed by this
     /// codebase yet — there is no ban-list notify-event listener wired up.
     ModerationResult { action: &'static str, ok: bool, detail: String },
+    /// Answer to `BridgeCommand::ListChannels` (PHA-3784).
+    ChannelTree(Vec<ChannelInfo>),
 }
 
 /// Snapshot of the Sexton's connection state. The bridge keeps one of
@@ -338,5 +361,35 @@ mod tests {
         }))
         .unwrap();
         assert!(entry.server_groups.is_empty());
+    }
+
+    #[test]
+    fn list_channels_command_parses_with_no_fields() {
+        let cmd: BridgeCommand = serde_json::from_value(serde_json::json!("ListChannels")).unwrap();
+        assert!(matches!(cmd, BridgeCommand::ListChannels));
+    }
+
+    #[test]
+    fn channel_tree_event_serializes_channel_id_and_occupants() {
+        let ev = BridgeEvent::ChannelTree(vec![
+            ChannelInfo {
+                channel_id: 1,
+                name: "Lobby".into(),
+                occupants: vec![RosterEntry {
+                    client_id: 42,
+                    nickname: "brandon".into(),
+                    muted: false,
+                    away: false,
+                    server_groups: vec![],
+                }],
+            },
+            ChannelInfo { channel_id: 2, name: "AFK".into(), occupants: vec![] },
+        ]);
+        let json = serde_json::to_value(&ev).unwrap();
+        let channels = &json["ChannelTree"];
+        assert_eq!(channels[0]["channelId"], 1);
+        assert_eq!(channels[0]["name"], "Lobby");
+        assert_eq!(channels[0]["occupants"][0]["nickname"], "brandon");
+        assert_eq!(channels[1]["occupants"].as_array().unwrap().len(), 0);
     }
 }

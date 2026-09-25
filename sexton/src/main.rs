@@ -1916,6 +1916,15 @@ async fn handle_bridge_command(
             };
             let _ = event_tx.send(ModerationResult { action: "server_group_add_client", ok, detail });
         }
+        BridgeCommand::ListChannels => {
+            match con.get_state() {
+                Ok(state) => {
+                    let tree = audio::build_channel_tree(state);
+                    let _ = event_tx.send(bridge_proto::BridgeEvent::ChannelTree(tree));
+                }
+                Err(e) => warn!(error = %e, "bridge list_channels: get_state failed"),
+            }
+        }
     }
 }
 

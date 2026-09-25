@@ -9,6 +9,7 @@ import {
   BridgeFrameError,
   decodeFrame,
   encodeFrame,
+  readChannelTree,
   readClientIdHeader,
   readModerationResult,
   readRoster,
@@ -21,12 +22,14 @@ import {
   TYPE_CHANNEL_CREATE,
   TYPE_CHANNEL_DELETE,
   TYPE_CHANNEL_EDIT,
+  TYPE_CHANNEL_TREE,
   TYPE_CLEAR_VOICE,
   TYPE_CLIENT_EDIT_MUTE,
   TYPE_CLIENT_KICK,
   TYPE_CLIENT_MOVE,
   TYPE_JOIN,
   TYPE_MODERATION_RESULT,
+  TYPE_LIST_CHANNELS,
   TYPE_MUSIC_AUDIO,
   TYPE_MUSIC_GAIN,
   TYPE_MUTE,
@@ -44,6 +47,7 @@ import {
   TYPE_VOICE_AUDIO,
   type BridgeStateHeader,
   type ModerationResult,
+  type ChannelInfo,
   type RosterEntry,
   type SpeakerAudioHeader,
   type TeamSpeakClientId,
@@ -70,6 +74,8 @@ export type BridgeClientEvents = {
   onSpeakerStart?: (clientId: TeamSpeakClientId) => void;
   onSpeakerStop?: (clientId: TeamSpeakClientId) => void;
   onRoster?: (roster: RosterEntry[]) => void;
+  /** Answer to `listChannels()`, pushed back with no request correlation (PHA-3784). */
+  onChannelTree?: (channels: ChannelInfo[]) => void;
   onTextMessage?: (message: TextMessageHeader) => void;
   onState?: (state: BridgeStateHeader) => void;
   /** Answer to any moderation command (PHA-3786). */
@@ -230,6 +236,15 @@ export class TeamSpeakBridgeClient {
     this.send(encodeFrame(TYPE_SERVER_GROUP_ADD_CLIENT, { serverGroupId, clientId }));
   }
 
+  /**
+   * Ask the bridge for the full channel tree. Fire-and-forget: the answer
+   * arrives asynchronously on `events.onChannelTree` (PHA-3784) — there is no
+   * per-request id, matching every other command on this connection.
+   */
+  listChannels(): void {
+    this.send(encodeFrame(TYPE_LIST_CHANNELS, {}));
+  }
+
   private send(frame: Buffer): void {
     if (!this.socket || !this.connected) {
       return;
@@ -303,6 +318,13 @@ export class TeamSpeakBridgeClient {
         const result = readModerationResult(frame.header);
         if (result) {
           events.onModerationResult?.(result);
+        }
+        return;
+      }
+      case TYPE_CHANNEL_TREE: {
+        const channels = readChannelTree(frame.header);
+        if (channels) {
+          events.onChannelTree?.(channels);
         }
         return;
       }

@@ -75,7 +75,11 @@
       "create_channel",
       "delete_channel",
       "edit_server",
-      "add_to_server_group"
+      "add_to_server_group",
+      "list_channels",
+      "move_to_channel",
+      "where_is",
+      "send_text"
     ]
   }
 }

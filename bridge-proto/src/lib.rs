@@ -54,7 +54,9 @@ pub mod events;
 pub mod handshake;
 
 pub use codec::{decode_frame, encode_frame, FrameError, FrameType, RawFrame};
-pub use events::{BridgeCommand, BridgeEvent, RosterEntry, SendTarget, Snapshot, StateSnapshot};
+pub use events::{
+    BridgeCommand, BridgeEvent, ChannelInfo, RosterEntry, SendTarget, Snapshot, StateSnapshot,
+};
 pub use handshake::{Hello, HelloAck};
 
 /// Default path for the Sexton's Unix socket inside the shared Docker volume.

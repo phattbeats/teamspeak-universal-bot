@@ -29,6 +29,8 @@ pub const TYPE_TEXT_MESSAGE: u8 = 0x05;
 pub const TYPE_STATE: u8 = 0x06;
 /// PHA-3786: result of a moderation command.
 pub const TYPE_MODERATION_RESULT: u8 = 0x07;
+/// PHA-3784: answer to `list_channels`.
+pub const TYPE_CHANNEL_TREE: u8 = 0x08;
 
 pub const TYPE_VOICE_AUDIO: u8 = 0x81;
 pub const TYPE_MUSIC_AUDIO: u8 = 0x82;
@@ -52,6 +54,9 @@ pub const TYPE_CHANNEL_CREATE: u8 = 0x91;
 pub const TYPE_CHANNEL_DELETE: u8 = 0x92;
 pub const TYPE_SERVER_EDIT: u8 = 0x93;
 pub const TYPE_SERVER_GROUP_ADD_CLIENT: u8 = 0x94;
+
+/// PHA-3784: ask for the full channel tree (answered with `TYPE_CHANNEL_TREE`).
+pub const TYPE_LIST_CHANNELS: u8 = 0x95;
 
 /// A decoded inbound frame, header-parsed but payload left raw. Same shape
 /// as `bridge_proto::RawFrame` — kept separate so the public WS protocol
