@@ -225,7 +225,7 @@ export type TeamSpeakVoiceConfig = {
  * at them.
  */
 export type TeamSpeakMusicConfig = {
-  /** Enable `play_music` / `stop_music` / `set_volume` (default: true). */
+  /** Enable `play_music` / `stop_music` / `set_volume` (default: false; PHA-3806 — fails closed for a foreign server). */
   enabled?: boolean;
   /** yt-dlp executable. Default: "yt-dlp". */
   ytdlpPath?: string;
@@ -373,8 +373,15 @@ export function areTeamSpeakToolsEnabled(config: TeamSpeakAccountConfig | undefi
   return config?.tools?.enabled !== false;
 }
 
+/**
+ * Fails closed (PHA-3806): music shells out to yt-dlp/ffmpeg and reaches the
+ * open internet on a server the operator may not own, so an unconfigured
+ * install must not do that by default. Sexton/Bexton's own deploy sets
+ * `tools.music.enabled: true` explicitly (`image/gateway/openclaw.seed.json`)
+ * and is unaffected by this default.
+ */
 export function isTeamSpeakMusicEnabled(config: TeamSpeakAccountConfig | undefined): boolean {
-  return areTeamSpeakToolsEnabled(config) && config?.tools?.music?.enabled !== false;
+  return areTeamSpeakToolsEnabled(config) && config?.tools?.music?.enabled === true;
 }
 
 // --- the house band (PHA-3554) -----------------------------------------------

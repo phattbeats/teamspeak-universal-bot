@@ -185,10 +185,12 @@ actual risk this section exists to head off:
   own TeamSpeak identity also needs the underlying server permission (a real TS server
   group) — see TOOL-CATALOG.md's prerequisite note; granting the config `allowGroups`
   without that just gets you `ModerationResult { ok: false }`.
-- **Music defaults to enabled** (`tools.music.enabled` defaults `true`) — it shells out
-  to `yt-dlp`/`ffmpeg`, not arbitrary commands, but it's still unrequested external
-  network activity on someone else's server. The example config above turns it off;
-  turn it back on deliberately once you've decided you want it.
+- **Music now fails closed** (`tools.music.enabled` defaults `false`, PHA-3806) — it
+  shells out to `yt-dlp`/`ffmpeg`, not arbitrary commands, but it's still unrequested
+  external network activity on someone else's server. Sexton/Bexton's own deploy sets
+  `tools.music.enabled: true` explicitly and is unaffected; a BYO install gets it off
+  until turned on deliberately. The example config's explicit `"enabled": false` above
+  is now redundant with the default but kept for clarity.
 - **The band/song-generation tools (`compose_song` etc.) already default off** in
   practice: they need an explicit `SEXTON_BAND_ENABLED`-equivalent provider
   configuration (MiniMax music, a self-hosted `suno-api`, or a custom `command`) to do
