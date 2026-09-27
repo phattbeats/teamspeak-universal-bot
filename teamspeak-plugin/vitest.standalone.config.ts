@@ -21,6 +21,7 @@ export default defineConfig({
       { find: "openclaw/plugin-sdk/config-contracts", replacement: stub("config-contracts") },
       { find: "openclaw/plugin-sdk/runtime-env", replacement: stub("runtime-env") },
       { find: "openclaw/plugin-sdk/tool-results", replacement: stub("tool-results") },
+      { find: "openclaw/plugin-sdk/tts-runtime", replacement: stub("tts-runtime") },
     ],
   },
   // tsconfig.json here is the upstream one, which extends a base that only

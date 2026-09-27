@@ -121,17 +121,15 @@ pass:
 itself already fails loudly per-turn when unconfigured — `speech.ts`'s
 `RuntimeSpeechSynthesizer` sets `disableFallback: true` deliberately ("Fail
 loudly instead" is in the existing code comment) and returns
-`{status:"failed", error}` rather than silently no-op'ing. What's missing is
-a *startup-time* signal: today a BYO operator only discovers TTS is
-unconfigured the first time someone talks to the bot, once per turn,
-forever. Deciding whether the standalone default should instead be "no TTS
-until configured, with one clear startup error" (matching the DoD's wording)
-versus keeping MiniMax as the default provider (since PHA-3790 already made
-providers config-swappable, and the host's `extensions/minimax` presumably
-gives its own error if the API key is missing at the *host* level regardless
-of this plugin) is a product call, not a code-correctness one — filed to
-Brandon as a decision rather than picked unilaterally in this pass, per
-"Open decisions" below.
+`{status:"failed", error}` rather than silently no-op'ing. **Resolved (Brandon, 2026-09-27: "startup check").** `createSttTtsLane` now asks
+the host's own `isTtsProviderConfigured` (`openclaw/plugin-sdk/tts-runtime`,
+same key resolution synthesis uses: config key, env key, or auth profile)
+once at startup. If the speech provider isn't configured the lane is refused
+with one warning naming the provider and where to configure it, exactly like
+an unknown STT provider or a missing `bridgeUrl` — no per-turn failures.
+MiniMax stays the default *provider name*; it just no longer starts unless
+the gateway can actually use it. Regression test in
+`test/stt-tts-lane.test.ts`.
 
 ## Fixes shipped in this PR
 
@@ -147,21 +145,16 @@ Brandon as a decision rather than picked unilaterally in this pass, per
    merging silently.
 5. `docs/universal-bot/BYO-OPENCLAW.md` — updated the music-default section to
    match the new code default.
+6. `teamspeak-plugin/src/voice/stt-tts-lane.ts` + `speech.ts` — startup TTS
+   configured-check (finding 5), with an SDK stub for the standalone harness.
 
-## Open decisions (need Brandon's call, not a unilateral code change)
+## Decisions (answered 2026-09-27)
 
-- **TTS standalone default** (finding 5): keep MiniMax as the default speech
-  provider with a per-turn failure when unconfigured, or add a startup-time
-  check that refuses to activate voice at all until a provider is configured?
-- **`commandAllowFrom` foreign-server default** (finding 4): worth a new
-  config concept (e.g. an explicit trusted-channel opt-in) so a foreign
-  install can default to deny without changing Sexton/Bexton's own semi
-  -trusted-channel behavior, or is "documented risk, set `[]` yourself" the
-  accepted answer long-term?
-
-Both raised to Brandon via a request_confirmation on PHA-3806 rather than
-decided here, since either one is a product-defaults call and the second is
-also a new-config-option question that needs sign-off before implementation.
+- **TTS standalone default** (finding 5): startup check, refuse voice until
+  configured — implemented, see finding 5.
+- **`commandAllowFrom` foreign-server default** (finding 4): documented risk
+  is the accepted answer; no code change. BYO operators set
+  `commandAllowFrom: []` themselves (`BYO-OPENCLAW.md`, "Security defaults").
 
 ## Follow-ups filed
 

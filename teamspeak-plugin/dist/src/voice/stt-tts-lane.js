@@ -9,7 +9,8 @@ import {
   createTeamSpeakAgentTurn
 } from "./agent-turn.js";
 import {
-  RuntimeSpeechSynthesizer
+  RuntimeSpeechSynthesizer,
+  isHostSpeechProviderConfigured
 } from "./speech.js";
 import {
   ConcurrencyLimitedTranscriber,
@@ -36,6 +37,15 @@ function createSttTtsLane(params) {
     config: params.config,
     agentId: params.agentId
   });
+  if (!params.deps?.createSynthesizer) {
+    const isConfigured = params.deps?.isSpeechProviderConfigured ?? isHostSpeechProviderConfigured;
+    if (!isConfigured(speech.provider, params.cfg)) {
+      return {
+        ok: false,
+        reason: `voice.streaming.speech: TTS provider "${speech.provider}" is not configured on this gateway. Configure it under messages.tts (API key etc.), or pick another with channels.teamspeak.voice.streaming.speech.provider.`
+      };
+    }
+  }
   let primaryTranscriber;
   if (params.deps?.createTranscriber) {
     primaryTranscriber = params.deps.createTranscriber(transcription);

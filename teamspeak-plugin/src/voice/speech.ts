@@ -14,6 +14,8 @@
  * already runs (`src/tools/music.ts`), from the same image.
  */
 import { spawn } from "node:child_process";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isTtsProviderConfigured, resolveTtsConfig } from "openclaw/plugin-sdk/tts-runtime";
 import type { ResolvedTeamSpeakSpeechConfig } from "../config.js";
 
 export type SpeechSynthesisOutcome =
@@ -37,6 +39,11 @@ export type SpeechSynthesizer = {
  * `runCommandFromIngress`-style signatures assign to this seam inside a real
  * OpenClaw checkout without the plugin importing the host's config types.
  */
+/** The host's own "can this speech provider synthesize" check, against the gateway config. */
+export function isHostSpeechProviderConfigured(provider: string, cfg: OpenClawConfig): boolean {
+  return isTtsProviderConfigured(resolveTtsConfig(cfg), provider, cfg);
+}
+
 export type TeamSpeakTtsRuntime = {
   prepareTtsRequest(params: {
     cfg: unknown;

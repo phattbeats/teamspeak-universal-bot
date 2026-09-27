@@ -491,6 +491,38 @@ describe("stt-tts lane construction", () => {
     expect(refused.reason).toContain("whisper-local");
   });
 
+  it("refuses at startup when the TTS provider is not configured on the gateway", () => {
+    const asked: string[] = [];
+    const refused = createSttTtsLane({
+      cfg: {} as never,
+      config: baseConfig({ voice: { mode: "stt-tts" } }),
+      accountId: "default",
+      agentId: "sexton",
+      sessionKey: "teamspeak:default",
+      runtime: {
+        agent: { runCommandFromIngress: async () => ({ payloads: [] }) },
+        tts: {
+          prepareTtsRequest: () => ({ cfg: {}, directives: { cleanedText: "", overrides: {} } }),
+          textToSpeech: async () => ({ success: false }),
+        },
+      },
+      humanParticipantCount: () => 1,
+      deps: {
+        isSpeechProviderConfigured: (provider) => {
+          asked.push(provider);
+          return false;
+        },
+      },
+    });
+
+    expect(asked).toEqual(["minimax"]);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) {
+      return;
+    }
+    expect(refused.reason).toContain('TTS provider "minimax" is not configured');
+  });
+
   /** The lane with no fake transcriber injected, so the registry does the choosing. */
   const laneFromConfig = (
     voice: NonNullable<TeamSpeakAccountConfig["voice"]>,
