@@ -1,3 +1,6 @@
+import {
+  elapsedMs
+} from "./stt-provider.js";
 class RoutingTranscriber {
   constructor(params) {
     this.params = params;
@@ -10,40 +13,46 @@ class RoutingTranscriber {
   get id() {
     return `${this.params.primary.id}+${this.params.secondary.id}`;
   }
-  async transcribe(request) {
-    return (await this.transcribeDetailed(request)).text;
+  /**
+   * Hosted if *either* leg is: a composite that can send audio off the box is
+   * not a local transcriber, whichever leg usually answers.
+   */
+  get kind() {
+    return this.params.primary.kind === "hosted" || this.params.secondary.kind === "hosted" ? "hosted" : "local";
   }
-  async transcribeDetailed(request) {
+  async transcribe(request) {
+    const startedAt = this.now();
     const { primary, secondary, config } = this.params;
-    if (request.prefer === "secondary" && !secondary.isBackedOff()) {
+    const ms = () => elapsedMs(startedAt, this.now);
+    if (request.prefer === "secondary" && !isBackedOff(secondary)) {
       const forced = await this.trySecondary(request);
       if (forced !== void 0) {
-        return { text: forced, provider: secondary.id, escalated: true };
+        return { ...forced, ms: ms(), escalated: true };
       }
     }
-    const text = await primary.transcribe(request);
-    if (!this.shouldEscalate({ text, request })) {
-      return { text, provider: primary.id, escalated: false };
+    const first = await primary.transcribe(request);
+    if (!this.shouldEscalate({ text: first.text, request })) {
+      return { ...first, ms: ms(), escalated: false };
     }
-    if (secondary.isBackedOff()) {
+    if (isBackedOff(secondary)) {
       this.params.log?.(
-        `teamspeak voice: stt escalation skipped, ${secondary.id} backed off for ${Math.round(secondary.backoffRemainingMs() / 1e3)}s more`
+        `teamspeak voice: stt escalation skipped, ${secondary.id} backed off for ${Math.round((secondary.backoffRemainingMs?.() ?? 0) / 1e3)}s more`
       );
-      return { text, provider: primary.id, escalated: false };
+      return { ...first, ms: ms(), escalated: false };
     }
     if (this.isFutile(request.label)) {
-      return { text, provider: primary.id, escalated: false };
+      return { ...first, ms: ms(), escalated: false };
     }
     const better = await this.trySecondary(request);
     if (better === void 0) {
-      return { text, provider: primary.id, escalated: true };
+      return { ...first, ms: ms(), escalated: true };
     }
-    if (!better) {
+    if (!better.text) {
       this.noteFruitless(request.label);
-      return { text: "", provider: secondary.id, escalated: true };
+      return { ...better, text: "", ms: ms(), escalated: true };
     }
     this.fruitless.delete(request.label);
-    return { text: better, provider: secondary.id, escalated: true };
+    return { ...better, ms: ms(), escalated: true };
   }
   /** True while this speaker is suppressed for producing nothing repeatedly. */
   isFutile(label) {
@@ -71,13 +80,15 @@ class RoutingTranscriber {
     }
     this.fruitless.set(label, state);
   }
-  /** Returns the transcript, or undefined when the secondary failed outright. */
+  /** Returns the secondary's result, or undefined when it failed outright. */
   async trySecondary(request) {
     try {
       return await this.params.secondary.transcribe(request);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.params.log?.(`teamspeak voice: stt secondary failed, keeping whisper: ${message}`);
+      this.params.log?.(
+        `teamspeak voice: stt secondary failed, keeping ${this.params.primary.id}: ${message}`
+      );
       return void 0;
     }
   }
@@ -88,6 +99,9 @@ class RoutingTranscriber {
     }
     return !input.text && durationMs >= this.params.config.emptyEscalationMinMs;
   }
+}
+function isBackedOff(provider) {
+  return provider.isBackedOff?.() ?? false;
 }
 export {
   RoutingTranscriber

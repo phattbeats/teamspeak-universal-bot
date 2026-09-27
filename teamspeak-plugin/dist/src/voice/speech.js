@@ -1,4 +1,8 @@
 import { spawn } from "node:child_process";
+import { isTtsProviderConfigured, resolveTtsConfig } from "openclaw/plugin-sdk/tts-runtime";
+function isHostSpeechProviderConfigured(provider, cfg) {
+  return isTtsProviderConfigured(resolveTtsConfig(cfg), provider, cfg);
+}
 const DEFAULT_SPAWN = (command, args) => spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
 const STDERR_KEEP_BYTES = 2e3;
 class RuntimeSpeechSynthesizer {
@@ -160,5 +164,6 @@ export {
   RuntimeSpeechSynthesizer,
   buildTtsOverride,
   decodeAudioFileToBridgePcm,
+  isHostSpeechProviderConfigured,
   splitIntoSpeechChunks
 };

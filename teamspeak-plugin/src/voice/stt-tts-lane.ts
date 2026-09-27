@@ -39,6 +39,7 @@ import {
 import type { RoomPlaybackQueue } from "./room-playback.js";
 import {
   RuntimeSpeechSynthesizer,
+  isHostSpeechProviderConfigured,
   type SpeechSynthesizer,
   type TeamSpeakTtsRuntime,
 } from "./speech.js";
@@ -59,6 +60,8 @@ export type SttTtsLaneDeps = {
   createSynthesizer?: (() => SpeechSynthesizer) | undefined;
   runAgentTurn?: TeamSpeakVoiceAgentTurn | undefined;
   removeFile?: ((path: string) => Promise<void> | void) | undefined;
+  /** Whether the host can synthesize with `provider`. Defaults to the host's own check. */
+  isSpeechProviderConfigured?: ((provider: string, cfg: OpenClawConfig) => boolean) | undefined;
 };
 
 export type SttTtsLaneParams = {
@@ -139,6 +142,23 @@ export function createSttTtsLane(
     config: params.config,
     agentId: params.agentId,
   });
+
+  // TTS is checked once, here, rather than discovered on the first turn: an
+  // unconfigured speech provider would otherwise fail every reply, forever, and
+  // a stranger's install only learns that when someone talks to the bot
+  // (PHA-3806). Skipped when a test supplies its own synthesizer.
+  if (!params.deps?.createSynthesizer) {
+    const isConfigured = params.deps?.isSpeechProviderConfigured ?? isHostSpeechProviderConfigured;
+    if (!isConfigured(speech.provider, params.cfg)) {
+      return {
+        ok: false,
+        reason:
+          `voice.streaming.speech: TTS provider "${speech.provider}" is not configured on this gateway. ` +
+          `Configure it under messages.tts (API key etc.), or pick another with ` +
+          `channels.teamspeak.voice.streaming.speech.provider.`,
+      };
+    }
+  }
 
   // The primary slot. An unknown name, or a hosted provider without
   // `allowHosted`, refuses the lane outright: transcription is the lane, so a

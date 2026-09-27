@@ -1,4 +1,9 @@
+import { DEFAULT_WHISPER_URL } from "../config.js";
 import { convertBridgePcm48kMonoToSttPcm16k, encodeWavPcm16Mono } from "./audio.js";
+import {
+  elapsedMs,
+  WHISPER_LOCAL_PROVIDER_ID
+} from "./stt-provider.js";
 const SPEAKER_CLIENT_ID_HEADER = "x-speaker-client-id";
 const NON_SPEECH_TRANSCRIPTS = /* @__PURE__ */ new Set([
   "[blank_audio]",
@@ -19,33 +24,43 @@ class LocalWhisperTranscriber {
   constructor(params) {
     this.params = params;
     this.fetchFn = params.fetchFn ?? defaultWhisperFetch;
+    this.now = params.now ?? Date.now;
   }
   params;
+  kind = "local";
   fetchFn;
+  now;
   get id() {
-    return this.params.config.provider;
+    return WHISPER_LOCAL_PROVIDER_ID;
   }
   async transcribe(request) {
+    const startedAt = this.now();
     const pcm16k = convertBridgePcm48kMonoToSttPcm16k(request.pcm48kMono);
     if (pcm16k.length === 0) {
-      return "";
+      return { text: "", provider: this.id, ms: elapsedMs(startedAt, this.now) };
     }
     const wav = encodeWavPcm16Mono(pcm16k);
     const config = this.params.config;
+    const wantsConfidence = config.confidence;
     const form = new FormData();
     form.append("file", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "segment.wav");
-    form.append("response_format", "json");
+    form.append("response_format", wantsConfidence ? "verbose_json" : "json");
     form.append("temperature", "0");
-    if (config.language && config.language !== "auto") {
-      form.append("language", config.language);
+    const language = request.lang?.trim() || config.language;
+    if (language && language !== "auto") {
+      form.append("language", language);
     }
     if (config.model) {
       form.append("model", config.model);
     }
+    const prompt = request.prompt?.trim() || config.prompt?.trim();
+    if (prompt) {
+      form.append("prompt", prompt);
+    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
     try {
-      const response = await this.fetchFn(config.url, {
+      const response = await this.fetchFn(this.params.url, {
         method: "POST",
         body: form,
         signal: controller.signal,
@@ -54,15 +69,34 @@ class LocalWhisperTranscriber {
       const body = await response.text();
       if (!response.ok) {
         throw new Error(
-          `whisper-local HTTP ${response.status} from ${config.url}: ${firstLine(body)}`
+          `whisper-local HTTP ${response.status} from ${this.params.url}: ${firstLine(body)}`
         );
       }
-      return normalizeTranscript(readTranscriptText(body));
+      const confidence = wantsConfidence ? readWhisperConfidence(body) : void 0;
+      return {
+        text: normalizeTranscript(readTranscriptText(body)),
+        provider: this.id,
+        ms: elapsedMs(startedAt, this.now),
+        ...confidence !== void 0 ? { confidence } : {}
+      };
     } finally {
       clearTimeout(timeout);
     }
   }
 }
+const whisperLocalFactory = {
+  id: WHISPER_LOCAL_PROVIDER_ID,
+  kind: "local",
+  aliases: ["whisper", "whisper-cpp"],
+  create: (context) => ({
+    ok: true,
+    provider: new LocalWhisperTranscriber({
+      config: context.config,
+      url: context.config.url?.trim() || context.env.TEAMSPEAK_WHISPER_URL?.trim() || DEFAULT_WHISPER_URL,
+      ...context.log ? { log: context.log } : {}
+    })
+  })
+};
 const defaultWhisperFetch = (url, init) => fetch(url, init);
 function readTranscriptText(body) {
   const trimmed = body.trim();
@@ -91,6 +125,49 @@ function readTranscriptText(body) {
     }
   }
   return "";
+}
+function readWhisperConfidence(body) {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return void 0;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return void 0;
+  }
+  const logprobs = [];
+  for (const segment of collectSegments(parsed)) {
+    if (!segment || typeof segment !== "object") {
+      continue;
+    }
+    const value = segment.avg_logprob;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      logprobs.push(value);
+    }
+  }
+  if (logprobs.length === 0) {
+    return void 0;
+  }
+  const mean = logprobs.reduce((sum, value) => sum + value, 0) / logprobs.length;
+  return Math.min(1, Math.max(0, Math.exp(mean)));
+}
+function collectSegments(parsed) {
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return [];
+  }
+  const record = parsed;
+  for (const key of ["segments", "transcription"]) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+  return typeof record.avg_logprob === "number" ? [record] : [];
 }
 function readSegmentText(entry) {
   if (typeof entry === "string") {
@@ -121,6 +198,9 @@ function firstLine(text) {
 export {
   LocalWhisperTranscriber,
   SPEAKER_CLIENT_ID_HEADER,
+  WHISPER_LOCAL_PROVIDER_ID,
   normalizeTranscript,
-  readTranscriptText
+  readTranscriptText,
+  readWhisperConfidence,
+  whisperLocalFactory
 };
