@@ -14,7 +14,7 @@ function areTeamSpeakToolsEnabled(config) {
   return config?.tools?.enabled !== false;
 }
 function isTeamSpeakMusicEnabled(config) {
-  return areTeamSpeakToolsEnabled(config) && config?.tools?.music?.enabled !== false;
+  return areTeamSpeakToolsEnabled(config) && config?.tools?.music?.enabled === true;
 }
 const DEFAULT_BAND_PROVIDER = "minimax";
 const DEFAULT_BAND_GENERATE_TIMEOUT_MS = 36e4;

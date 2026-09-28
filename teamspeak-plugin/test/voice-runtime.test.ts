@@ -463,6 +463,7 @@ describe("the house band tells the agent when it settles (PHA-3601)", () => {
     const harness = createHarness(
       {
         tools: {
+          music: { enabled: true },
           band: {
             enabled: true,
             provider: "command",
@@ -492,6 +493,7 @@ describe("the house band tells the agent when it settles (PHA-3601)", () => {
     const harness = createHarness(
       {
         tools: {
+          music: { enabled: true },
           band: {
             enabled: true,
             provider: "command",

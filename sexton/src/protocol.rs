@@ -112,13 +112,10 @@ pub fn encode_frame(msg_type: u8, header: &impl Serialize, payload: &[u8]) -> Ve
 }
 
 // ---------------------------------------------------------------------------
-// Outbound headers — re-export the bridge-proto types so the WS server
-// doesn't have to convert between equivalent shapes. `StateSnapshot`
-// lives in both places; this is the seam. (RosterEntry the WS layer builds
-// directly from the bridge-proto type via `&[]` payloads, no re-export.)
+// Outbound headers. `StateSnapshot`/`RosterEntry` live in bridge-proto; the
+// WS layer (ws_server.rs) imports them straight from there and builds them
+// via `&[]` payloads, so no re-export lives here.
 // ---------------------------------------------------------------------------
-
-pub use bridge_proto::StateSnapshot;
 
 #[derive(Serialize)]
 pub struct SpeakerAudioHeader {
@@ -198,11 +195,6 @@ pub struct PokeHeader {
 pub struct SendTextHeader {
     pub target: serde_json::Value,
     pub text: String,
-}
-
-#[derive(Deserialize)]
-pub struct VoiceAudioHeader {
-    pub count: usize,
 }
 
 // --- moderation (PHA-3786) --------------------------------------------------
