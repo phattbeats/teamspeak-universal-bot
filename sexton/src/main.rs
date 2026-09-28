@@ -66,8 +66,8 @@ use tsclientlib::messages::c2s::{
 };
 use tsclientlib::{
     events::{Event, PropertyId},
-    ChannelId, ClientDbId, ClientId, Connection, Identity, MessageHandle, MessageTarget, Reason,
-    ServerGroupId, StreamItem,
+    ChannelId, ClientId, Connection, Identity, MessageHandle, MessageTarget, Reason, ServerGroupId,
+    StreamItem,
 };
 
 mod audio;

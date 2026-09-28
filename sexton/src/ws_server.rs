@@ -35,7 +35,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
 use bridge_proto::{
-    events::{BridgeCommand, BridgeEvent, RosterEntry, SendTarget, Snapshot},
+    events::{BridgeCommand, BridgeEvent, SendTarget, Snapshot},
     StateSnapshot,
 };
 
@@ -337,6 +337,7 @@ fn encode_event(ev: &BridgeEvent) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bridge_proto::events::RosterEntry;
 
     /// A client connecting to a settled bridge is owed the current state and
     /// roster, not silence until the next join/leave.
