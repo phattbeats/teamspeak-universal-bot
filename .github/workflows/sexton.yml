@@ -166,6 +166,16 @@ jobs:
             /usr/local/.ghcup "$AGENT_TOOLSDIRECTORY" || true
           df -h /
 
+      # buildkit runs rust-builder and whisper-src concurrently, and together
+      # they intermittently get the hosted runner shut down mid-compile
+      # (exit 143, no log kept; hit main and PR #35 alike). Build the two
+      # heavy stages one at a time so the full build below is cache hits.
+      - name: Build rust-builder stage
+        run: docker build -f image/Dockerfile --target rust-builder --build-arg WITH_POT=0 .
+
+      - name: Build whisper-src stage
+        run: docker build -f image/Dockerfile --target whisper-src --build-arg WITH_POT=0 .
+
       # No push (no registry credentials wired yet, same as the `docker` job
       # above) and WITH_POT=0 (music still works without the POT token; the
       # bgutil-ytdlp-pot-provider clone/npm-install is the slowest optional
