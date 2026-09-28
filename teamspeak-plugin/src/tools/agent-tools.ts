@@ -34,7 +34,20 @@ import {
  * `contracts.tools`, and refuses the whole registration otherwise. Kept beside
  * the builder so the two cannot drift; `package.json` repeats the same list.
  */
-export const TEAMSPEAK_AGENT_TOOL_NAMES = buildTeamSpeakTools({ music: true, band: true }).map(
+/**
+ * Every tool, moderation and villain included (PHA-3820: Lexton runs the
+ * stt-tts lane, so until this his kick/move tools never reached the agent).
+ * Whether an account may actually use one is decided at dispatch:
+ * `moderation.*` flags + `allowGroups`, and `tools.villain.enabled`.
+ */
+const ALL_TOOL_OPTIONS = {
+  music: true,
+  band: true,
+  moderation: { kick: true, ban: true, edit: true },
+  villain: true,
+};
+
+export const TEAMSPEAK_AGENT_TOOL_NAMES = buildTeamSpeakTools(ALL_TOOL_OPTIONS).map(
   (tool) => tool.name,
 );
 
@@ -66,7 +79,7 @@ export type TeamSpeakAgentToolDeps = {
  */
 export function createTeamSpeakAgentTools(deps: TeamSpeakAgentToolDeps = {}): AgentTool[] {
   const resolveAccess = deps.resolveAccess ?? resolveTeamSpeakToolAccess;
-  return buildTeamSpeakTools({ music: true, band: true }).map((tool) => ({
+  return buildTeamSpeakTools(ALL_TOOL_OPTIONS).map((tool) => ({
     name: tool.name,
     label: tool.name,
     description: tool.description,
