@@ -163,8 +163,33 @@ fi
 # HUMAN.md is shared infrastructure, not persona content an operator hand-edits
 # per bot — always sync it from the image, even onto a workspace that already
 # exists, so a HUMAN.md fix ships without every persona needing re-seeding.
+#
+# PHA-3829: OpenClaw only injects AGENTS.md-class files, so a workspace
+# HUMAN.md never reached the prompt at all; the bots were told to "read" it
+# and never did. It lands as shared-tone/AGENTS.md instead, which the bundled
+# bootstrap-extra-files hook injects (configured below). A real file, not a
+# symlink: the hook refuses symlinked paths.
 if [ -d "$WS" ] && [ -f "${PERSONA_DIR}/HUMAN.md" ]; then
-  cp -f "${PERSONA_DIR}/HUMAN.md" "$WS/HUMAN.md"
+  mkdir -p "$WS/shared-tone"
+  cp -f "${PERSONA_DIR}/HUMAN.md" "$WS/shared-tone/AGENTS.md"
+  printf '# HUMAN.md\n\nMoved to shared-tone/AGENTS.md (PHA-3829). OpenClaw only injects AGENTS.md-type files, so this file never reached the prompt.\n' > "$WS/HUMAN.md"
+  node -e '
+    const fs = require("fs");
+    const p = process.env.OPENCLAW_CONFIG_PATH;
+    const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+    cfg.hooks = cfg.hooks || {};
+    cfg.hooks.internal = cfg.hooks.internal || {};
+    const entries = (cfg.hooks.internal.entries = cfg.hooks.internal.entries || {});
+    const hook = (entries["bootstrap-extra-files"] = entries["bootstrap-extra-files"] || {});
+    const paths = Array.isArray(hook.paths) ? hook.paths : [];
+    if (cfg.hooks.internal.enabled !== true || hook.enabled !== true || !paths.includes("shared-tone/AGENTS.md")) {
+      cfg.hooks.internal.enabled = true;
+      hook.enabled = true;
+      hook.paths = paths.includes("shared-tone/AGENTS.md") ? paths : [...paths, "shared-tone/AGENTS.md"];
+      fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+      console.log("run-gateway: bootstrap-extra-files hook now injects shared-tone/AGENTS.md");
+    }
+  '
 fi
 if [ -n "${SEXTON_AGENT_ID:-}" ] && [ "${SEXTON_AGENT_ID}" != "sexton" ]; then
   mkdir -p "$WS"
