@@ -1,0 +1,18 @@
+{
+  "voiceId": null,
+  "wakeNames": [],
+  "wakeAliases": [
+    "section",
+    "sections",
+    "sex and",
+    "sexin",
+    "saxton",
+    "sex ton",
+    "sex done"
+  ],
+  "excludeWakeNames": [
+    "Bexton",
+    "band leader",
+    "maestro"
+  ]
+}

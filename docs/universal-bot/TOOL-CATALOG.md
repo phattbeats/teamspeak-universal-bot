@@ -13,7 +13,7 @@ token control) and pluggable STT.
 | OpenClaw channel plugin | `teamspeak-plugin/` (TS) | STT→agent→TTS lane, wake gate, 12 agent tools, text commands |
 | STT | whisper.cpp pool container + MiniMax ASR fallback | already a provider switch (`sttProvider=whisper-local\|minimax`) |
 | TTS | MiniMax T2A (streaming) | per-bot `voiceId` |
-| Personas | `image/bexton/workspace/*.md` | Bexton versioned; **Sexton is NOT** (see §5) |
+| Personas | `personas/<name>/*.md` | Both versioned (PHA-3791 landed the persona-pack layout below; see §5) |
 
 Existing agent tools (`teamspeak-plugin/src/tools/registry.ts`):
 `play_music`, `stop_music`, `set_volume`, `what_did_i_miss`, `who_is_here`,
@@ -67,15 +67,29 @@ half of it. Token/turn control (§4.6) is also a latency fix.
 One image, N instances. Each instance = `persona pack` + `openclaw.json`
 overlay + TS identity. Everything else identical.
 
+**Shipped (PHA-3791, 2026-09-25):** the `personas/` layout below — one
+directory per bot holding its versioned SOUL/AGENTS/IDENTITY(/USER).md,
+avatar, `voice.json` (wake names/aliases/excludes, TTS voice id) and
+`tools.json` (`music`/`moderation`/`band` gates), sourced by
+`image/Dockerfile` and consumed as first-boot defaults by
+`image/run-gateway.sh`, with `image/deploy.sh` picking the persona via
+`PERSONA=<name>` (one script now serves both bots; `image/deploy-bexton.sh`
+shrank to `PERSONA=bexton` plus the couple of knobs — whisper thread count,
+credential-import source — that still have no sensible env-free default).
+`core/`, `plugin/`, `tools/`, `stt/` below remain the target shape, not yet
+reality: those stay `sexton/`, `teamspeak-plugin/` and no separate `tools/`
+or `stt/` tree exists.
+
 ```
 teamspeak-bot/
   core/            Rust client (today: sexton/), BridgeCommand grows moderation
   plugin/          OpenClaw channel plugin (today: teamspeak-plugin/)
   tools/           one file per tool group, each with its own allowlist key
   stt/             provider contract: whisper-local | minimax | <next>
-  personas/
-    sexton/  SOUL.md AGENTS.md IDENTITY.md voice.json tools.json
-    bexton/  ...
+  personas/                                                        [SHIPPED]
+    sexton/  SOUL.md AGENTS.md IDENTITY.md USER.md avatar.png voice.json tools.json
+    bexton/  SOUL.md AGENTS.md IDENTITY.md          avatar.png voice.json tools.json
+    HUMAN.md   (shared, copied into both persona workspaces at build time)
   image/           build + deploy, persona chosen by env PERSONA=sexton
 ```
 
@@ -191,6 +205,16 @@ channels.teamspeak.tools.moderation: {
   allowGroups: ["Server Admin"],
 }
 ```
+
+**PHA-3791 gave this a declarative home**: `personas/<name>/tools.json`'s
+`moderation` block is applied as the fresh-deploy default by
+`image/run-gateway.sh` (first boot only, same as everything else in that
+step). Both `personas/sexton/tools.json` and `personas/bexton/tools.json`
+ship the fail-closed default shown above with everything off and
+`allowGroups: []`, matching the fact that no script had ever set this before
+— it does not touch or overwrite the live moderation grants already applied
+by hand on the running sexton/bexton containers (PHA-3793/PHA-3797); wiring
+per-persona live permissions into the persona pack is follow-up work.
 
 - `kick`/`ban`/`edit` gate which tool *groups* get registered at all (per the
   table above).

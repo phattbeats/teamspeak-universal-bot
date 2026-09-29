@@ -34,7 +34,11 @@ COPY --from=builder /build/target/release/sexton /usr/local/bin/sexton
 COPY --from=builder /build/target/release/send-test /usr/local/bin/send-test
 COPY --from=builder /build/target/release/probe-channels /usr/local/bin/probe-channels
 COPY --from=builder /build/target/release/bridge-test /usr/local/bin/bridge-test
-COPY sexton/avatar/ /usr/local/share/sexton-avatar/
+# PHA-3791: the avatar used to live at sexton/avatar/brandon.png; it moved to
+# personas/sexton/avatar.png with the rest of the persona pack (see
+# image/Dockerfile and docs/universal-bot/TOOL-CATALOG.md section 3). Same
+# destination filename as before, so nothing downstream changes.
+COPY personas/sexton/avatar.png /usr/local/share/sexton-avatar/brandon.png
 COPY sexton/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 ENV RUST_LOG=info

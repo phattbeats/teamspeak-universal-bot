@@ -50,7 +50,7 @@
   <Category>Tools: Network:Voip</Category>
   <WebUI/>
   <TemplateURL/>
-  <Icon>https://raw.githubusercontent.com/phattbeats/plnt-sexton/main/image/bexton/avatar/bexton.png</Icon>
+  <Icon>https://raw.githubusercontent.com/phattbeats/plnt-sexton/main/personas/bexton/avatar.png</Icon>
   <ExtraParams>--restart unless-stopped</ExtraParams>
   <PostArgs/>
   <CPUset/>

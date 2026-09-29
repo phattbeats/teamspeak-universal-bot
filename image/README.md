@@ -62,7 +62,7 @@ things different, all env:
 
 | knob | Sexton | Bexton |
 | --- | --- | --- |
-| `SEXTON_AGENT_ID` | (empty: the imported `sexton` agent) | `bexton` — `run-gateway.sh` seeds `/opt/sexton-persona/bexton/` (`image/bexton/workspace/`) into the gateway workspace on first boot, adds the agent entry with the Sexton's model block, and binds the channel to it |
+| `SEXTON_AGENT_ID` | (empty: the imported `sexton` agent) | `bexton` — `run-gateway.sh` seeds `/opt/sexton-persona/bexton/` (`personas/bexton/`) into the gateway workspace on first boot, adds the agent entry with the Sexton's model block, and binds the channel to it |
 | `SEXTON_WAKE_NAMES` | seed default (`Sexton`, `Henchman`) | `Bexton,band leader,maestro` |
 | `SEXTON_WAKE_ALIASES` | `section,sections,sex and,sexin,saxton,sex ton,sex done` (exact whisper hearings, PHA-3605) | (empty) |
 | `SEXTON_EXCLUDE_WAKE_NAMES` | `Bexton,band leader,maestro` (never answer the other bot's name) | `Sexton,Henchman` |

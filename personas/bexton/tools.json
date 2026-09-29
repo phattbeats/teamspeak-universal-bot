@@ -1,0 +1,22 @@
+{
+  "music": {
+    "enabled": true
+  },
+  "moderation": {
+    "kick": false,
+    "ban": false,
+    "edit": false,
+    "allowGroups": []
+  },
+  "band": {
+    "enabled": true,
+    "provider": "suno-api",
+    "name": "The Velvet Vice Lounge Band",
+    "aliases": [
+      "Sgt. Bexton and the Digital Heart Club Band"
+    ],
+    "sunoApi": {
+      "baseUrl": "http://suno-api:3000"
+    }
+  }
+}

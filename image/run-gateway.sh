@@ -154,6 +154,13 @@ fi
 # Sexton's own entry and binding already come from the imported config.
 AGENT_ID_EFFECTIVE="${SEXTON_AGENT_ID:-sexton}"
 PERSONA_DIR="${SEXTON_PERSONA_DIR:-/opt/sexton-persona/${AGENT_ID_EFFECTIVE}}"
+# PHA-3791: voice.json/tools.json (the persona pack's declarative defaults for
+# wake names/aliases, TTS voice, and channels.teamspeak.tools.*) live in a
+# SIBLING directory, not inside PERSONA_DIR. They are read by step 3 below.
+# Deliberately not in PERSONA_DIR: everything in there gets `cp -a`-ed into
+# the agent workspace above, and these two files are config for this script,
+# not agent workspace content the model should see in its own directory.
+PERSONA_CONFIG_DIR="${SEXTON_PERSONA_CONFIG_DIR:-${PERSONA_DIR}.config}"
 WS="${OPENCLAW_STATE_DIR}/workspace/agents/${AGENT_ID_EFFECTIVE}"
 if [ ! -d "$WS" ] && [ -d "$PERSONA_DIR" ]; then
   echo "run-gateway: seeding the ${AGENT_ID_EFFECTIVE} workspace from ${PERSONA_DIR}"
@@ -249,6 +256,23 @@ if ! node -e '
     const ts = JSON.parse(
       fs.readFileSync("/opt/sexton-gateway/openclaw.seed.json", "utf8")
     ).channels.teamspeak;
+    // PHA-3791: the persona pack (personas/<id>/voice.json, tools.json,
+    // baked into the image at /opt/sexton-persona/<id>.config/) is the new
+    // default source for the fields below. SEXTON_* env vars still win when
+    // present -- image/deploy.sh keeps setting them for a hand-tuned
+    // redeploy -- this only changes what backs the default when they are
+    // not set. Read defensively: an operator-supplied SEXTON_PERSONA_DIR
+    // with no matching .config dir should not crash the boot.
+    const personaConfigDir = process.argv[1];
+    const readJson = (name) => {
+      try {
+        return JSON.parse(fs.readFileSync(`${personaConfigDir}/${name}`, "utf8"));
+      } catch (e) {
+        return {};
+      }
+    };
+    const personaVoice = readJson("voice.json");
+    const personaTools = readJson("tools.json");
     ts.channel = env.SEXTON_CHANNEL || ts.channel;
     ts.bridgeUrl = `ws://127.0.0.1:${(env.SEXTON_WS_BIND || "0.0.0.0:9099").split(":").pop()}`;
     // PHA-3598: SEXTON_WHISPER_URL points at the shared `whisper` pool
@@ -262,33 +286,66 @@ if ! node -e '
       "--extractor-args",
       `youtubepot-bgutilhttp:base_url=http://127.0.0.1:${env.POT_PORT || 4416}`,
     ];
+    if (typeof personaTools.music?.enabled === "boolean") {
+      ts.tools.music.enabled = personaTools.music.enabled;
+    }
     // Wake names follow the persona. Comma-separated; case variants are added
-    // because the wake gate matches the transcript literally.
+    // because the wake gate matches the transcript literally. Falls back to
+    // the persona packs voice.json when no env override is set; falls back
+    // further to the seeds own default (the Sextons names) if neither is set.
     if (env.SEXTON_WAKE_NAMES) {
       const names = env.SEXTON_WAKE_NAMES.split(",").map((n) => n.trim()).filter(Boolean);
       ts.voice.wakeNames = [...new Set(names.flatMap((n) => [n, n.toLowerCase()]))];
+    } else if (Array.isArray(personaVoice.wakeNames) && personaVoice.wakeNames.length) {
+      ts.voice.wakeNames = [...new Set(personaVoice.wakeNames.flatMap((n) => [n, n.toLowerCase()]))];
     }
     // PHA-3605: heard-aliases (exact whisper spellings of the name) and the
-    // other bot in the room. Always written, even when empty: Bexton imports
-    // the Sexton config and must not inherit the Sexton aliases.
+    // other bot in the room. The env var, when present, is always written,
+    // even when empty: Bexton imports the Sexton config and must not
+    // inherit the Sexton aliases. When the env var is not present at all,
+    // the persona packs voice.json is the default (an empty list there
+    // means the same "no aliases" the env-var path also supports).
     const csv = (v) => (v || "").split(",").map((n) => n.trim()).filter(Boolean);
-    ts.voice.wakeAliases = csv(env.SEXTON_WAKE_ALIASES);
-    ts.voice.excludeWakeNames = csv(env.SEXTON_EXCLUDE_WAKE_NAMES);
+    ts.voice.wakeAliases =
+      env.SEXTON_WAKE_ALIASES !== undefined ? csv(env.SEXTON_WAKE_ALIASES) : (personaVoice.wakeAliases || []);
+    ts.voice.excludeWakeNames =
+      env.SEXTON_EXCLUDE_WAKE_NAMES !== undefined
+        ? csv(env.SEXTON_EXCLUDE_WAKE_NAMES)
+        : (personaVoice.excludeWakeNames || []);
     // A voice of its own (PHA-3554, Brandon: a different MiniMax voice so
     // Bexton does not match the Sexton). The plugin passes this as the TTS
-    // override, so it wins over the voiceId in the imported tts block.
+    // override, so it wins over the voiceId in the imported tts block. The
+    // persona packs voiceId is null for a persona that keeps the imported
+    // voice (the Sexton today), same meaning as the env var being unset.
     if (env.SEXTON_TTS_VOICE_ID) {
       ts.voice.streaming.speech.voiceId = env.SEXTON_TTS_VOICE_ID;
+    } else if (personaVoice.voiceId) {
+      ts.voice.streaming.speech.voiceId = personaVoice.voiceId;
     }
+    // Moderation (PHA-3793/PHA-3786 catalog, never codified before this
+    // change): the persona packs tools.json is the only source for this --
+    // there is no SEXTON_MODERATION_* env knob. Fails closed by default
+    // (kick/ban/edit false, allowGroups empty) when the persona pack does
+    // not say otherwise. This is a fresh-deploy default only; it does not
+    // touch a config that already has a teamspeak block (the guard around
+    // this whole step), so it cannot overwrite the live hand-applied
+    // moderation grants on the running sexton/bexton containers.
+    ts.tools.moderation = personaTools.moderation || { kick: false, ban: false, edit: false, allowGroups: [] };
     // The house band (PHA-3554). Opt-in, and the MiniMax key is the one the
-    // TTS block already carries, so nobody types it twice.
-    if (env.SEXTON_BAND_ENABLED === "1") {
-      const provider = env.SEXTON_BAND_PROVIDER || "minimax";
+    // TTS block already carries, so nobody types it twice. SEXTON_BAND_ENABLED
+    // explicitly "1" or "0" wins; otherwise the persona packs tools.json
+    // band.enabled decides (false/absent for the Sexton, true for Bexton).
+    const personaBand = personaTools.band || {};
+    const bandEnvSet = env.SEXTON_BAND_ENABLED === "1" || env.SEXTON_BAND_ENABLED === "0";
+    const bandEnabled = bandEnvSet ? env.SEXTON_BAND_ENABLED === "1" : !!personaBand.enabled;
+    if (bandEnabled) {
+      const provider = env.SEXTON_BAND_PROVIDER || personaBand.provider || "minimax";
+      const name = env.SEXTON_BAND_NAME || personaBand.name;
       const band = {
         enabled: true,
         provider,
         songsDir: "/config/band-songs",
-        ...(env.SEXTON_BAND_NAME ? { name: env.SEXTON_BAND_NAME } : {}),
+        ...(name ? { name } : {}),
         // Pipe-separated (the names have commas in them). Unset keeps the
         // built-in billing; an explicit empty string means none. NO
         // apostrophes anywhere in this node script: it is a single-quoted
@@ -296,6 +353,8 @@ if ! node -e '
         // the first pha-3554 boot).
         ...(env.SEXTON_BAND_ALIASES !== undefined
           ? { aliases: env.SEXTON_BAND_ALIASES.split("|").map((n) => n.trim()).filter(Boolean) }
+          : personaBand.aliases
+          ? { aliases: personaBand.aliases }
           : {}),
       };
       const ttsKey = cfg.tts?.providers?.minimax?.apiKey;
@@ -307,8 +366,9 @@ if ! node -e '
           ...(env.SEXTON_BAND_MINIMAX_MODEL ? { model: env.SEXTON_BAND_MINIMAX_MODEL } : {}),
         };
       } else if (provider === "suno-api") {
+        const baseUrl = env.SEXTON_BAND_SUNO_API_URL || personaBand.sunoApi?.baseUrl;
         band.sunoApi = {
-          ...(env.SEXTON_BAND_SUNO_API_URL ? { baseUrl: env.SEXTON_BAND_SUNO_API_URL } : {}),
+          ...(baseUrl ? { baseUrl } : {}),
           ...(env.SEXTON_BAND_SUNO_API_KEY ? { apiKey: env.SEXTON_BAND_SUNO_API_KEY } : {}),
         };
       } else if (provider === "command") {
@@ -332,7 +392,7 @@ if ! node -e '
       cfg.agents.defaults.blockStreamingCoalesce = { minChars: 24, maxChars: 400, idleMs: 0 };
     }
     fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
-  '
+  ' "$PERSONA_CONFIG_DIR"
   chmod 0600 "$OPENCLAW_CONFIG_PATH"
 fi
 

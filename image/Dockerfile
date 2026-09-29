@@ -273,7 +273,10 @@ COPY --from=rust-builder /build/target/release/sexton          /usr/local/bin/se
 COPY --from=rust-builder /build/target/release/send-test       /usr/local/bin/send-test
 COPY --from=rust-builder /build/target/release/probe-channels  /usr/local/bin/probe-channels
 COPY --from=rust-builder /build/target/release/bridge-test     /usr/local/bin/bridge-test
-COPY sexton/avatar/ /usr/local/share/sexton-avatar/
+# PHA-3791: the default avatar used to live here (sexton/avatar/brandon.png,
+# an existing inconsistency with bexton whose avatar lived under image/).
+# It is now personas/sexton/avatar.png, copied below with the rest of the
+# persona pack — see the persona COPY block.
 
 # --- the ears ---
 COPY --from=whisper-src  /app/build/bin/                       /opt/whisper/bin/
@@ -312,17 +315,34 @@ COPY --from=plugin-builder /plugin/ /opt/openclaw-teamspeak-plugin/
 
 COPY image/supervisord.conf          /etc/supervisor/conf.d/sexton.conf
 COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json
-# PHA-3787: the Sexton's own persona, seeded the same way Bexton's already was
-# — this is the fix for "Sexton has no persona," see image/sexton/workspace.
-COPY image/sexton/workspace/           /opt/sexton-persona/sexton/
+# PHA-3791: one persona pack per bot under personas/<name>/ (SOUL.md,
+# AGENTS.md, IDENTITY.md, USER.md, avatar.png, voice.json, tools.json — see
+# docs/universal-bot/TOOL-CATALOG.md section 3). Copied file-by-file rather
+# than as a whole directory for two reasons: avatar.png does not belong next
+# to the workspace markdown (it goes to /usr/local/share/sexton-avatar/
+# instead, same destination filenames as before so nothing downstream
+# changes), and voice.json/tools.json must NOT land inside
+# /opt/sexton-persona/<id>/ at all — run-gateway.sh's first-boot workspace
+# seed does `cp -a` on every file in that directory, and those two are
+# config for run-gateway.sh itself, not agent workspace content. They go to
+# a sibling <id>.config/ directory the workspace seed never touches.
+#
+# PHA-3787: the Sexton's own persona, seeded the same way Bexton's already
+# was — this is the fix for "Sexton has no persona."
+COPY personas/sexton/AGENTS.md personas/sexton/IDENTITY.md \
+     personas/sexton/SOUL.md   personas/sexton/USER.md     /opt/sexton-persona/sexton/
+COPY personas/sexton/avatar.png        /usr/local/share/sexton-avatar/brandon.png
+COPY personas/sexton/voice.json personas/sexton/tools.json /opt/sexton-persona/sexton.config/
 # PHA-3554: the Bexton persona, seeded into the gateway workspace on first boot
 # when SEXTON_AGENT_ID=bexton. Same image, different agent in the chair.
-COPY image/bexton/workspace/           /opt/sexton-persona/bexton/
-COPY image/bexton/avatar/bexton.png    /usr/local/share/sexton-avatar/bexton.png
+COPY personas/bexton/AGENTS.md personas/bexton/IDENTITY.md \
+     personas/bexton/SOUL.md                                /opt/sexton-persona/bexton/
+COPY personas/bexton/avatar.png        /usr/local/share/sexton-avatar/bexton.png
+COPY personas/bexton/voice.json personas/bexton/tools.json /opt/sexton-persona/bexton.config/
 # PHA-3787: HUMAN.md is shared by every persona — copied into both persona
 # directories from one source so there is exactly one copy to edit.
-COPY image/workspace-common/HUMAN.md   /opt/sexton-persona/sexton/HUMAN.md
-COPY image/workspace-common/HUMAN.md   /opt/sexton-persona/bexton/HUMAN.md
+COPY personas/HUMAN.md   /opt/sexton-persona/sexton/HUMAN.md
+COPY personas/HUMAN.md   /opt/sexton-persona/bexton/HUMAN.md
 COPY image/run-sexton.sh             /usr/local/bin/run-sexton
 COPY image/run-whisper.sh            /usr/local/bin/run-whisper
 COPY image/run-pot.sh                /usr/local/bin/run-pot
