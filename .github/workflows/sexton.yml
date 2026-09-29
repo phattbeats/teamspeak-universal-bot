@@ -166,27 +166,44 @@ jobs:
             /usr/local/.ghcup "$AGENT_TOOLSDIRECTORY" || true
           df -h /
 
-      # No push (no registry credentials wired yet, same as the `docker` job
-      # above) and WITH_POT=0 (music still works without the POT token; the
+      # WITH_POT=0: music still works without the POT token; the
       # bgutil-ytdlp-pot-provider clone/npm-install is the slowest optional
-      # stage and buys nothing for this check).
-      - name: Build image/Dockerfile (no push)
+      # stage and buys nothing for this check.
+      #
+      # PHA-3822: never export the full image. `docker build -t` (load into
+      # the daemon) stalled on "exporting layers" for 11+ min on the hosted
+      # runner and got killed, on main too. Instead append a tiny scratch
+      # stage that COPYs only the plugin files out of the `runtime` stage and
+      # export just that to a local dir. BuildKit still has to build every
+      # stage `runtime` depends on, so the whole Dockerfile is proven to
+      # build; only the multi-GB layer export is skipped.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image/Dockerfile (runtime stage, plugin files only)
         run: |
-          docker build \
-            -f image/Dockerfile \
+          cat image/Dockerfile - > "$RUNNER_TEMP/ci.Dockerfile" <<'DOCKERFILE'
+
+          FROM scratch AS ci-plugin-check
+          COPY --from=runtime /opt/openclaw-teamspeak-plugin/openclaw.plugin.json /plugin/
+          COPY --from=runtime /opt/openclaw-teamspeak-plugin/index.ts /plugin/
+          COPY --from=runtime /opt/openclaw-teamspeak-plugin/node_modules/ws/package.json /plugin/node_modules/ws/
+          DOCKERFILE
+          docker buildx build \
+            -f "$RUNNER_TEMP/ci.Dockerfile" \
             --build-arg WITH_POT=0 \
-            -t phattbeats/sexton:ci-combined \
+            --target ci-plugin-check \
+            --output "type=local,dest=$RUNNER_TEMP/plugin-out" \
             .
 
       - name: Verify the plugin actually landed in the image
         run: |
-          docker run --rm --entrypoint sh phattbeats/sexton:ci-combined -c '
-            set -e
-            test -f /opt/openclaw-teamspeak-plugin/openclaw.plugin.json
-            test -f /opt/openclaw-teamspeak-plugin/index.ts
-            test -d /opt/openclaw-teamspeak-plugin/node_modules/ws
-            echo ok
-          '
+          set -e
+          cd "$RUNNER_TEMP/plugin-out/plugin"
+          test -f openclaw.plugin.json
+          test -f index.ts
+          test -f node_modules/ws/package.json
+          echo ok
 
   plugin:
     # PHA-3580: folded in from openclaw-teamspeak-plugin's own `test` workflow

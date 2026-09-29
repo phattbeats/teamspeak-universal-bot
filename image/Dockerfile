@@ -229,7 +229,7 @@ RUN npm install --omit=dev --no-audit --no-fund \
 #    It also already carries node 24, so the POT provider no longer needs node
 #    copied in from its builder stage.
 # --------------------------------------------------------------------------
-FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION}
+FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION} AS runtime
 ARG WHISPER_MODEL=ggml-base.en.bin
 
 # The gateway image declares USER node. Everything here needs root: apt, the
