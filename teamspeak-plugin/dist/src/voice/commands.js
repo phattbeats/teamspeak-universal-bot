@@ -1,4 +1,4 @@
-const VC_USAGE = "usage: !vc join [channel] | !vc leave | !vc mute [on|off]";
+const VC_USAGE = "usage: !vc join [channel] | !vc leave | !vc dismiss [bot] | !vc mute [on|off]";
 function normalizeMuteArgument(argument) {
   if (argument === void 0 || argument === "" || argument === "toggle") {
     return void 0;
@@ -56,6 +56,14 @@ function parseTeamSpeakCommand(message, params = {}) {
       };
     case "leave":
       return { ok: true, parsed: { ...base, command: { kind: "vc-leave" } } };
+    case "dismiss":
+      return {
+        ok: true,
+        parsed: {
+          ...base,
+          command: { kind: "vc-dismiss", ...tokens[2] ? { bot: tokens.slice(2).join(" ") } : {} }
+        }
+      };
     case "mute": {
       const requested = normalizeMuteArgument(tokens[2]?.toLowerCase());
       if (tokens[2] !== void 0 && requested === void 0 && tokens[2].toLowerCase() !== "toggle") {

@@ -174,6 +174,7 @@ class TeamSpeakSttTtsSpeakerSession {
       );
       return;
     }
+    this.params.onHeard?.(transcript, this.nickname);
     const gated = this.applyWakeGate(transcript, segment);
     if (!gated) {
       this.params.log?.(

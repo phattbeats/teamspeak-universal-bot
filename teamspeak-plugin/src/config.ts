@@ -11,6 +11,7 @@
  * encryption, autoJoin/followUsers by Discord user id) are replaced by their
  * TeamSpeak equivalents rather than carried over meaninglessly.
  */
+import type { TeamSpeakSummonerConfig } from "./tools/summoner.js";
 import {
   MINIMAX_ASR_PROVIDER_ID,
   WHISPER_LOCAL_PROVIDER_ID,
@@ -345,6 +346,8 @@ export type TeamSpeakToolsConfig = {
   band?: TeamSpeakBandConfig;
   moderation?: TeamSpeakModerationConfig;
   villain?: TeamSpeakVillainConfig;
+  /** The ts-summoner sidecar (PHA-3823): summon_bot / dismiss_bot / trash-talk crash-ins. */
+  summoner?: TeamSpeakSummonerConfig;
 };
 
 /**

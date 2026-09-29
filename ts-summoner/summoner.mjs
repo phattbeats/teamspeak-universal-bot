@@ -11,7 +11,8 @@
 // container) is stopped, so it drops off the roster. The gateway/brain stays up.
 // Voice can't summon anyone here -- ServerQuery gets no audio -- so a spoken
 // "hey bexton" only works through a bot that's already in the channel, via the
-// HTTP API below.
+// HTTP API below. Those bots also forward what they hear to POST /heard, so a
+// spoken jab at Lexton crashes him in under the same cooldown as chat (PHA-3823).
 //
 // No npm deps: `ssh` (+ sshpass) for the query, the Docker socket for exec.
 
@@ -222,15 +223,38 @@ function onChat(invokerName, rawMsg) {
     const startsWithName = bot.names.some((n) => text.trimStart().startsWith(n));
     if (startsWithName || has(text, cfg.rules.summonWords)) {
       summon(id, `${invokerName} called him in chat`);
-    } else if (bot.trashTalk && has(text, cfg.rules.insultWords)) {
-      if (now < st.crashCooldownUntil) {
-        log(`${id}: trash-talk heard, but still cooling down`);
-      } else {
-        st.crashCooldownUntil = now + bot.trashTalk.cooldownMin * MIN;
-        summon(id, `${invokerName} talked shit about him`, bot.trashTalk.stayMin);
-      }
+    } else {
+      trashTalk(id, text, invokerName);
     }
   }
+}
+
+// Named + insulted while away: crash in, once per cooldown. Returns true if summoned.
+function trashTalk(id, text, who) {
+  const bot = cfg.bots[id], st = state[id], now = Date.now();
+  if (!bot.trashTalk || !has(text, cfg.rules.insultWords)) return false;
+  if (now < st.crashCooldownUntil) {
+    log(`${id}: trash-talk heard, but still cooling down`);
+    return false;
+  }
+  st.crashCooldownUntil = now + bot.trashTalk.cooldownMin * MIN;
+  summon(id, `${who} talked shit about him`, bot.trashTalk.stayMin);
+  return true;
+}
+
+// PHA-3823: a transcript from a bot's STT. Voice only crashes in trash-talk
+// targets; a spoken "get Bexton in here" is the listening bot's summon_bot.
+function onHeard(who, raw) {
+  if (!who || BOT_NICKS.has(who.toLowerCase())) return []; // bots hear each other
+  const text = words(raw);
+  return namedBots(text).filter((id) => !desired(id, Date.now()).on && trashTalk(id, text, `${who} (voice)`));
+}
+
+// URL segment -> bot id; any configured name works ("lex", "luthor", "bex").
+function resolveBot(name) {
+  const n = decodeURIComponent(name || '').toLowerCase().trim();
+  if (cfg.bots[n]) return n;
+  return Object.entries(cfg.bots).find(([, b]) => b.names.includes(n))?.[0];
 }
 
 // -------------------------------------------------------- off-shift log --
@@ -397,12 +421,21 @@ http.createServer((req, res) => {
   const send = (code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
   if (req.method === 'GET' && verb === 'status') return send(200, status());
   if (req.method === 'POST' && (verb === 'summon' || verb === 'dismiss')) {
-    if (!cfg.bots[id]) return send(404, { error: `unknown bot ${id}` });
+    const bot = resolveBot(id);
+    if (!bot) return send(404, { error: `unknown bot ${id}` });
     const by = new URL(req.url, 'http://x').searchParams.get('by') || 'api';
-    if (verb === 'summon') summon(id, `summoned by ${by}`); else dismiss(id, `dismissed by ${by}`);
-    return send(200, status().bots[id]);
+    const before = status().bots[bot];
+    if (verb === 'summon') summon(bot, `summoned by ${by}`); else dismiss(bot, `dismissed by ${by}`);
+    return send(200, { bot, ...before });
   }
-  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot>' });
+  if (req.method === 'POST' && verb === 'heard') {
+    const by = new URL(req.url, 'http://x').searchParams.get('by') || '';
+    let body = '';
+    req.on('data', (c) => { if (body.length < 4000) body += c; });
+    req.on('end', () => send(200, { summoned: onHeard(by, body) }));
+    return;
+  }
+  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /heard?by=<speaker>' });
 }).listen(cfg.httpPort, () => log(`http on :${cfg.httpPort}`));
 
 setInterval(() => reconcile().catch((e) => log('reconcile', e.message)), cfg.reconcileSec * 1000);
