@@ -16,7 +16,7 @@
 // No npm deps: `ssh` (+ sshpass) for the query, the Docker socket for exec.
 
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 
 const CONFIG_PATH = process.env.SUMMONER_CONFIG || '/app/config.json';
@@ -233,6 +233,28 @@ function onChat(invokerName, rawMsg) {
   }
 }
 
+// -------------------------------------------------------- off-shift log --
+
+// PHA-3830: the room log is written by the logging bot's core, so nothing got
+// recorded while it was off shift and the next catch-up had nothing to say.
+// While that core is known stopped, append channel chat to the same file in
+// its own `HH:MM  nick: text` shape (UTC, like the core); it rehydrates the
+// file when it starts. Unknown state (null) writes nothing, to avoid doubles.
+function logChat(invokerName, rawMsg, targetmode) {
+  const cl = cfg.chatLog;
+  if (!cl || targetmode !== '2' || !invokerName || invokerName.includes(':')) return;
+  if (state[cl.whenOff]?.running !== false) return;
+  const text = rawMsg.replace(/\s+/g, ' ').trim();
+  if (!text) return;
+  const iso = new Date().toISOString();
+  try {
+    mkdirSync(cl.dir, { recursive: true });
+    appendFileSync(`${cl.dir}/${iso.slice(0, 10)}.md`, `${iso.slice(11, 16)}  ${invokerName}: ${text}\n`);
+  } catch (e) {
+    log('chat log:', e.message);
+  }
+}
+
 // ----------------------------------------------------------- ServerQuery --
 
 const unesc = (s) => s.replace(/\\(.)/g, (_, c) => ({ s: ' ', p: '|', '/': '/', '\\': '\\', n: '\n', t: '\t', r: '' }[c] ?? c));
@@ -326,7 +348,10 @@ async function pollRoom(q) {
 async function runQuery() {
   const q = new Query();
   q.onNotify = (kind, p) => {
-    if (kind === 'notifytextmessage') onChat(p.invokername, p.msg || '');
+    if (kind === 'notifytextmessage') {
+      logChat(p.invokername, p.msg || '', p.targetmode);
+      onChat(p.invokername, p.msg || '');
+    }
   };
   await q.connect();
   await q.cmd('use 1');
