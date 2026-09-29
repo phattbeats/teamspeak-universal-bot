@@ -310,15 +310,18 @@ RUN mkdir -p /etc/yt-dlp/plugins/bgutil \
 # also what makes it survive an image bump without a manual reinstall.
 COPY --from=plugin-builder /plugin/ /opt/openclaw-teamspeak-plugin/
 
-# PHA-3829: OpenClaw core appends a "Conversation info" JSON block, wrapped in
-# <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>, after every voice line. The bots read it
-# as something the speaker pasted and started accusing the room of tricking
-# them. Nothing in it is new (the body already says who spoke), and there is no
-# config switch for it, so drop it for TeamSpeak turns. The script fails the
-# build if an OPENCLAW_VERSION bump moves the code it patches.
-COPY image/gateway/patch-teamspeak-inbound-meta.mjs /tmp/patch-teamspeak-inbound-meta.mjs
-RUN node /tmp/patch-teamspeak-inbound-meta.mjs /app/dist \
-    && rm /tmp/patch-teamspeak-inbound-meta.mjs
+# PHA-3829: two narrow OpenClaw core patches for TeamSpeak turns, both caused
+# by the voice lane marking its turns ChatType "direct":
+#  - a "Conversation info" block wrapped in <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>
+#    rode after every line, and the bots took it for something the speaker
+#    pasted. Dropped; the line already says who spoke.
+#  - "direct" forbids silent replies, so every NO_REPLY got re-run until the bot
+#    said something. TeamSpeak turns get the group rule for that one decision.
+# No config switch covers either. The script fails the build if an
+# OPENCLAW_VERSION bump moves the code it patches.
+COPY image/gateway/patch-openclaw-teamspeak.mjs /tmp/patch-openclaw-teamspeak.mjs
+RUN node /tmp/patch-openclaw-teamspeak.mjs /app/dist \
+    && rm /tmp/patch-openclaw-teamspeak.mjs
 
 COPY image/supervisord.conf          /etc/supervisor/conf.d/sexton.conf
 COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json

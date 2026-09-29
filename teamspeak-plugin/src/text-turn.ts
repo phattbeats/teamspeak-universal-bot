@@ -9,7 +9,7 @@
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import type { TextMessageHeader } from "./bridge/protocol.js";
 import { runWithTeamSpeakTurnContext } from "./tools/turn-context.js";
-import type { TeamSpeakAgentRuntime } from "./voice/agent-turn.js";
+import { formatTeamSpeakClock, type TeamSpeakAgentRuntime } from "./voice/agent-turn.js";
 
 const TEAMSPEAK_TEXT_MESSAGE_PROVIDER = "teamspeak-text";
 
@@ -23,9 +23,9 @@ export type TeamSpeakTextTurnParams = {
 };
 
 /** Frame the message the way the voice lane frames an utterance. */
-export function formatTeamSpeakTextPrompt(message: TextMessageHeader): string {
+export function formatTeamSpeakTextPrompt(message: TextMessageHeader, at: number = Date.now()): string {
   const where = message.target === "client" ? "private message" : "channel";
-  return `[teamspeak ${where}] ${message.nickname} wrote: ${message.text}`;
+  return `[teamspeak ${where} · ${formatTeamSpeakClock(at)}] ${message.nickname} wrote: ${message.text}`;
 }
 
 export function createTeamSpeakTextTurn(params: TeamSpeakTextTurnParams) {

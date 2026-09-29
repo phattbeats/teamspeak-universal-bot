@@ -62,6 +62,8 @@ export type VoiceSpeakerSession = SpeakerSession & {
    * closes its segment on it, so the runtime forwards it when a session cares.
    */
   handleSpeakerStop?(): void;
+  /** Close the no-name follow-up window: another bot has the room now (PHA-3829). */
+  endFollowUp?(reason: string): void;
   readonly wakeNameRequired: boolean;
   readonly bargeInEnabled: boolean;
 };
@@ -156,6 +158,8 @@ export class TeamSpeakVoiceRuntime {
   private channelTreeWaiters: Array<(channels: ChannelInfo[]) => void> = [];
   private selfClientId: TeamSpeakClientId | undefined;
   private readonly chatTurnsInFlight = new Set<TeamSpeakClientId>();
+  /** Other bots in the channel that are mid-burst right now (PHA-3829). */
+  private readonly otherBotsSpeaking = new Set<TeamSpeakClientId>();
 
   constructor(private readonly params: TeamSpeakVoiceRuntimeParams) {
     this.playback = new RoomPlaybackQueue({
@@ -194,6 +198,8 @@ export class TeamSpeakVoiceRuntime {
           // The bridge hands out a fresh clientId per TeamSpeak session, so the
           // one we were filtering on is stale the moment the socket drops.
           this.selfClientId = undefined;
+          this.otherBotsSpeaking.clear();
+          this.playback.otherBotSpeaking = false;
           // The bridge owns the TeamSpeak connection. When it drops, every
           // clientId we were keyed on is void; rebuild from the next roster.
           this.sessions.closeAll(`bridge-disconnected:${reason}`);
@@ -221,6 +227,9 @@ export class TeamSpeakVoiceRuntime {
           this.handleSpeakerStart(clientId);
         },
         onSpeakerStop: (clientId) => {
+          if (this.otherBotsSpeaking.delete(clientId)) {
+            this.playback.otherBotSpeaking = this.otherBotsSpeaking.size > 0;
+          }
           if (this.parked) {
             return;
           }
@@ -585,6 +594,7 @@ export class TeamSpeakVoiceRuntime {
    * interrupted, so the rest are asked in turn rather than broadcast to.
    */
   private handleSpeakerStart(clientId: TeamSpeakClientId): void {
+    this.noteOtherBotSpeaking(clientId);
     const speaker = this.sessions.get(clientId) as VoiceSpeakerSession | undefined;
     if (speaker?.handleSpeakerStart(`speaker-start:${clientId}`)) {
       return;
@@ -600,6 +610,28 @@ export class TeamSpeakVoiceRuntime {
       if (session && session.handleSpeakerStart(`speaker-start:${clientId}`)) {
         return;
       }
+    }
+  }
+
+  /**
+   * Another bot started talking (PHA-3829). Two bots each holding a follow-up
+   * window on the same person answered every line that person said, on top of
+   * each other. Whoever speaks takes the room: every follow-up window here
+   * closes, and a new answer needs our name again.
+   */
+  private noteOtherBotSpeaking(clientId: TeamSpeakClientId): void {
+    if (this.sessions.hasSession(clientId)) {
+      return;
+    }
+    const entry = this.sessions.rosterEntries().find((client) => client.clientId === clientId);
+    if (!entry || !this.isExcludedNickname(entry.nickname)) {
+      return;
+    }
+    this.otherBotsSpeaking.add(clientId);
+    this.playback.otherBotSpeaking = true;
+    for (const key of this.sessions.sessionKeys()) {
+      const session = this.sessions.get(key) as VoiceSpeakerSession | undefined;
+      session?.endFollowUp?.(`other-bot:${entry.nickname}`);
     }
   }
 
