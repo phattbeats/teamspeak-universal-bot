@@ -67,6 +67,7 @@ for (const [id, bot] of Object.entries(cfg.bots)) {
     crashCooldownUntil: 0,
     running: null, // supervisor truth, refreshed each reconcile
     lastAction: 0,
+    onDuty: false, // last decision was 'on'; only an on-duty bot gets talk-grace
     graceLogged: false,
   };
 }
@@ -80,7 +81,9 @@ function desired(id, now) {
   if (onShift(bot, now)) return { on: true, why: 'on shift' };
   // Shift over: don't walk out mid-conversation. The query can see who is
   // talking (client_flag_talking), not what about, so any human voice counts.
-  if (st.running && now - room.lastHumanTalk < cfg.idleGraceMin * MIN) {
+  // Only for a bot we had on duty: a core that came back by itself (container
+  // restart, supervisord autostart) off shift gets stopped, not held (PHA-3831).
+  if (st.running && st.onDuty && now - room.lastHumanTalk < cfg.idleGraceMin * MIN) {
     return { on: true, why: 'shift over, waiting for the room to go quiet' };
   }
   return { on: false, why: 'off shift' };
@@ -171,6 +174,7 @@ async function reconcile() {
         continue;
       }
       const d = desired(id, now);
+      st.onDuty = d.on;
       if (d.on === st.running) continue;
       if (now - st.lastAction < 60_000) continue; // one move per bot per minute
       st.lastAction = now;
