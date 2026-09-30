@@ -17,7 +17,10 @@ set -eu
 # treats a clean exit here as "deliberately absent" (autorestart=unexpected).
 if [ "${WHISPER_ENABLED:-1}" = "0" ]; then
   echo "run-whisper: disabled by WHISPER_ENABLED=0 — STT comes from ${SEXTON_WHISPER_URL:-the shared whisper pool}."
-  exit 0
+  # PHA-3836: idle rather than exit. An exit inside startsecs is a failed
+  # start to supervisord no matter the exit code, so `exit 0` here looped
+  # forever (BACKOFF every ~10s); the live bots hid it with autostart=false.
+  exec sleep infinity
 fi
 
 : "${WHISPER_MODEL_PATH:=/opt/whisper/models/ggml-base.en.bin}"
