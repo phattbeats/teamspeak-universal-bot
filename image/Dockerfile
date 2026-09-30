@@ -352,17 +352,26 @@ COPY personas/bexton/AGENTS.md personas/bexton/IDENTITY.md \
      personas/bexton/SOUL.md                                /opt/sexton-persona/bexton/
 COPY personas/bexton/avatar.png        /usr/local/share/sexton-avatar/bexton.png
 COPY personas/bexton/voice.json personas/bexton/tools.json /opt/sexton-persona/bexton.config/
+# PHA-3836: the Lexton persona (PHA-3819), same shape as Bexton.
+COPY personas/lexton/AGENTS.md personas/lexton/IDENTITY.md \
+     personas/lexton/SOUL.md   personas/lexton/USER.md     /opt/sexton-persona/lexton/
+COPY personas/lexton/avatar.png        /usr/local/share/sexton-avatar/lexton.png
+COPY personas/lexton/voice.json personas/lexton/tools.json /opt/sexton-persona/lexton.config/
+COPY image/lexton/lexton-menace.cjs    /opt/sexton-menace/lexton-menace.cjs
 # PHA-3787: HUMAN.md is shared by every persona — copied into both persona
 # directories from one source so there is exactly one copy to edit.
 COPY personas/HUMAN.md   /opt/sexton-persona/sexton/HUMAN.md
 COPY personas/HUMAN.md   /opt/sexton-persona/bexton/HUMAN.md
+COPY personas/HUMAN.md   /opt/sexton-persona/lexton/HUMAN.md
 COPY image/run-sexton.sh             /usr/local/bin/run-sexton
 COPY image/run-whisper.sh            /usr/local/bin/run-whisper
 COPY image/run-pot.sh                /usr/local/bin/run-pot
 COPY image/run-gateway.sh            /usr/local/bin/run-gateway
+COPY image/run-menace.sh             /usr/local/bin/run-menace
 COPY image/healthcheck.sh            /usr/local/bin/sexton-healthcheck
 RUN chmod 0755 /usr/local/bin/run-sexton /usr/local/bin/run-whisper \
                /usr/local/bin/run-pot /usr/local/bin/run-gateway \
+               /usr/local/bin/run-menace \
                /usr/local/bin/sexton-healthcheck
 
 ENV RUST_LOG=info \

@@ -58,9 +58,12 @@ async function strike() {
   const pool = people.length > 1 ? people.filter((p) => p.nickname !== lastVictim) : people;
   const victim = pool[Math.floor(Math.random() * pool.length)];
   const text = (await writeLine(victim.nickname)).slice(0, 900);
-  await sendPm(victim.clientId, text);
+  // Short lines go out as a poke (pops up mid-screen), long ones as a DM.
+  const how = text.length <= 100 ? "poke" : "DM";
+  if (how === "poke") await withBridge((ws, done) => { ws.send(frame(0x88, { clientId: victim.clientId, text })); done(); });
+  else await sendPm(victim.clientId, text);
   lastVictim = victim.nickname;
-  log(`DM -> ${victim.nickname} (#${victim.clientId}): ${text}`);
+  log(`${how} -> ${victim.nickname} (#${victim.clientId}): ${text}`);
 }
 
 async function loop() {
