@@ -1,9 +1,10 @@
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { runWithTeamSpeakTurnContext } from "./tools/turn-context.js";
+import { formatTeamSpeakClock } from "./voice/agent-turn.js";
 const TEAMSPEAK_TEXT_MESSAGE_PROVIDER = "teamspeak-text";
-function formatTeamSpeakTextPrompt(message) {
+function formatTeamSpeakTextPrompt(message, at = Date.now()) {
   const where = message.target === "client" ? "private message" : "channel";
-  return `[teamspeak ${where}] ${message.nickname} wrote: ${message.text}`;
+  return `[teamspeak ${where} \xB7 ${formatTeamSpeakClock(at)}] ${message.nickname} wrote: ${message.text}`;
 }
 function createTeamSpeakTextTurn(params) {
   return async (message) => {

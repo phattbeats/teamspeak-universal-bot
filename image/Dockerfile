@@ -313,6 +313,19 @@ RUN mkdir -p /etc/yt-dlp/plugins/bgutil \
 # also what makes it survive an image bump without a manual reinstall.
 COPY --from=plugin-builder /plugin/ /opt/openclaw-teamspeak-plugin/
 
+# PHA-3829: two narrow OpenClaw core patches for TeamSpeak turns, both caused
+# by the voice lane marking its turns ChatType "direct":
+#  - a "Conversation info" block wrapped in <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>
+#    rode after every line, and the bots took it for something the speaker
+#    pasted. Dropped; the line already says who spoke.
+#  - "direct" forbids silent replies, so every NO_REPLY got re-run until the bot
+#    said something. TeamSpeak turns get the group rule for that one decision.
+# No config switch covers either. The script fails the build if an
+# OPENCLAW_VERSION bump moves the code it patches.
+COPY image/gateway/patch-openclaw-teamspeak.mjs /tmp/patch-openclaw-teamspeak.mjs
+RUN node /tmp/patch-openclaw-teamspeak.mjs /app/dist \
+    && rm /tmp/patch-openclaw-teamspeak.mjs
+
 COPY image/supervisord.conf          /etc/supervisor/conf.d/sexton.conf
 COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json
 # PHA-3791: one persona pack per bot under personas/<name>/ (SOUL.md,

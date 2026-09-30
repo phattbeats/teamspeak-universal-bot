@@ -91,7 +91,7 @@ describe("createTeamSpeakAgentTurn (block stream)", () => {
     });
     expect(call?.ctx).toMatchObject({ __finalized: true });
     expect(reply.finalized[0]).toMatchObject({
-      Body: "[teamspeak voice] phatt said: what did I miss",
+      Body: "[teamspeak voice · Wed 7:00 PM ET] phatt said: what did I miss",
       SessionKey: "agent:sexton:teamspeak:default",
       AgentId: "sexton",
       AccountId: "default",
@@ -215,7 +215,7 @@ describe("createTeamSpeakAgentTurn (ingress fallback)", () => {
     expect(blocks).toEqual([]);
     expect(result).toEqual({ text: "Whole reply.", path: "ingress", blocks: 0 });
     expect(calls[0]).toMatchObject({
-      message: "[teamspeak voice] phatt said: what did I miss",
+      message: expect.stringMatching(/^\[teamspeak voice · \w{3} \d{1,2}:\d{2} [AP]M ET\] phatt said: what did I miss$/),
       sessionKey: "k",
       agentId: "sexton",
       messageChannel: "teamspeak",
