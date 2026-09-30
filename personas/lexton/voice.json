@@ -1,0 +1,45 @@
+{
+  "voiceId": "English_ManWithDeepVoice",
+  "wakeNames": [
+    "Lexton",
+    "lexton",
+    "Luthor",
+    "luthor",
+    "Villain",
+    "villain"
+  ],
+  "wakeAliases": [
+    "lex",
+    "lex luthor",
+    "lex luther",
+    "mr luthor",
+    "luther",
+    "lexin",
+    "lecton",
+    "lexten",
+    "lex ton",
+    "villian",
+    "the villain"
+  ],
+  "excludeWakeNames": [
+    "Sexton",
+    "Bexton",
+    "Henchman",
+    "band leader",
+    "maestro",
+    "lesson",
+    "lessen",
+    "lessons",
+    "lemon",
+    "lepton",
+    "lexicon",
+    "left on",
+    "left one",
+    "lets on",
+    "villa",
+    "violin",
+    "village",
+    "villas",
+    "villager"
+  ]
+}
