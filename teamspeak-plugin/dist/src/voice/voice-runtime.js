@@ -72,6 +72,8 @@ class TeamSpeakVoiceRuntime {
         onDisconnected: (reason) => {
           this.params.onConnectionChange?.(false);
           this.selfClientId = void 0;
+          this.otherBotsSpeaking.clear();
+          this.playback.otherBotSpeaking = false;
           this.sessions.closeAll(`bridge-disconnected:${reason}`);
           this.playback.handleBargeIn("bridge-disconnected", { force: true });
           this.music?.stop(`bridge-disconnected:${reason}`);
@@ -92,6 +94,9 @@ class TeamSpeakVoiceRuntime {
           this.handleSpeakerStart(clientId);
         },
         onSpeakerStop: (clientId) => {
+          if (this.otherBotsSpeaking.delete(clientId)) {
+            this.playback.otherBotSpeaking = this.otherBotsSpeaking.size > 0;
+          }
           if (this.parked) {
             return;
           }
@@ -168,6 +173,8 @@ class TeamSpeakVoiceRuntime {
   channelTreeWaiters = [];
   selfClientId;
   chatTurnsInFlight = /* @__PURE__ */ new Set();
+  /** Other bots in the channel that are mid-burst right now (PHA-3829). */
+  otherBotsSpeaking = /* @__PURE__ */ new Set();
   /**
    * Lexton's villain tools (PHA-3820), off unless `tools.villain.enabled`.
    * `start()` re-arms reverts a previous gateway left pending; they wait out a
@@ -470,6 +477,7 @@ class TeamSpeakVoiceRuntime {
    * interrupted, so the rest are asked in turn rather than broadcast to.
    */
   handleSpeakerStart(clientId) {
+    this.noteOtherBotSpeaking(clientId);
     const speaker = this.sessions.get(clientId);
     if (speaker?.handleSpeakerStart(`speaker-start:${clientId}`)) {
       return;
@@ -485,6 +493,27 @@ class TeamSpeakVoiceRuntime {
       if (session && session.handleSpeakerStart(`speaker-start:${clientId}`)) {
         return;
       }
+    }
+  }
+  /**
+   * Another bot started talking (PHA-3829). Two bots each holding a follow-up
+   * window on the same person answered every line that person said, on top of
+   * each other. Whoever speaks takes the room: every follow-up window here
+   * closes, and a new answer needs our name again.
+   */
+  noteOtherBotSpeaking(clientId) {
+    if (this.sessions.hasSession(clientId)) {
+      return;
+    }
+    const entry = this.sessions.rosterEntries().find((client) => client.clientId === clientId);
+    if (!entry || !this.isExcludedNickname(entry.nickname)) {
+      return;
+    }
+    this.otherBotsSpeaking.add(clientId);
+    this.playback.otherBotSpeaking = true;
+    for (const key of this.sessions.sessionKeys()) {
+      const session = this.sessions.get(key);
+      session?.endFollowUp?.(`other-bot:${entry.nickname}`);
     }
   }
   handleRosterEvent(event) {
