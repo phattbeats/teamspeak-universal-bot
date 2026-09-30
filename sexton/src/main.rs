@@ -1462,7 +1462,10 @@ fn maybe_send_catchup(
 
     // The announced notice (PHA-3305): before this client's *first* catch-up,
     // and only ever before the first, say what the Sexton is doing.
-    if !state.welcomed.contains(&uid) {
+    // PHA-3818: a persona bot that isn't the Sexton (Lexton) must not greet
+    // joiners with "The Sexton keeps this hall." SEXTON_NO_WELCOME drops the
+    // welcome PM entirely, same env-flag convention as SEXTON_NO_CATCHUP.
+    if !state.welcomed.contains(&uid) && !env_flag("SEXTON_NO_WELCOME") {
         match send_pm(con, client_id, WELCOME_PM) {
             Ok(handle) => {
                 info!(?client_id, %uid, "welcome PM sent");

@@ -17,6 +17,7 @@ import {
   isTeamSpeakBandEnabled,
   isTeamSpeakMusicEnabled,
   resolveSextonLogDir,
+  resolveVillainPaths,
   resolveTeamSpeakBandConfig,
   resolveTeamSpeakVoiceMode,
   resolveTeamSpeakWakeConfig,
@@ -28,9 +29,11 @@ import { bridgePcmDurationMs, chunkBridgePcm } from "./audio.js";
 import type { SpeechSynthesisOutcome } from "./speech.js";
 import type { ReadChannelLog } from "../tools/catch-up.js";
 import { MusicPlayer, type MusicController, type MusicSink } from "../tools/music.js";
+import { VillainController } from "../tools/villain.js";
 import {
   createTeamSpeakToolRegistration,
   runTeamSpeakTool,
+  transcriptHistoryReader,
   type TeamSpeakToolDeps,
 } from "../tools/registry.js";
 import {
@@ -273,6 +276,7 @@ export class TeamSpeakVoiceRuntime {
           listChannels: () => this.requestChannelTree(),
           moveToChannel: (channel) => this.bridge.join(channel),
           band: this.band,
+          ...this.createVillain(),
           logDir: params.toolOverrides?.logDir ?? resolveSextonLogDir(params.config),
           ...(params.toolOverrides?.readLog ? { readLog: params.toolOverrides.readLog } : {}),
           ...(params.toolOverrides?.now ? { now: params.toolOverrides.now } : {}),
@@ -280,6 +284,29 @@ export class TeamSpeakVoiceRuntime {
         }
       : undefined;
     this.tools = this.toolDeps ? createTeamSpeakToolRegistration(this.toolDeps) : undefined;
+  }
+
+  /**
+   * Lexton's villain tools (PHA-3820), off unless `tools.villain.enabled`.
+   * `start()` re-arms reverts a previous gateway left pending; they wait out a
+   * grace period and retry until the bridge answers with a channel tree.
+   */
+  private createVillain(): Pick<TeamSpeakToolDeps, "villain" | "readHistory"> {
+    const config = this.params.config.tools?.villain;
+    if (config?.enabled !== true) {
+      return {};
+    }
+    const paths = resolveVillainPaths(config);
+    const villain = new VillainController(config, paths.stateFile, {
+      listChannels: () => this.requestChannelTree(),
+      moveClient: (clientId, channelId) => this.bridge.moveClient(clientId, channelId),
+      muteClient: (clientId, muted) => this.bridge.muteClient(clientId, muted),
+      createChannel: (name, parentId) => this.bridge.createChannel(name, parentId),
+      moveToChannel: (channel) => this.bridge.join(channel),
+      ...(this.params.log ? { log: this.params.log } : {}),
+    });
+    villain.start();
+    return { villain, readHistory: transcriptHistoryReader(paths.transcriptDb) };
   }
 
   /** The tools the speaker sessions register on their provider session. */
