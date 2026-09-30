@@ -128,6 +128,7 @@ function createSttTtsLane(params) {
         agentTurnLabel,
         playback,
         humanParticipantCount: params.humanParticipantCount,
+        ...params.onHeard ? { onHeard: params.onHeard } : {},
         ...params.onTerminalError ? { onTerminalError: params.onTerminalError } : {},
         ...params.log ? { log: params.log } : {}
       })

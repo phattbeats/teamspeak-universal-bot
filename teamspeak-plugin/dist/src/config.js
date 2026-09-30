@@ -84,7 +84,7 @@ function resolveTeamSpeakBandConfig(config, env = process.env) {
   }
 }
 function resolveSextonLogDir(config, env = process.env) {
-  return config?.tools?.logDir?.trim() || env.TEAMSPEAK_SEXTON_LOG_DIR?.trim() || DEFAULT_SEXTON_LOG_DIR;
+  return config?.tools?.logDir?.trim() || env.TEAMSPEAK_SEXTON_LOG_DIR?.trim() || env.SEXTON_LOG_DIR?.trim() || DEFAULT_SEXTON_LOG_DIR;
 }
 function isTeamSpeakVoiceEnabled(config) {
   return config?.voice?.enabled !== false;
@@ -206,6 +206,14 @@ function nonNegativeMs(value, fallback) {
 function resolveTeamSpeakVoiceMode(config) {
   return config?.voice?.mode ?? DEFAULT_VOICE_MODE;
 }
+function resolveVillainPaths(config, env = process.env) {
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || "/config/openclaw";
+  const agentId = env.SEXTON_AGENT_ID?.trim() || "sexton";
+  return {
+    stateFile: config?.stateFile?.trim() || `${stateDir}/teamspeak-villain-pending.json`,
+    transcriptDb: config?.transcriptDb?.trim() || `${stateDir}/agents/${agentId}/agent/openclaw-agent.sqlite`
+  };
+}
 export {
   DEFAULT_BAND_GENERATE_TIMEOUT_MS,
   DEFAULT_BAND_INTRO_GAP_MS,
@@ -250,5 +258,6 @@ export {
   resolveTeamSpeakSpeechConfig,
   resolveTeamSpeakTranscriptionConfig,
   resolveTeamSpeakVoiceMode,
-  resolveTeamSpeakWakeConfig
+  resolveTeamSpeakWakeConfig,
+  resolveVillainPaths
 };

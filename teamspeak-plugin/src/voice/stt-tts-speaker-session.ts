@@ -96,6 +96,8 @@ export type TeamSpeakSttTtsSessionParams = {
   agentTurnLabel?: { model?: string | undefined; thinking?: string | undefined } | undefined;
   playback: RoomPlaybackQueue;
   humanParticipantCount: () => number;
+  /** Every non-empty transcript, before the wake gate (PHA-3823: trash-talk crash-ins). */
+  onHeard?: ((text: string, nickname: string) => void) | undefined;
   onTerminalError?: ((error: Error) => void) | undefined;
   now?: (() => number) | undefined;
   setTimeoutFn?: ((handler: () => void, ms: number) => unknown) | undefined;
@@ -372,6 +374,7 @@ export class TeamSpeakSttTtsSpeakerSession {
       return;
     }
 
+    this.params.onHeard?.(transcript, this.nickname);
     const gated = this.applyWakeGate(transcript, segment);
     if (!gated) {
       this.params.log?.(

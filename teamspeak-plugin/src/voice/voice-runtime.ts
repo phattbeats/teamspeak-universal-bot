@@ -30,6 +30,7 @@ import type { SpeechSynthesisOutcome } from "./speech.js";
 import type { ReadChannelLog } from "../tools/catch-up.js";
 import { MusicPlayer, type MusicController, type MusicSink } from "../tools/music.js";
 import { VillainController } from "../tools/villain.js";
+import { selfBotId, summonerAction } from "../tools/summoner.js";
 import {
   createTeamSpeakToolRegistration,
   runTeamSpeakTool,
@@ -730,6 +731,21 @@ export class TeamSpeakVoiceRuntime {
         this.setParked(true, `vc-leave:${message.nickname}`);
         this.music?.stop("vc-leave");
         this.reply(message, "Sitting out. Say !vc join when you want me back.");
+        return;
+      }
+      case "vc-dismiss": {
+        const bot = command.bot ?? selfBotId();
+        void summonerAction(this.params.config.tools?.summoner, "dismiss", bot, message.nickname).then(
+          (result) =>
+            this.reply(
+              message,
+              result.ok
+                ? command.bot
+                  ? `Sending ${String(result.bot)} home.`
+                  : "Alright, I'm off. Later."
+                : String(result.error),
+            ),
+        );
         return;
       }
       case "vc-mute": {

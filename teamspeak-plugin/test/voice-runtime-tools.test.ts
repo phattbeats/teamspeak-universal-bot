@@ -318,6 +318,8 @@ describe("TeamSpeakVoiceRuntime realtime tools", () => {
       "move_to_channel",
       "where_is",
       "send_text",
+      "summon_bot",
+      "dismiss_bot",
     ]);
     runtime.stop();
   });

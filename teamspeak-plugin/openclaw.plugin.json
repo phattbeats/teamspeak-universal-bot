@@ -88,7 +88,9 @@
       "sentence",
       "silence",
       "summon",
-      "dossier"
+      "dossier",
+      "summon_bot",
+      "dismiss_bot"
     ]
   }
 }

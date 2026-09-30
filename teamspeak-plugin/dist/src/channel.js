@@ -16,6 +16,7 @@ import { TeamSpeakRealtimeSpeakerSession } from "./voice/realtime-speaker-sessio
 import { createTeamSpeakTextTurn } from "./text-turn.js";
 import { createSttTtsLane } from "./voice/stt-tts-lane.js";
 import { TeamSpeakVoiceRuntime } from "./voice/voice-runtime.js";
+import { forwardHeard } from "./tools/summoner.js";
 const logger = createSubsystemLogger("teamspeak/voice");
 const runtimes = /* @__PURE__ */ new Map();
 function startTeamSpeakVoiceRuntime(params) {
@@ -100,6 +101,9 @@ function startTeamSpeakSttTtsRuntime(params) {
       ...hostRuntime.channel?.reply ? { reply: hostRuntime.channel.reply } : {}
     },
     humanParticipantCount: () => runtime?.humanParticipantCount() ?? 0,
+    // PHA-3823: the summoner decides (names + insults + its own cooldown)
+    // whether a spoken jab at Lexton brings him crashing in.
+    onHeard: (text, nickname) => forwardHeard(account.config.tools?.summoner, text, nickname, (message) => logger.info(message)),
     onTerminalError: (error) => logger.warn(`teamspeak: stt-tts turn failed: ${error.message}`),
     log: (message) => logger.info(message)
   });
