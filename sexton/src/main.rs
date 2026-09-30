@@ -89,6 +89,8 @@ use mixer::Mixer;
 /// a hosted STT sits anywhere in the path (the PHA-3228 constraint, restated as
 /// a wording rule).
 const WELCOME_PM: &str = "The Sexton keeps this hall.";
+/// Sent instead of a catch-up when nothing was said since the last one (PHA-3830).
+const QUIET_PM: &str = "All quiet since you left.";
 /// How many messages the catch-up PM includes, and the cap on how much of a
 /// delta it will ever show — a uid who has been away for a week still gets
 /// the last `CATCHUP_PM_COUNT`, not the whole gap (PHA-3573).
@@ -1502,8 +1504,22 @@ fn maybe_send_catchup(
         // Nothing to send, so nothing to retry either — still worth
         // normalising the stored position in case it predates a log
         // rotation that shrank `history.len()`.
+        //
+        // PHA-3830: a returning uid still gets one line, so silence doesn't
+        // read as a broken bot. A never-caught-up uid on an empty log already
+        // got the welcome above and has nothing to hear "since" anything.
         None => {
-            info!(?client_id, %uid, "nothing new since their last catch-up; skipping the PM");
+            if state.caught_up.contains_key(&uid) {
+                match send_pm(con, client_id, QUIET_PM) {
+                    Ok(handle) => {
+                        info!(?client_id, %uid, "nothing new since their last catch-up; all-quiet PM sent");
+                        state.pending_cmds.insert(handle.0, format!("all-quiet PM to {client_id:?}"));
+                    }
+                    Err(e) => warn!(error = %e, ?client_id, "all-quiet PM failed"),
+                }
+            } else {
+                info!(?client_id, %uid, "no history and no prior catch-up; skipping the PM");
+            }
             state.remember_caught_up(uid, state.history.len());
         }
     }

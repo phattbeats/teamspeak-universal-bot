@@ -8,6 +8,7 @@
     "nickname": "Summoner"
   },
   "channelId": 1,
+  "chatLog": { "dir": "/var/sexton-logs/General Shit", "whenOff": "sexton" },
   "httpPort": 8099,
   "pollSec": 10,
   "reconcileSec": 20,
