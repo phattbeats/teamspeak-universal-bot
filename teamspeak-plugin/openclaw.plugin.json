@@ -84,7 +84,13 @@
       "edit_persona",
       "set_voice",
       "set_wake_names",
-      "set_follow_up_window"
+      "set_follow_up_window",
+      "sentence",
+      "silence",
+      "summon",
+      "dossier",
+      "summon_bot",
+      "dismiss_bot"
     ]
   }
 }

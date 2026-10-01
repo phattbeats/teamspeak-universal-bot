@@ -81,6 +81,7 @@ export type SttTtsLaneParams = {
     reply?: TeamSpeakReplyRuntime | undefined;
   };
   humanParticipantCount: () => number;
+  onHeard?: ((text: string, nickname: string) => void) | undefined;
   onTerminalError?: ((error: Error) => void) | undefined;
   log?: ((message: string) => void) | undefined;
   env?: Record<string, string | undefined> | undefined;
@@ -261,6 +262,7 @@ export function createSttTtsLane(
           agentTurnLabel,
           playback,
           humanParticipantCount: params.humanParticipantCount,
+          ...(params.onHeard ? { onHeard: params.onHeard } : {}),
           ...(params.onTerminalError ? { onTerminalError: params.onTerminalError } : {}),
           ...(params.log ? { log: params.log } : {}),
         }),

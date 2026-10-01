@@ -112,6 +112,8 @@ export type TeamSpeakHeardUtterance = {
   nickname: string;
   message: string;
   wakeName?: string;
+  /** Answered on the follow-up window: the speaker didn't say the name. */
+  followUp?: boolean;
 };
 
 export type TeamSpeakAgentTurnHooks = {
@@ -137,8 +139,26 @@ export type TeamSpeakAgentTurnResult = {
  * speaker label matters more here because TeamSpeak nicknames are the only
  * identity the bridge carries.
  */
-export function formatTeamSpeakVoicePrompt(utterance: TeamSpeakHeardUtterance): string {
-  return `[teamspeak voice] ${utterance.nickname} said: ${utterance.message}`;
+export function formatTeamSpeakVoicePrompt(utterance: TeamSpeakHeardUtterance, at: number): string {
+  const followUp = utterance.followUp ? " · follow-up, name not said" : "";
+  return `[teamspeak voice · ${formatTeamSpeakClock(at)}${followUp}] ${utterance.nickname} said: ${utterance.message}`;
+}
+
+const TEAMSPEAK_CLOCK = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  weekday: "short",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+/**
+ * "Mon 8:53 PM ET" for the front of each line (PHA-3829). OpenClaw's own
+ * per-turn metadata used to carry a UTC timestamp, but that block is patched
+ * out for TeamSpeak turns (the bots took it for a paste), so the clock rides
+ * in the line itself now, in the room's time zone.
+ */
+export function formatTeamSpeakClock(at: number): string {
+  return `${TEAMSPEAK_CLOCK.format(at)} ET`;
 }
 
 /**
@@ -174,7 +194,7 @@ export function createTeamSpeakAgentTurn(params: TeamSpeakAgentTurnParams) {
   const runIngress = async (utterance: TeamSpeakHeardUtterance): Promise<TeamSpeakAgentTurnResult> => {
     const result = await params.agent.runCommandFromIngress(
       {
-        message: formatTeamSpeakVoicePrompt(utterance),
+        message: formatTeamSpeakVoicePrompt(utterance, now()),
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         messageChannel: "teamspeak",
@@ -213,7 +233,7 @@ export function createTeamSpeakAgentTurn(params: TeamSpeakAgentTurnParams) {
     // is speak a final that repeats the blocks, so compare before trusting.
     const streamedText = () => spoken.map((payload) => payload.text ?? "").join("").replace(/\s+/g, "");
     const ctx = reply.finalizeInboundContext({
-      Body: formatTeamSpeakVoicePrompt(utterance),
+      Body: formatTeamSpeakVoicePrompt(utterance, startedAt),
       From: `teamspeak:voice:${utterance.clientId}`,
       To: `teamspeak:${params.accountId}`,
       SessionKey: params.sessionKey,

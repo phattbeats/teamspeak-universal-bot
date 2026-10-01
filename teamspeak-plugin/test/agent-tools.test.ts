@@ -8,6 +8,7 @@
  * reaches the tool, two concurrent turns do not read each other's speaker, and
  * a call with no connected channel fails in words rather than throwing.
  */
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTeamSpeakAgentTools, TEAMSPEAK_AGENT_TOOL_NAMES } from "../src/tools/agent-tools.js";
 import {
@@ -56,35 +57,13 @@ describe("teamspeak agent tools", () => {
   it("registers exactly the tools the manifest declares", () => {
     // The host refuses the whole registration when a registered name is not in
     // `contracts.tools`, so this list and openclaw.plugin.json must not drift.
-    expect(TEAMSPEAK_AGENT_TOOL_NAMES).toEqual([
-      "play_music",
-      "stop_music",
-      "set_volume",
-      "now_playing",
-      "show_queue",
-      "skip",
-      "remove_from_queue",
-      "move_in_queue",
-      "clear_queue",
-      "search_music",
-      "play_source",
-      "pause",
-      "resume",
-      "seek",
-      "what_did_i_miss",
-      "who_is_here",
-      "poke",
-      "leave_voice",
-      "join_voice",
-      "list_channels",
-      "move_to_channel",
-      "where_is",
-      "send_text",
-      "compose_song",
-      "band_status",
-      "song_lyrics",
-      "replay_song",
-    ]);
+    // PHA-3820: moderation and villain tools are on this face too, so check
+    // against the manifest rather than restating 40 names.
+    const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8")) as {
+      contracts: { tools: string[] };
+    };
+    expect(manifest.contracts.tools).toEqual(expect.arrayContaining([...TEAMSPEAK_AGENT_TOOL_NAMES]));
+    expect(TEAMSPEAK_AGENT_TOOL_NAMES).toEqual(expect.arrayContaining(["kick_client", "sentence", "dossier"]));
   });
 
   it("offers the music tools even though the runtime may not have music", () => {

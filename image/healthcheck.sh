@@ -14,6 +14,10 @@
 # NUL-separated.
 set -u
 
+# PHA-3821: the ts-summoner stops the core when the bot is off shift and
+# leaves this marker. Off duty is not unhealthy.
+if [ -e /config/.off-duty ]; then echo "off duty (PHA-3821 ts-summoner)"; exit 0; fi
+
 : "${WHISPER_PORT:=8080}"
 : "${SEXTON_WS_BIND:=0.0.0.0:9099}"
 ws_port=${SEXTON_WS_BIND##*:}

@@ -27,6 +27,8 @@ import {
   POKE_TOOL,
   REPLAY_SONG_TOOL,
   SEND_TEXT_TOOL,
+  SUMMON_BOT_TOOL,
+  DISMISS_BOT_TOOL,
   SET_VOLUME_TOOL,
   SONG_LYRICS_TOOL,
   STOP_MUSIC_TOOL,
@@ -298,6 +300,8 @@ describe("tool definitions", () => {
       MOVE_TO_CHANNEL_TOOL,
       WHERE_IS_TOOL,
       SEND_TEXT_TOOL,
+      SUMMON_BOT_TOOL,
+      DISMISS_BOT_TOOL,
     ]);
   });
 
@@ -313,6 +317,8 @@ describe("tool definitions", () => {
       MOVE_TO_CHANNEL_TOOL,
       WHERE_IS_TOOL,
       SEND_TEXT_TOOL,
+      SUMMON_BOT_TOOL,
+      DISMISS_BOT_TOOL,
     ]);
   });
 
@@ -326,7 +332,7 @@ describe("tool definitions", () => {
 describe("the house band (PHA-3554)", () => {
   it("adds compose_song and band_status only when an account has a band", () => {
     const names = buildTeamSpeakTools({ music: true, band: true }).map((tool) => tool.name);
-    expect(names.slice(-4)).toEqual([
+    expect(names.slice(-6, -2)).toEqual([
       COMPOSE_SONG_TOOL,
       BAND_STATUS_TOOL,
       SONG_LYRICS_TOOL,

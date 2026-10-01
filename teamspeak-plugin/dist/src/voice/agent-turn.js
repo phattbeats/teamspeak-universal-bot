@@ -7,8 +7,18 @@ const VOICE_BLOCK_STREAMING_CHUNK = {
   breakPreference: "sentence"
 };
 const VOICE_BLOCK_STREAMING_COALESCE = { minChars: 24, maxChars: 400, idleMs: 0 };
-function formatTeamSpeakVoicePrompt(utterance) {
-  return `[teamspeak voice] ${utterance.nickname} said: ${utterance.message}`;
+function formatTeamSpeakVoicePrompt(utterance, at) {
+  const followUp = utterance.followUp ? " \xB7 follow-up, name not said" : "";
+  return `[teamspeak voice \xB7 ${formatTeamSpeakClock(at)}${followUp}] ${utterance.nickname} said: ${utterance.message}`;
+}
+const TEAMSPEAK_CLOCK = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  weekday: "short",
+  hour: "numeric",
+  minute: "2-digit"
+});
+function formatTeamSpeakClock(at) {
+  return `${TEAMSPEAK_CLOCK.format(at)} ET`;
 }
 function buildVoiceTurnConfig(cfg, model) {
   const base = cfg;
@@ -29,7 +39,7 @@ function createTeamSpeakAgentTurn(params) {
   const runIngress = async (utterance) => {
     const result = await params.agent.runCommandFromIngress(
       {
-        message: formatTeamSpeakVoicePrompt(utterance),
+        message: formatTeamSpeakVoicePrompt(utterance, now()),
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         messageChannel: "teamspeak",
@@ -59,7 +69,7 @@ function createTeamSpeakAgentTurn(params) {
     let finals = 0;
     const streamedText = () => spoken.map((payload) => payload.text ?? "").join("").replace(/\s+/g, "");
     const ctx = reply.finalizeInboundContext({
-      Body: formatTeamSpeakVoicePrompt(utterance),
+      Body: formatTeamSpeakVoicePrompt(utterance, startedAt),
       From: `teamspeak:voice:${utterance.clientId}`,
       To: `teamspeak:${params.accountId}`,
       SessionKey: params.sessionKey,
@@ -153,5 +163,6 @@ export {
   VOICE_BLOCK_STREAMING_COALESCE,
   buildVoiceTurnConfig,
   createTeamSpeakAgentTurn,
+  formatTeamSpeakClock,
   formatTeamSpeakVoicePrompt
 };

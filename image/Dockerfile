@@ -313,6 +313,19 @@ RUN mkdir -p /etc/yt-dlp/plugins/bgutil \
 # also what makes it survive an image bump without a manual reinstall.
 COPY --from=plugin-builder /plugin/ /opt/openclaw-teamspeak-plugin/
 
+# PHA-3829: two narrow OpenClaw core patches for TeamSpeak turns, both caused
+# by the voice lane marking its turns ChatType "direct":
+#  - a "Conversation info" block wrapped in <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>
+#    rode after every line, and the bots took it for something the speaker
+#    pasted. Dropped; the line already says who spoke.
+#  - "direct" forbids silent replies, so every NO_REPLY got re-run until the bot
+#    said something. TeamSpeak turns get the group rule for that one decision.
+# No config switch covers either. The script fails the build if an
+# OPENCLAW_VERSION bump moves the code it patches.
+COPY image/gateway/patch-openclaw-teamspeak.mjs /tmp/patch-openclaw-teamspeak.mjs
+RUN node /tmp/patch-openclaw-teamspeak.mjs /app/dist \
+    && rm /tmp/patch-openclaw-teamspeak.mjs
+
 COPY image/supervisord.conf          /etc/supervisor/conf.d/sexton.conf
 COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json
 # PHA-3791: one persona pack per bot under personas/<name>/ (SOUL.md,
@@ -339,17 +352,26 @@ COPY personas/bexton/AGENTS.md personas/bexton/IDENTITY.md \
      personas/bexton/SOUL.md                                /opt/sexton-persona/bexton/
 COPY personas/bexton/avatar.png        /usr/local/share/sexton-avatar/bexton.png
 COPY personas/bexton/voice.json personas/bexton/tools.json /opt/sexton-persona/bexton.config/
+# PHA-3836: the Lexton persona (PHA-3819), same shape as Bexton.
+COPY personas/lexton/AGENTS.md personas/lexton/IDENTITY.md \
+     personas/lexton/SOUL.md   personas/lexton/USER.md     /opt/sexton-persona/lexton/
+COPY personas/lexton/avatar.png        /usr/local/share/sexton-avatar/lexton.png
+COPY personas/lexton/voice.json personas/lexton/tools.json /opt/sexton-persona/lexton.config/
+COPY image/lexton/lexton-menace.cjs    /opt/sexton-menace/lexton-menace.cjs
 # PHA-3787: HUMAN.md is shared by every persona — copied into both persona
 # directories from one source so there is exactly one copy to edit.
 COPY personas/HUMAN.md   /opt/sexton-persona/sexton/HUMAN.md
 COPY personas/HUMAN.md   /opt/sexton-persona/bexton/HUMAN.md
+COPY personas/HUMAN.md   /opt/sexton-persona/lexton/HUMAN.md
 COPY image/run-sexton.sh             /usr/local/bin/run-sexton
 COPY image/run-whisper.sh            /usr/local/bin/run-whisper
 COPY image/run-pot.sh                /usr/local/bin/run-pot
 COPY image/run-gateway.sh            /usr/local/bin/run-gateway
+COPY image/run-menace.sh             /usr/local/bin/run-menace
 COPY image/healthcheck.sh            /usr/local/bin/sexton-healthcheck
 RUN chmod 0755 /usr/local/bin/run-sexton /usr/local/bin/run-whisper \
                /usr/local/bin/run-pot /usr/local/bin/run-gateway \
+               /usr/local/bin/run-menace \
                /usr/local/bin/sexton-healthcheck
 
 ENV RUST_LOG=info \

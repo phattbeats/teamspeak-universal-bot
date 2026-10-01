@@ -17,6 +17,7 @@ import {
   isTeamSpeakBandEnabled,
   isTeamSpeakMusicEnabled,
   resolveSextonLogDir,
+  resolveVillainPaths,
   resolveTeamSpeakBandConfig,
   resolveTeamSpeakVoiceMode,
   resolveTeamSpeakWakeConfig,
@@ -28,9 +29,12 @@ import { bridgePcmDurationMs, chunkBridgePcm } from "./audio.js";
 import type { SpeechSynthesisOutcome } from "./speech.js";
 import type { ReadChannelLog } from "../tools/catch-up.js";
 import { MusicPlayer, type MusicController, type MusicSink } from "../tools/music.js";
+import { VillainController } from "../tools/villain.js";
+import { selfBotId, summonerAction } from "../tools/summoner.js";
 import {
   createTeamSpeakToolRegistration,
   runTeamSpeakTool,
+  transcriptHistoryReader,
   type TeamSpeakToolDeps,
 } from "../tools/registry.js";
 import {
@@ -62,6 +66,8 @@ export type VoiceSpeakerSession = SpeakerSession & {
    * closes its segment on it, so the runtime forwards it when a session cares.
    */
   handleSpeakerStop?(): void;
+  /** Close the no-name follow-up window: another bot has the room now (PHA-3829). */
+  endFollowUp?(reason: string): void;
   readonly wakeNameRequired: boolean;
   readonly bargeInEnabled: boolean;
 };
@@ -156,6 +162,8 @@ export class TeamSpeakVoiceRuntime {
   private channelTreeWaiters: Array<(channels: ChannelInfo[]) => void> = [];
   private selfClientId: TeamSpeakClientId | undefined;
   private readonly chatTurnsInFlight = new Set<TeamSpeakClientId>();
+  /** Other bots in the channel that are mid-burst right now (PHA-3829). */
+  private readonly otherBotsSpeaking = new Set<TeamSpeakClientId>();
 
   constructor(private readonly params: TeamSpeakVoiceRuntimeParams) {
     this.playback = new RoomPlaybackQueue({
@@ -194,6 +202,8 @@ export class TeamSpeakVoiceRuntime {
           // The bridge hands out a fresh clientId per TeamSpeak session, so the
           // one we were filtering on is stale the moment the socket drops.
           this.selfClientId = undefined;
+          this.otherBotsSpeaking.clear();
+          this.playback.otherBotSpeaking = false;
           // The bridge owns the TeamSpeak connection. When it drops, every
           // clientId we were keyed on is void; rebuild from the next roster.
           this.sessions.closeAll(`bridge-disconnected:${reason}`);
@@ -221,6 +231,9 @@ export class TeamSpeakVoiceRuntime {
           this.handleSpeakerStart(clientId);
         },
         onSpeakerStop: (clientId) => {
+          if (this.otherBotsSpeaking.delete(clientId)) {
+            this.playback.otherBotSpeaking = this.otherBotsSpeaking.size > 0;
+          }
           if (this.parked) {
             return;
           }
@@ -273,6 +286,7 @@ export class TeamSpeakVoiceRuntime {
           listChannels: () => this.requestChannelTree(),
           moveToChannel: (channel) => this.bridge.join(channel),
           band: this.band,
+          ...this.createVillain(),
           logDir: params.toolOverrides?.logDir ?? resolveSextonLogDir(params.config),
           ...(params.toolOverrides?.readLog ? { readLog: params.toolOverrides.readLog } : {}),
           ...(params.toolOverrides?.now ? { now: params.toolOverrides.now } : {}),
@@ -280,6 +294,29 @@ export class TeamSpeakVoiceRuntime {
         }
       : undefined;
     this.tools = this.toolDeps ? createTeamSpeakToolRegistration(this.toolDeps) : undefined;
+  }
+
+  /**
+   * Lexton's villain tools (PHA-3820), off unless `tools.villain.enabled`.
+   * `start()` re-arms reverts a previous gateway left pending; they wait out a
+   * grace period and retry until the bridge answers with a channel tree.
+   */
+  private createVillain(): Pick<TeamSpeakToolDeps, "villain" | "readHistory"> {
+    const config = this.params.config.tools?.villain;
+    if (config?.enabled !== true) {
+      return {};
+    }
+    const paths = resolveVillainPaths(config);
+    const villain = new VillainController(config, paths.stateFile, {
+      listChannels: () => this.requestChannelTree(),
+      moveClient: (clientId, channelId) => this.bridge.moveClient(clientId, channelId),
+      muteClient: (clientId, muted) => this.bridge.muteClient(clientId, muted),
+      createChannel: (name, parentId) => this.bridge.createChannel(name, parentId),
+      moveToChannel: (channel) => this.bridge.join(channel),
+      ...(this.params.log ? { log: this.params.log } : {}),
+    });
+    villain.start();
+    return { villain, readHistory: transcriptHistoryReader(paths.transcriptDb) };
   }
 
   /** The tools the speaker sessions register on their provider session. */
@@ -585,6 +622,7 @@ export class TeamSpeakVoiceRuntime {
    * interrupted, so the rest are asked in turn rather than broadcast to.
    */
   private handleSpeakerStart(clientId: TeamSpeakClientId): void {
+    this.noteOtherBotSpeaking(clientId);
     const speaker = this.sessions.get(clientId) as VoiceSpeakerSession | undefined;
     if (speaker?.handleSpeakerStart(`speaker-start:${clientId}`)) {
       return;
@@ -600,6 +638,28 @@ export class TeamSpeakVoiceRuntime {
       if (session && session.handleSpeakerStart(`speaker-start:${clientId}`)) {
         return;
       }
+    }
+  }
+
+  /**
+   * Another bot started talking (PHA-3829). Two bots each holding a follow-up
+   * window on the same person answered every line that person said, on top of
+   * each other. Whoever speaks takes the room: every follow-up window here
+   * closes, and a new answer needs our name again.
+   */
+  private noteOtherBotSpeaking(clientId: TeamSpeakClientId): void {
+    if (this.sessions.hasSession(clientId)) {
+      return;
+    }
+    const entry = this.sessions.rosterEntries().find((client) => client.clientId === clientId);
+    if (!entry || !this.isExcludedNickname(entry.nickname)) {
+      return;
+    }
+    this.otherBotsSpeaking.add(clientId);
+    this.playback.otherBotSpeaking = true;
+    for (const key of this.sessions.sessionKeys()) {
+      const session = this.sessions.get(key) as VoiceSpeakerSession | undefined;
+      session?.endFollowUp?.(`other-bot:${entry.nickname}`);
     }
   }
 
@@ -671,6 +731,21 @@ export class TeamSpeakVoiceRuntime {
         this.setParked(true, `vc-leave:${message.nickname}`);
         this.music?.stop("vc-leave");
         this.reply(message, "Sitting out. Say !vc join when you want me back.");
+        return;
+      }
+      case "vc-dismiss": {
+        const bot = command.bot ?? selfBotId();
+        void summonerAction(this.params.config.tools?.summoner, "dismiss", bot, message.nickname).then(
+          (result) =>
+            this.reply(
+              message,
+              result.ok
+                ? command.bot
+                  ? `Sending ${String(result.bot)} home.`
+                  : "Alright, I'm off. Later."
+                : String(result.error),
+            ),
+        );
         return;
       }
       case "vc-mute": {

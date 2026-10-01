@@ -4,12 +4,18 @@ import {
   currentTeamSpeakTurnContext,
   resolveTeamSpeakToolAccess
 } from "./turn-context.js";
-const TEAMSPEAK_AGENT_TOOL_NAMES = buildTeamSpeakTools({ music: true, band: true }).map(
+const ALL_TOOL_OPTIONS = {
+  music: true,
+  band: true,
+  moderation: { kick: true, ban: true, edit: true },
+  villain: true
+};
+const TEAMSPEAK_AGENT_TOOL_NAMES = buildTeamSpeakTools(ALL_TOOL_OPTIONS).map(
   (tool) => tool.name
 );
 function createTeamSpeakAgentTools(deps = {}) {
   const resolveAccess = deps.resolveAccess ?? resolveTeamSpeakToolAccess;
-  return buildTeamSpeakTools({ music: true, band: true }).map((tool) => ({
+  return buildTeamSpeakTools(ALL_TOOL_OPTIONS).map((tool) => ({
     name: tool.name,
     label: tool.name,
     description: tool.description,

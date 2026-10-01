@@ -72,7 +72,7 @@ type Harness = {
   runtime: TeamSpeakVoiceRuntime;
   transcriber: FakeTranscriber;
   synthesizer: FakeSynthesizer;
-  turns: Array<{ nickname: string; message: string; wakeName?: string }>;
+  turns: Array<{ nickname: string; message: string; wakeName?: string; followUp?: boolean }>;
   logs: string[];
   session: (clientId: number) => VoiceSpeakerSession;
 };
@@ -105,19 +105,23 @@ function createHarness(params: {
    */
   stream?: string[];
   streamGate?: Promise<void>;
+  /** Per-turn hold before a plain reply returns, by turn index (PHA-3829). */
+  replyGates?: Array<Promise<void> | undefined>;
 } = {}): Harness {
   const config = params.config ?? baseConfig();
   const bridge = new MockBridge();
   const transcriber = new FakeTranscriber(params.transcripts ?? ["what did I miss"]);
   const synthesizer = new FakeSynthesizer();
-  const turns: Array<{ nickname: string; message: string; wakeName?: string }> = [];
+  const turns: Array<{ nickname: string; message: string; wakeName?: string; followUp?: boolean }> = [];
   const logs: string[] = [];
   const runAgentTurn: TeamSpeakVoiceAgentTurn = async (turn, hooks) => {
     turns.push({
       nickname: turn.nickname,
       message: turn.message,
       ...(turn.wakeName ? { wakeName: turn.wakeName } : {}),
+      ...(turn.followUp ? { followUp: true } : {}),
     });
+    await params.replyGates?.[turns.length - 1];
     if (params.stream) {
       for (const block of params.stream) {
         hooks.onBlock?.(block);
@@ -651,5 +655,105 @@ describe("stt-tts lane construction", () => {
       );
       expect(source, module).not.toMatch(/resolveConfiguredRealtimeVoiceProvider|createRealtimeVoiceSessionHarness/);
     }
+  });
+});
+
+describe("sharing the room with other bots (PHA-3829)", () => {
+  const BEXTON = 20;
+  const withBexton = baseConfig({
+    voice: {
+      mode: "stt-tts",
+      streaming: { segmentation: { hangoverMs: 0, minSegmentMs: 0 } },
+      excludeWakeNames: ["Bexton"],
+    },
+  });
+
+  function joinWithBexton(harness: Harness): void {
+    joinRoom(harness, [PHATT, GUEST]);
+    harness.bridge.deliver({
+      type: "roster",
+      roster: [
+        rosterEntry(SELF_CLIENT_ID, "Sexton"),
+        rosterEntry(PHATT, "human-7"),
+        rosterEntry(GUEST, "human-9"),
+        rosterEntry(BEXTON, "Bexton"),
+      ],
+    });
+  }
+
+  it("stops answering nameless follow-ups after three in a row", async () => {
+    const harness = createHarness({
+      config: withBexton,
+      transcripts: ["Sexton, you there", "one", "two", "three", "four"],
+    });
+    joinWithBexton(harness);
+    for (let index = 0; index < 5; index += 1) {
+      speak(harness, PHATT);
+      await settle();
+    }
+
+    expect(harness.turns.map((turn) => turn.message)).toEqual(["you there", "one", "two", "three"]);
+    expect(harness.turns.slice(1).every((turn) => turn.followUp === true)).toBe(true);
+    expect(harness.logs.some((line) => line.includes("reason=follow-up-limit"))).toBe(true);
+  });
+
+  it("closes the follow-up window when another bot starts talking", async () => {
+    const harness = createHarness({
+      config: withBexton,
+      transcripts: ["Sexton, you there", "and another thing"],
+    });
+    joinWithBexton(harness);
+    speak(harness, PHATT);
+    await settle();
+    expect(harness.turns).toHaveLength(1);
+
+    harness.bridge.deliver({ type: "speaker_start", clientId: BEXTON });
+    harness.bridge.deliver({ type: "speaker_stop", clientId: BEXTON });
+    speak(harness, PHATT);
+    await settle();
+
+    expect(harness.turns).toHaveLength(1);
+    expect(harness.logs.some((line) => line.includes("reason=other-bot:Bexton"))).toBe(true);
+  });
+
+  it("drops a follow-up answer rather than talk over another bot", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const harness = createHarness({
+      config: withBexton,
+      transcripts: ["Sexton, you there", "and another thing"],
+      replyGates: [undefined, held],
+    });
+    joinWithBexton(harness);
+    speak(harness, PHATT);
+    await settle();
+    const spokenAfterFirst = harness.synthesizer.spoken.length;
+
+    speak(harness, PHATT);
+    await settle();
+    expect(harness.turns[1]?.followUp).toBe(true);
+    // Bexton starts while our follow-up answer is still being written.
+    harness.bridge.deliver({ type: "speaker_start", clientId: BEXTON });
+    release();
+    await settle();
+
+    expect(harness.synthesizer.spoken.length).toBe(spokenAfterFirst);
+    expect(harness.logs.some((line) => line.includes("follow-up answer dropped"))).toBe(true);
+  });
+
+  it("still answers someone who says the name while another bot talks", async () => {
+    const harness = createHarness({
+      config: withBexton,
+      transcripts: ["Sexton, you there"],
+    });
+    joinWithBexton(harness);
+    harness.bridge.deliver({ type: "speaker_start", clientId: BEXTON });
+    speak(harness, PHATT);
+    await settle();
+
+    expect(harness.turns).toEqual([{ nickname: "human-7", message: "you there", wakeName: "sexton" }]);
+    expect(harness.synthesizer.spoken).toEqual(["nothing much"]);
   });
 });

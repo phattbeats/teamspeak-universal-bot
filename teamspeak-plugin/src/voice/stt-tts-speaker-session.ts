@@ -71,6 +71,8 @@ export type TeamSpeakVoiceAgentTurn = (
     message: string;
     /** The wake name that opened the gate, when one was required. */
     wakeName?: string;
+    /** Opened by the follow-up window, not by the name (PHA-3829). */
+    followUp?: boolean;
   },
   hooks: TeamSpeakVoiceAgentTurnHooks,
 ) => Promise<string | TeamSpeakVoiceAgentTurnOutcome>;
@@ -94,6 +96,8 @@ export type TeamSpeakSttTtsSessionParams = {
   agentTurnLabel?: { model?: string | undefined; thinking?: string | undefined } | undefined;
   playback: RoomPlaybackQueue;
   humanParticipantCount: () => number;
+  /** Every non-empty transcript, before the wake gate (PHA-3823: trash-talk crash-ins). */
+  onHeard?: ((text: string, nickname: string) => void) | undefined;
   onTerminalError?: ((error: Error) => void) | undefined;
   now?: (() => number) | undefined;
   setTimeoutFn?: ((handler: () => void, ms: number) => unknown) | undefined;
@@ -130,6 +134,13 @@ export type TeamSpeakVoiceTurnTimings = {
  */
 export const DEFAULT_FOLLOW_UP_SILENCE_MS = 15_000;
 
+/**
+ * Nameless follow-ups in a row before the name is needed again (PHA-3829).
+ * Each answer re-armed the window, so one "henchman" bought a bot two
+ * straight minutes of replying to every line one person said.
+ */
+export const MAX_CONSECUTIVE_FOLLOW_UPS = 3;
+
 export class TeamSpeakSttTtsSpeakerSession {
   readonly clientId: TeamSpeakClientId;
   private nickname: string;
@@ -144,6 +155,8 @@ export class TeamSpeakSttTtsSpeakerSession {
   private lastTimings: TeamSpeakVoiceTurnTimings | undefined;
   /** When the bot's last answer finishes playing; dead air is counted from here. */
   private conversationIdleFrom: number | undefined;
+  /** Nameless follow-ups answered since the name was last said. */
+  private consecutiveFollowUps = 0;
   /** What whisper called the wake name on the last fuzzy match, for the log. */
   private lastFuzzyHearing: string | undefined;
   /** The other bot's name that claimed the last declined hearing, for the log (PHA-3605). */
@@ -266,6 +279,18 @@ export class TeamSpeakSttTtsSpeakerSession {
     this.segmenter.handleSpeakerStop();
   }
 
+  /** Close the follow-up window; the next answer needs our name (PHA-3829). */
+  endFollowUp(reason: string): void {
+    if (this.conversationIdleFrom === undefined) {
+      return;
+    }
+    this.conversationIdleFrom = undefined;
+    this.consecutiveFollowUps = 0;
+    this.params.log?.(
+      `teamspeak voice: follow-up window closed clientId=${this.clientId} reason=${reason}`,
+    );
+  }
+
   close(reason: string): void {
     if (this.status === "stopped") {
       return;
@@ -349,6 +374,7 @@ export class TeamSpeakSttTtsSpeakerSession {
       return;
     }
 
+    this.params.onHeard?.(transcript, this.nickname);
     const gated = this.applyWakeGate(transcript, segment);
     if (!gated) {
       this.params.log?.(
@@ -365,6 +391,19 @@ export class TeamSpeakSttTtsSpeakerSession {
     // nothing through `onBlock`, and its returned text is pushed whole below
     // -- the pre-PHA-3792 behavior, unchanged.
     const isLive = () => !this.isStopped() && generation === this.generation;
+    // A nameless follow-up doesn't start on top of another bot (PHA-3829).
+    // Named turns still speak: they asked for us.
+    const isFollowUp = this.wakeNameRequired && !gated.wakeName;
+    let yieldedToOtherBot = false;
+    const mayStartSpeaking = () => {
+      if (!yieldedToOtherBot && isFollowUp && firstBlockAt === undefined && this.params.playback.otherBotSpeaking) {
+        yieldedToOtherBot = true;
+        this.params.log?.(
+          `teamspeak voice: follow-up answer dropped, another bot is talking clientId=${this.clientId}`,
+        );
+      }
+      return !yieldedToOtherBot;
+    };
     const pipeline = new SpeechPipeline({
       synthesizer: this.params.synthesizer,
       playback: this.params.playback,
@@ -384,10 +423,11 @@ export class TeamSpeakSttTtsSpeakerSession {
           nickname: this.nickname,
           message: gated.message,
           ...(gated.wakeName ? { wakeName: gated.wakeName } : {}),
+          ...(isFollowUp ? { followUp: true } : {}),
         },
         {
           onBlock: (text) => {
-            if (!isLive()) {
+            if (!isLive() || !mayStartSpeaking()) {
               return;
             }
             firstBlockAt ??= this.now();
@@ -405,7 +445,7 @@ export class TeamSpeakSttTtsSpeakerSession {
       throw error;
     }
     const agentMs = this.now() - agentStartedAt;
-    if (isLive()) {
+    if (isLive() && mayStartSpeaking()) {
       const reply = outcome.text.trim();
       if (!streamedText) {
         if (reply) {
@@ -505,6 +545,7 @@ export class TeamSpeakSttTtsSpeakerSession {
     const matched = matchRealtimeVoiceActivationName(transcript, wakeNames);
     if (matched) {
       this.lastFuzzyHearing = undefined;
+      this.consecutiveFollowUps = 0;
       const message = matched.text.trim() || transcript.trim();
       return { message, wakeName: matched.activationName };
     }
@@ -518,6 +559,7 @@ export class TeamSpeakSttTtsSpeakerSession {
     const fuzzy = evaluated.match;
     if (fuzzy) {
       this.lastFuzzyHearing = fuzzy.heardAs;
+      this.consecutiveFollowUps = 0;
       const message = fuzzy.text.trim() || transcript.trim();
       return { message, wakeName: fuzzy.activationName };
     }
@@ -526,6 +568,7 @@ export class TeamSpeakSttTtsSpeakerSession {
     // and not a follow-up either -- they said who they meant.
     if (evaluated.excludedBy) {
       this.lastExcludedBy = evaluated.excludedBy;
+      this.endFollowUp(`named-other-bot:${evaluated.excludedBy}`);
       return undefined;
     }
     // Follow-up: they said the name a moment ago, we answered, and they came
@@ -539,6 +582,11 @@ export class TeamSpeakSttTtsSpeakerSession {
     }
     const idleFrom = this.conversationIdleFrom;
     if (idleFrom !== undefined && segment.startedAt - idleFrom <= followUpSilenceMs) {
+      if (this.consecutiveFollowUps >= MAX_CONSECUTIVE_FOLLOW_UPS) {
+        this.endFollowUp("follow-up-limit");
+        return undefined;
+      }
+      this.consecutiveFollowUps += 1;
       return { message: transcript };
     }
     return undefined;

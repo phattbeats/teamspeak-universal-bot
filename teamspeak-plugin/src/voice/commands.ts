@@ -11,6 +11,8 @@ import type { TeamSpeakClientId, TextMessageHeader } from "../bridge/protocol.js
 export type TeamSpeakCommand =
   | { kind: "vc-join"; channel?: string }
   | { kind: "vc-leave" }
+  /** Clock a bot out through ts-summoner (PHA-3823). No name = this bot. */
+  | { kind: "vc-dismiss"; bot?: string }
   | { kind: "vc-mute"; muted: boolean }
   | { kind: "status" };
 
@@ -30,7 +32,7 @@ export type CommandParseResult =
   | { ok: true; parsed: ParsedCommand }
   | { ok: false; failure: CommandParseFailure };
 
-export const VC_USAGE = "usage: !vc join [channel] | !vc leave | !vc mute [on|off]";
+export const VC_USAGE = "usage: !vc join [channel] | !vc leave | !vc dismiss [bot] | !vc mute [on|off]";
 
 export type CommandParseParams = {
   prefix?: string | undefined;
@@ -111,6 +113,14 @@ export function parseTeamSpeakCommand(
       };
     case "leave":
       return { ok: true, parsed: { ...base, command: { kind: "vc-leave" } } };
+    case "dismiss":
+      return {
+        ok: true,
+        parsed: {
+          ...base,
+          command: { kind: "vc-dismiss", ...(tokens[2] ? { bot: tokens.slice(2).join(" ") } : {}) },
+        },
+      };
     case "mute": {
       const requested = normalizeMuteArgument(tokens[2]?.toLowerCase());
       if (tokens[2] !== undefined && requested === undefined && tokens[2].toLowerCase() !== "toggle") {

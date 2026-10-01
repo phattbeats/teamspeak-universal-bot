@@ -119,6 +119,11 @@ AVATAR=${AVATAR:-/usr/local/share/sexton-avatar/$([ "$PERSONA" = sexton ] && ech
 # Sexton's channel (image/deploy-bexton.sh sets this) — the welcome PM still
 # fires. Default off, so the Sexton itself is unaffected.
 SEXTON_NO_CATCHUP=${SEXTON_NO_CATCHUP:-0}
+# PHA-3818: drop the welcome PM too, for a persona that isn't the Sexton
+# (image/deploy-lexton.sh sets this). Default off.
+SEXTON_NO_WELCOME=${SEXTON_NO_WELCOME:-0}
+# PHA-3836: Lexton's menacing DMs (image/run-menace.sh). Default off.
+SEXTON_MENACE=${SEXTON_MENACE:-0}
 
 log() { printf '\n== %s\n' "$*"; }
 
@@ -247,6 +252,8 @@ docker run -d \
   ${_WAKE_ALIASES_SET:+-e SEXTON_WAKE_ALIASES="$WAKE_ALIASES"} \
   ${_EXCLUDE_WAKE_NAMES_SET:+-e SEXTON_EXCLUDE_WAKE_NAMES="$EXCLUDE_WAKE_NAMES"} \
   -e SEXTON_NO_CATCHUP="$SEXTON_NO_CATCHUP" \
+  -e SEXTON_NO_WELCOME="$SEXTON_NO_WELCOME" \
+  -e SEXTON_MENACE="$SEXTON_MENACE" \
   ${TTS_VOICE_ID:+-e SEXTON_TTS_VOICE_ID="$TTS_VOICE_ID"} \
   ${BAND_ENABLED:+-e SEXTON_BAND_ENABLED="$BAND_ENABLED"} \
   ${BAND_PROVIDER:+-e SEXTON_BAND_PROVIDER="$BAND_PROVIDER"} \

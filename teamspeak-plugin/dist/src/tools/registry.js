@@ -5,6 +5,14 @@ import {
 } from "../config.js";
 import { readChannelLog } from "./catch-up.js";
 import { readSinger } from "./band-vibe.js";
+import {
+  MAX_SENTENCE_MINUTES,
+  MAX_SILENCE_SECONDS,
+  MAX_SUMMON_MINUTES,
+  MIN_SILENCE_SECONDS,
+  readTranscriptHistory
+} from "./villain.js";
+import { selfBotId, summonerAction } from "./summoner.js";
 const PLAY_MUSIC_TOOL = "play_music";
 const STOP_MUSIC_TOOL = "stop_music";
 const SET_VOLUME_TOOL = "set_volume";
@@ -32,6 +40,25 @@ const CREATE_CHANNEL_TOOL = "create_channel";
 const DELETE_CHANNEL_TOOL = "delete_channel";
 const EDIT_SERVER_TOOL = "edit_server";
 const ADD_TO_SERVER_GROUP_TOOL = "add_to_server_group";
+const SENTENCE_TOOL = "sentence";
+const SILENCE_TOOL = "silence";
+const SUMMON_TOOL = "summon";
+const DOSSIER_TOOL = "dossier";
+const SUMMON_BOT_TOOL = "summon_bot";
+const DISMISS_BOT_TOOL = "dismiss_bot";
+const MODERATION_FLAG = {
+  [KICK_CLIENT_TOOL]: "kick",
+  [MOVE_CLIENT_TOOL]: "kick",
+  [BAN_CLIENT_TOOL]: "ban",
+  [UNBAN_CLIENT_TOOL]: "ban",
+  [LIST_BANS_TOOL]: "ban",
+  [MUTE_CLIENT_TOOL]: "edit",
+  [EDIT_CHANNEL_TOOL]: "edit",
+  [CREATE_CHANNEL_TOOL]: "edit",
+  [DELETE_CHANNEL_TOOL]: "edit",
+  [EDIT_SERVER_TOOL]: "edit",
+  [ADD_TO_SERVER_GROUP_TOOL]: "edit"
+};
 const NOW_PLAYING_TOOL = "now_playing";
 const SHOW_QUEUE_TOOL = "show_queue";
 const SKIP_TOOL = "skip";
@@ -66,7 +93,8 @@ function createTeamSpeakToolRegistration(deps) {
     tools: buildTeamSpeakTools({
       music: deps.music !== void 0,
       band: deps.band !== void 0,
-      moderation: moderationOptions(deps.config)
+      moderation: moderationOptions(deps.config),
+      villain: deps.villain !== void 0
     }),
     handle: (event, context) => runTeamSpeakTool(deps, event, context)
   };
@@ -565,6 +593,88 @@ function buildTeamSpeakTools(options) {
       }
     );
   }
+  tools.push(
+    {
+      type: "function",
+      name: SUMMON_BOT_TOOL,
+      description: `Call one of the other regulars (Sexton, Bexton, Lexton) into the channel when they aren't around, e.g. "get Bexton in here". They show up on their own a minute or so later. Say it like a person would ("I'll get him", "hang on, calling him"), in character; never mention tools, servers, bots or systems.`,
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Who to call in: Sexton, Bexton or Lexton." }
+        },
+        required: ["name"]
+      }
+    },
+    {
+      type: "function",
+      name: DISMISS_BOT_TOOL,
+      description: 'Send one of the regulars (Sexton, Bexton, Lexton) home, or clock yourself out when someone tells you to go ("go home", "get out of here"): leave name empty for yourself. They drop off a minute or so later. Say goodbye first, in character, like a person heading out; never mention tools, servers, bots or systems.',
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Who to send home. Empty means you." }
+        }
+      }
+    }
+  );
+  if (options.villain) {
+    tools.push(
+      {
+        type: "function",
+        name: SENTENCE_TOOL,
+        description: `Sentence someone to Bot Jail for a few minutes (1-${MAX_SENTENCE_MINUTES}); they are moved back to the channel they came from automatically when time is up. Deliver the verdict line first, then call this. Emily, miss_shade and the bots are exempt and it will refuse them.`,
+        parameters: {
+          type: "object",
+          properties: {
+            nickname: { type: "string", description: "Who to jail." },
+            minutes: { type: "number", description: `Sentence length in minutes, 1-${MAX_SENTENCE_MINUTES}. Default 2.` },
+            reason: { type: "string", description: "The charge, for the record." }
+          },
+          required: ["nickname"]
+        }
+      },
+      {
+        type: "function",
+        name: SILENCE_TOOL,
+        description: `Take away someone's voice for ${MIN_SILENCE_SECONDS}-${MAX_SILENCE_SECONDS} seconds (talk power); it comes back on its own. For someone talking over you. Emily, miss_shade and the bots are exempt.`,
+        parameters: {
+          type: "object",
+          properties: {
+            nickname: { type: "string", description: "Who to silence." },
+            seconds: { type: "number", description: `How long, ${MIN_SILENCE_SECONDS}-${MAX_SILENCE_SECONDS}. Default 60.` }
+          },
+          required: ["nickname"]
+        }
+      },
+      {
+        type: "function",
+        name: SUMMON_TOOL,
+        description: `Summon someone to a private meeting in the LexCorp Board Room: a temporary channel is created, you and they are moved in, and after a few minutes (1-${MAX_SUMMON_MINUTES}) they are sent back and you return to your channel, which deletes the room. Emily, miss_shade and the bots are exempt.`,
+        parameters: {
+          type: "object",
+          properties: {
+            nickname: { type: "string", description: "Who to summon." },
+            minutes: { type: "number", description: `How long the meeting lasts, 1-${MAX_SUMMON_MINUTES}. Default 3.` }
+          },
+          required: ["nickname"]
+        }
+      },
+      {
+        type: "function",
+        name: DOSSIER_TOOL,
+        description: "Read-only. Pull someone's file: where they are right now, when you first heard from them, and their most recent lines to you (voice and chat). Quote it back at them.",
+        parameters: {
+          type: "object",
+          properties: {
+            nickname: { type: "string", description: "Whose file to pull." },
+            lines: { type: "number", description: "How many recent lines, 1-20. Default 8." }
+          },
+          required: ["nickname"]
+        }
+      }
+    );
+  }
   return tools;
 }
 async function runTeamSpeakTool(deps, event, context) {
@@ -583,6 +693,10 @@ async function runTeamSpeakTool(deps, event, context) {
   return result;
 }
 async function dispatch(deps, name, args, context) {
+  const flag = MODERATION_FLAG[name];
+  if (flag && !moderationOptions(deps.config)[flag]) {
+    return { ok: false, error: "That moderation tool is not enabled here." };
+  }
   switch (name) {
     case PLAY_MUSIC_TOOL:
       return await playMusic(deps, args);
@@ -660,6 +774,20 @@ async function dispatch(deps, name, args, context) {
       return await whereIs(deps, args, context);
     case SEND_TEXT_TOOL:
       return sendText(deps, args, context);
+    case SENTENCE_TOOL:
+    case SILENCE_TOOL:
+    case SUMMON_TOOL:
+      return await villainTool(deps, name, args, context);
+    case DOSSIER_TOOL:
+      return await dossierTool(deps, args, context);
+    case SUMMON_BOT_TOOL:
+    case DISMISS_BOT_TOOL:
+      return await summonerAction(
+        deps.config?.summoner,
+        name === SUMMON_BOT_TOOL ? "summon" : "dismiss",
+        readString(args.name) ?? (name === DISMISS_BOT_TOOL ? selfBotId() : ""),
+        `${selfBotId()} for ${context.nickname}`
+      );
     default:
       return { ok: false, error: `Unknown TeamSpeak tool "${name}".` };
   }
@@ -1258,6 +1386,83 @@ async function whereIs(deps, args, context) {
     channelId: match.channel.channelId
   };
 }
+async function villainTool(deps, name, args, context) {
+  const villain = deps.villain;
+  if (!villain) {
+    return { ok: false, error: "That is not enabled on this bot." };
+  }
+  const nickname = readString(args.nickname);
+  if (!nickname) {
+    return { ok: false, error: "Who?" };
+  }
+  const tree = await deps.listChannels();
+  if (tree.length === 0) {
+    return { ok: false, error: "Could not read the channel list right now." };
+  }
+  const match = matchNicknameAcrossTree(tree, nickname, context);
+  if (!match) {
+    return { ok: false, error: `No one on the server is called "${nickname}".` };
+  }
+  if (Array.isArray(match)) {
+    return { ok: false, error: `"${nickname}" matches more than one person.`, candidates: match };
+  }
+  const exempt = villain.exemption(match.entry);
+  if (exempt) {
+    return { ok: false, error: exempt };
+  }
+  const target = {
+    clientId: match.entry.clientId,
+    nickname: match.entry.nickname,
+    channelId: match.channel.channelId
+  };
+  if (name === SENTENCE_TOOL) {
+    const outcome = villain.sentence(target, readNumber(args.minutes) ?? 2);
+    if (outcome.ok) {
+      const reason = readString(args.reason);
+      deps.log?.(`villain: sentenced ${target.nickname} for ${String(outcome.minutes)}m${reason ? `: ${reason}` : ""}`);
+    }
+    return outcome;
+  }
+  if (name === SILENCE_TOOL) {
+    return villain.silence(target, readNumber(args.seconds) ?? 60);
+  }
+  return await villain.summon(target, readNumber(args.minutes) ?? 3);
+}
+async function dossierTool(deps, args, context) {
+  const nickname = readString(args.nickname);
+  if (!nickname) {
+    return { ok: false, error: "Whose file?" };
+  }
+  const limit = Math.min(20, Math.max(1, Math.round(readNumber(args.lines) ?? 8)));
+  const tree = await deps.listChannels();
+  const match = tree.length > 0 ? matchNicknameAcrossTree(tree, nickname, context) : void 0;
+  if (Array.isArray(match)) {
+    return { ok: false, error: `"${nickname}" matches more than one person.`, candidates: match };
+  }
+  const name = match?.entry.nickname ?? nickname;
+  let history = { lines: [], firstSeen: void 0, total: 0 };
+  let historyError;
+  if (deps.readHistory) {
+    try {
+      history = await deps.readHistory(name, limit);
+    } catch (error) {
+      historyError = describe(error);
+    }
+  }
+  return {
+    ok: true,
+    nickname: name,
+    online: match !== void 0,
+    ...match ? { channel: match.channel.name, channelId: match.channel.channelId } : {},
+    firstSeen: history.firstSeen ?? null,
+    linesOnFile: history.total,
+    recentLines: history.lines,
+    ...historyError ? { historyError } : {}
+  };
+}
+function transcriptHistoryReader(dbPath) {
+  return (nickname, limit) => readTranscriptHistory(dbPath, nickname, limit);
+}
 function editChannelTool(deps, args, context) {
   if (!isAuthorizedForModeration(deps, context)) {
     return NOT_AUTHORIZED;
@@ -1499,6 +1704,8 @@ export {
   COMPOSE_SONG_TOOL,
   CREATE_CHANNEL_TOOL,
   DELETE_CHANNEL_TOOL,
+  DISMISS_BOT_TOOL,
+  DOSSIER_TOOL,
   EDIT_CHANNEL_TOOL,
   EDIT_SERVER_TOOL,
   JOIN_VOICE_TOOL,
@@ -1521,16 +1728,21 @@ export {
   SEARCH_MUSIC_TOOL,
   SEEK_TOOL,
   SEND_TEXT_TOOL,
+  SENTENCE_TOOL,
   SET_VOLUME_TOOL,
   SHOW_QUEUE_TOOL,
+  SILENCE_TOOL,
   SKIP_TOOL,
   SONG_LYRICS_TOOL,
   STOP_MUSIC_TOOL,
+  SUMMON_BOT_TOOL,
+  SUMMON_TOOL,
   UNBAN_CLIENT_TOOL,
   WHAT_DID_I_MISS_TOOL,
   WHERE_IS_TOOL,
   WHO_IS_HERE_TOOL,
   buildTeamSpeakTools,
   createTeamSpeakToolRegistration,
-  runTeamSpeakTool
+  runTeamSpeakTool,
+  transcriptHistoryReader
 };

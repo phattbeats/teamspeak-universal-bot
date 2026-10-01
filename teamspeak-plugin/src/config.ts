@@ -11,6 +11,7 @@
  * encryption, autoJoin/followUsers by Discord user id) are replaced by their
  * TeamSpeak equivalents rather than carried over meaninglessly.
  */
+import type { TeamSpeakSummonerConfig } from "./tools/summoner.js";
 import {
   MINIMAX_ASR_PROVIDER_ID,
   WHISPER_LOCAL_PROVIDER_ID,
@@ -344,6 +345,35 @@ export type TeamSpeakToolsConfig = {
   music?: TeamSpeakMusicConfig;
   band?: TeamSpeakBandConfig;
   moderation?: TeamSpeakModerationConfig;
+  villain?: TeamSpeakVillainConfig;
+  /** The ts-summoner sidecar (PHA-3823): summon_bot / dismiss_bot / trash-talk crash-ins. */
+  summoner?: TeamSpeakSummonerConfig;
+};
+
+/**
+ * Lexton's villain tools (PHA-3820): `sentence`, `silence`, `summon`,
+ * `dossier`. A separate switch from `moderation.edit`, which would also hand
+ * the agent `edit_channel`/`delete_channel`/`edit_server`/group adds. These
+ * run on the bot's own initiative, so there is no caller-group gate; the
+ * exempt lists are what protect people.
+ */
+export type TeamSpeakVillainConfig = {
+  /** Register the four tools (default: false). */
+  enabled?: boolean;
+  /** Nicknames nobody may jail/mute/summon (substring, case/punctuation-insensitive). Default: Emily, miss_shade, the bots. */
+  exempt?: string[];
+  /** Server groups that are exempt (the bots' group). Default: ["Sexton"]. */
+  exemptGroups?: string[];
+  /** Bot Jail's channel id. Default: 7. */
+  jailChannelId?: number;
+  /** Where the bot goes back to after a summon. Default: "General Shit". */
+  homeChannel?: string;
+  /** Default: "LexCorp Board Room". */
+  boardRoomName?: string;
+  /** Pending reverts, so they survive a gateway restart. Default: $OPENCLAW_STATE_DIR/teamspeak-villain-pending.json. */
+  stateFile?: string;
+  /** Transcript DB for `dossier`. Default: $OPENCLAW_STATE_DIR/agents/$SEXTON_AGENT_ID/agent/openclaw-agent.sqlite. */
+  transcriptDb?: string;
 };
 
 export type TeamSpeakAccountConfig = {
@@ -505,6 +535,7 @@ export function resolveSextonLogDir(
   return (
     config?.tools?.logDir?.trim() ||
     env.TEAMSPEAK_SEXTON_LOG_DIR?.trim() ||
+    env.SEXTON_LOG_DIR?.trim() ||
     DEFAULT_SEXTON_LOG_DIR
   );
 }
@@ -749,4 +780,18 @@ export function resolveTeamSpeakVoiceMode(
   config: TeamSpeakAccountConfig | undefined,
 ): TeamSpeakVoiceMode {
   return config?.voice?.mode ?? DEFAULT_VOICE_MODE;
+}
+
+/** Where the villain tools keep state and read the transcript (PHA-3820). */
+export function resolveVillainPaths(
+  config: TeamSpeakVillainConfig | undefined,
+  env: Record<string, string | undefined> = process.env,
+): { stateFile: string; transcriptDb: string } {
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || "/config/openclaw";
+  const agentId = env.SEXTON_AGENT_ID?.trim() || "sexton";
+  return {
+    stateFile: config?.stateFile?.trim() || `${stateDir}/teamspeak-villain-pending.json`,
+    transcriptDb:
+      config?.transcriptDb?.trim() || `${stateDir}/agents/${agentId}/agent/openclaw-agent.sqlite`,
+  };
 }

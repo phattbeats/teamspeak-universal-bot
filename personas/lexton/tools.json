@@ -1,0 +1,11 @@
+{
+  "music": {
+    "enabled": true
+  },
+  "moderation": {
+    "kick": false,
+    "ban": false,
+    "edit": false,
+    "allowGroups": []
+  }
+}
