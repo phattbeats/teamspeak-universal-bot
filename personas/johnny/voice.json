@@ -1,0 +1,14 @@
+{
+  "voiceId": "English_Debator",
+  "wakeNames": [
+    "Johnny",
+    "Rotten Johnny"
+  ],
+  "wakeAliases": [],
+  "excludeWakeNames": [
+    "Sexton",
+    "Bexton",
+    "Lexton",
+    "Trixie"
+  ]
+}
