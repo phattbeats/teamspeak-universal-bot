@@ -77,6 +77,19 @@
       "quietOutMin": 30
     }
   },
+  "guests": {
+    "enabled": true,
+    "visitMin": [
+      15,
+      45
+    ],
+    "meanEligibleMin": 240,
+    "maxPerWeek": 3,
+    "specialNightExtra": 1,
+    "specialBoost": 3,
+    "minGapHours": 20,
+    "minHumans": 1
+  },
   "bots": {
     "sexton": {
       "container": "sexton",
@@ -132,6 +145,36 @@
       "trashTalk": {
         "stayMin": 20,
         "cooldownMin": 60
+      }
+    },
+    "johnny": {
+      "container": "guest",
+      "nick": "Rotten Johnny",
+      "names": [
+        "rotten johnny",
+        "johnny"
+      ],
+      "shifts": [],
+      "guest": {
+        "needs": [
+          "bexton"
+        ],
+        "weight": 1
+      }
+    },
+    "trixie": {
+      "container": "guest",
+      "nick": "Trixie",
+      "names": [
+        "trixie",
+        "trix"
+      ],
+      "shifts": [],
+      "guest": {
+        "needs": [
+          "bexton"
+        ],
+        "weight": 1
       }
     }
   },

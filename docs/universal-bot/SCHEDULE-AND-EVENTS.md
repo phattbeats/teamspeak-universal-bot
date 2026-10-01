@@ -376,6 +376,42 @@ mount, so after editing it run `docker restart ts-summoner`.
 
 ---
 
+## 5b. Guest stars (PHA-3842)
+
+Rotten Johnny (the ghoul who owns the Vice) and Trixie (his waitress, the band's second singer) aren't regulars. They **drop in** on Bexton nights for 15-45 minutes, a few times a week.
+
+**One container for every guest.** `guest` (`image/deploy-guest.sh`, appdata `/mnt/user/appdata/guest`) runs one gateway, one bridge and one TeamSpeak identity. Before each visit the summoner runs `node /usr/local/bin/guest-switch.mjs <id>` in it. That script:
+- rebinds the teamspeak channel to the guest's agent, seeding its workspace from `personas/<id>/` the first time,
+- sets the wake names/excludes and the TTS voice (`voiceId`, plus optional `pitch` and `speed`) from `personas/<id>/voice.json`,
+- writes `/config/.guest-env` (nick + avatar), which `run-sexton.sh` sources when the core starts, and `/config/.guest` (who is in the chair),
+- restarts the container's gateway, but only when the config actually changed. The same guest twice in a row costs no restart.
+
+At most one guest is ever on, because they share the container. A guest who's wanted while the other one is in waits for the other one to leave.
+
+**When they come** (`config.json → guests`, rules in `ts-summoner/guests.mjs`):
+
+| knob | default | meaning |
+|---|---|---|
+| `meanEligibleMin` | 240 | dice: about one visit per this many minutes of eligible time |
+| `maxPerWeek` | 3 | hard cap, rolling 7 days |
+| `specialNightExtra` | 1 | extra visits allowed in that week on a calendar night (any pool) |
+| `specialBoost` | 3 | dice multiplier on a calendar night |
+| `minGapHours` | 20 | minimum gap between visits (halved on a calendar night) |
+| `minHumans` | 1 | nobody on the server, no visit |
+| `visitMin` | [15, 45] | visit length, uniform |
+
+Eligible means the slot is free, there are humans on the server, and one of the guest's `needs` bots is in the room. Johnny and Trixie both have `needs: ["bexton"]`. If Bexton leaves, the guest leaves too. Like every summons, a visit also ends once the server has been empty for `idleGraceMin`.
+
+A guest is an ordinary bot entry (`bots.johnny`, `bots.trixie`) with `container: "guest"`, `shifts: []` and a `guest` block (`needs`, `weight`, optional own `visitMin`). Chat summons work too ("hey johnny"). Guests never cover a call-out and never break bender news.
+
+**Lines and scenes.** Arriving uses the guest's `shift_start` pool and leaving uses `shift_end`, from `personas/<id>/lines.json`. With Bexton in the room, `arrive:<guest>@bexton` and `leave:<guest>@bexton` scenes play instead.
+
+**By hand:** `POST /event/guest` (random eligible guest) or `POST /event/guest?who=trixie`, and `POST /event/end?kind=guest`. `GET /status` shows `events.guests` (active visit, recent visit times).
+
+**Cost (PHA-3597).** Only one guest container exists, and its core is down between visits. It uses the whisper pool's coalescing proxy (`:8082`), so what it hears in the room with Bexton is mostly decoded once for both. The week is capped at 3-4 visits of 45 minutes or less.
+
+**Adding a guest:** make a `personas/<id>/` pack (`AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `lines.json`, `tools.json`, `voice.json` with `nick`, `avatar.png`) and add its `COPY` lines next to Johnny's in `image/Dockerfile`. Add a `bots.<id>` entry with `container: "guest"`, then rebuild the image and redeploy the guest container. Also add the new nick to the regulars' `excludeWakeNames` (exact nick match, so bots don't wake each other).
+
 ## 6. Deploy
 
 Summoner (PHATT-RAID):

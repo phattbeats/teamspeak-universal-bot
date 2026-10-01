@@ -364,6 +364,10 @@ if ! node -e '
     } else if (personaVoice.voiceId) {
       ts.voice.streaming.speech.voiceId = personaVoice.voiceId;
     }
+    // PHA-3842: optional per-persona pitch (semitones) and speed.
+    for (const k of ["pitch", "speed"]) {
+      if (typeof personaVoice[k] === "number") ts.voice.streaming.speech[k] = personaVoice[k];
+    }
     // Moderation (PHA-3793/PHA-3786 catalog, never codified before this
     // change): the persona packs tools.json is the only source for this --
     // there is no SEXTON_MODERATION_* env knob. Fails closed by default

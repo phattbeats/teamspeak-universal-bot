@@ -168,8 +168,13 @@ function resolveTeamSpeakSpeechConfig(config) {
     provider: raw?.provider?.trim() || DEFAULT_SPEECH_PROVIDER,
     model: raw?.model?.trim() || DEFAULT_SPEECH_MODEL,
     voiceId: raw?.voiceId?.trim() || void 0,
+    pitch: finiteNumber(raw?.pitch),
+    speed: finiteNumber(raw?.speed),
     timeoutMs: positiveMs(raw?.timeoutMs, DEFAULT_SPEECH_TIMEOUT_MS)
   };
+}
+function finiteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
 }
 function resolveTeamSpeakSegmentationConfig(config) {
   const raw = config?.voice?.streaming?.segmentation;
