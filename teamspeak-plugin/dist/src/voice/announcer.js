@@ -45,7 +45,18 @@ class Announcer {
     }
     try {
       const parsed = JSON.parse(raw);
-      return { reason: String(parsed.reason ?? ""), at: Number(parsed.at) || 0, quiet: parsed.quiet === true };
+      const request = {
+        reason: String(parsed.reason ?? ""),
+        at: Number(parsed.at) || 0,
+        quiet: parsed.quiet === true
+      };
+      if (typeof parsed.text === "string" && parsed.text.trim()) request.text = parsed.text.trim();
+      if (parsed.vars && typeof parsed.vars === "object") {
+        request.vars = Object.fromEntries(
+          Object.entries(parsed.vars).filter(([, v]) => typeof v === "string")
+        );
+      }
+      return request;
     } catch {
       return { reason: "", at: 0 };
     }
@@ -57,12 +68,14 @@ class Announcer {
       this.params.log?.(`teamspeak announce: dropped stale '${request.reason}' (${Math.round(age / 1e3)}s old)`);
       return;
     }
-    const mood = await this.settleMood(request.reason);
+    const chain = reasonChain(request.reason);
+    const base = chain[chain.length - 1] ?? "";
+    const mood = await this.settleMood(base);
     if (request.quiet) {
       this.params.log?.(`teamspeak announce: '${request.reason}' quiet (empty server)`);
       return;
     }
-    const line = mood && await this.pick(`mood:${mood}`) || await this.pick(request.reason);
+    const line = request.text ? fill(request.text, request.vars) : await this.choose(chain, mood, request.vars);
     if (!line) {
       this.params.log?.(`teamspeak announce: no lines for '${request.reason}'`);
       return;
@@ -116,7 +129,16 @@ class Announcer {
     }
     return mood;
   }
-  async pick(reason) {
+  /** Tagged pools (most specific first), then the mood's, then the plain one. */
+  async choose(chain, mood, vars) {
+    const order = [...chain.slice(0, -1), ...mood ? [`mood:${mood}`] : [], ...chain.slice(-1)];
+    for (const key of order) {
+      const line = await this.pick(key, vars);
+      if (line) return line;
+    }
+    return void 0;
+  }
+  async pick(reason, vars) {
     let pool;
     try {
       pool = JSON.parse(await readFile(this.params.linesFile, "utf8"))[reason];
@@ -126,7 +148,7 @@ class Announcer {
       );
       return void 0;
     }
-    const lines = Array.isArray(pool) ? pool.filter((l) => typeof l === "string" && l.trim() !== "") : [];
+    const lines = Array.isArray(pool) ? pool.filter((l) => typeof l === "string" && l.trim() !== "").map((l) => fill(l, vars)).filter((l) => l !== void 0) : [];
     if (!lines.length) return void 0;
     const prev = this.last.get(reason);
     const random = this.params.random ?? Math.random;
@@ -137,6 +159,19 @@ class Announcer {
     this.last.set(reason, i);
     return lines[i];
   }
+}
+function reasonChain(reason) {
+  const parts = reason.split(":");
+  return parts.map((_, i) => parts.slice(0, parts.length - i).join(":"));
+}
+function fill(line, vars = {}) {
+  let missing = false;
+  const out = line.replace(/\{(\w+)\}/g, (_, name) => {
+    const v = vars[name];
+    if (typeof v !== "string" || !v.trim()) missing = true;
+    return v ?? "";
+  });
+  return missing ? void 0 : out;
 }
 function rollMood(moods, random) {
   const rows = Object.entries(moods).map(([name, m]) => [name, Math.max(0, Number(m?.weight ?? 1) || 0)]);
@@ -162,6 +197,8 @@ function renderMood(prompt) {
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export {
   Announcer,
+  fill,
+  reasonChain,
   renderMood,
   rollMood
 };

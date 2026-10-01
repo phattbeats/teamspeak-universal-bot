@@ -1,0 +1,48 @@
+{
+  "_doc": "Special nights (PHA-3841). See docs/universal-bot/SCHEDULE-AND-EVENTS.md. Edit live on the box; re-read within one reconcile. Later entries win. Shifts belong to the day they START; pools/vars/events belong to the service day, which flips at 06:00.",
+  "entries": [
+    {
+      "id": "friday-lounge",
+      "title": "Friday lounge night: the band plays till four",
+      "when": { "weekday": "fri" },
+      "bots": { "bexton": { "shifts": [{ "start": "18:00", "end": "04:00" }], "pool": "lounge" } }
+    },
+    {
+      "id": "july4",
+      "when": { "date": "07-04" },
+      "pool": "july4"
+    },
+    {
+      "id": "halloween",
+      "title": "Halloween: Lexton comes in at nine",
+      "when": { "date": "10-31" },
+      "pool": "halloween",
+      "bots": { "lexton": { "extraShifts": [{ "start": "21:00", "end": "04:00" }] } }
+    },
+    {
+      "id": "thanksgiving",
+      "when": { "month": 11, "weekday": "thu", "nth": 4 },
+      "pool": "thanksgiving"
+    },
+    {
+      "id": "christmas",
+      "when": { "from": "12-24", "to": "12-25" },
+      "pool": "christmas"
+    },
+    {
+      "id": "new-years-eve",
+      "title": "New Year's Eve: the band plays till four, the midnight hand-off is a countdown",
+      "when": { "date": "12-31" },
+      "pool": "newyear",
+      "bots": { "bexton": { "shifts": [{ "start": "18:00", "end": "04:00" }] } }
+    },
+    {
+      "id": "birthday-example",
+      "enabled": false,
+      "title": "Copy this per person: date, name, flip enabled to true",
+      "when": { "date": "01-01" },
+      "pool": "birthday",
+      "vars": { "who": "Somebody" }
+    }
+  ]
+}

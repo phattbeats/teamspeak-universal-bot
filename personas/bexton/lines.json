@@ -73,5 +73,66 @@
     "Johnny docked me for a glass I didn't break. Tip jar's out.",
     "Band's in, and so's the tip jar. Funny how that works.",
     "Evening. I'm broke, the band's broke, give generously."
+  ],
+  "shift_start:lounge": [
+    "Friday. The band plays till four and none of you are leaving early. Johnny's locking the doors.",
+    "Lounge night. Ties optional, taste mandatory. Mostly mandatory.",
+    "It's Friday, so the band's here late, and Trixie's already annoyed about it. Evening.",
+    "(coughs) Friday at the Velvet Vice. Sit down, order something, tip like you mean it."
+  ],
+  "shift_end:lounge": [
+    "Four in the morning. That's the set. Johnny's flipping the chairs, get out.",
+    "We're done. Ten more minutes was three hours ago. Goodnight.",
+    "Band's packing up. Trixie's counting tips and she knows exactly who stiffed her."
+  ],
+  "shift_start:halloween": [
+    "Happy Halloween. Johnny's not in costume. Don't ask him about the face.",
+    "The band's in costume tonight. We came as a band that gets paid.",
+    "Evening, ghouls. Johnny says that's offensive. Johnny's a ghoul. Fine."
+  ],
+  "shift_end:halloween": [
+    "That's Halloween. Leave the candy, take the trash. Goodnight.",
+    "We're done. If something's knocking at the back door, that's Lexton's problem."
+  ],
+  "shift_start:christmas": [
+    "Merry Christmas. The band will play one carol, and you'll know which one when it hurts.",
+    "(groans) Christmas Eve at the Velvet Vice. Trixie hung tinsel on the bat. Johnny hasn't noticed."
+  ],
+  "shift_start:newyear": [
+    "New Year's Eve. The band's here till four and so are you.",
+    "Last night of the year. Dress code is whatever you didn't puke on."
+  ],
+  "shift_end:newyear": [
+    "Happy New Year. That's the set. Kiss someone or go home, I don't care which.",
+    "Year's over, band's over. Johnny's calling it. Out."
+  ],
+  "shift_start:thanksgiving": [
+    "Happy Thanksgiving. I'm thankful for the band and nothing else at this table.",
+    "Johnny cooked. Nobody ask what. The band's in."
+  ],
+  "shift_start:birthday": [
+    "It's {who}'s birthday. The band will play something, and it won't be the birthday song. We have standards.",
+    "Happy birthday, {who}. First request's free. That's the gift. That's the whole gift.",
+    "Johnny, a round for {who}. On {who}. Happy birthday."
+  ],
+  "shift_start:bender_return": [
+    "(groans) I'm back. Don't ask where I was. I don't know where I was.",
+    "Two days. I've got a bruise shaped like Oklahoma and a tattoo that says 'Trixie' spelled wrong. Band's in.",
+    "I'm back. Johnny says I owe him for a window. I don't remember a window.",
+    "Nobody talk. Nobody play anything in a major key. I'm here."
+  ],
+  "summon:bender": [
+    "Who's that. Is that... I'm at a wedding. I think it's mine.",
+    "You found me. I'm in a bathtub. It's not my bathtub. What do you want.",
+    "I'm not here. Officially I'm not here. Unofficially, play something, I'll sing."
+  ],
+  "dismiss:bender": [
+    "Fine. Back to the bar. Some bar. A bar.",
+    "Good. Tell Johnny I'm at... no, don't tell Johnny anything."
+  ],
+  "shift_end:bender": [
+    "I'm stepping out for one drink. One. Don't wait up. Don't come looking.",
+    "Band's taking five. Or two days. Depends on the bar.",
+    "(sighs) I need a drink, and Johnny's is too close to home. Bye."
   ]
 }

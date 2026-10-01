@@ -25,11 +25,27 @@
  * summon keeps the shift's mood, or rolls one if the last is stale. The
  * summoner sends entrances even into an empty server, marked `quiet`, so the
  * mood still turns over when nobody's there to hear the line.
+ *
+ * PHA-3841 additions (all optional, so an older summoner still works):
+ *   - `reason` may carry a tag, `shift_start:halloween` (a calendar night) or
+ *     `shift_start:bender_return` (a rare event). Line order: the tagged pool,
+ *     then the mood pool, then the plain `shift_start`. A themed night beats a
+ *     mood; the mood still rolls off the base reason.
+ *   - `vars` fill `{name}` placeholders (`{who}` on a birthday). A line with a
+ *     placeholder the request didn't fill is skipped, never read out raw.
+ *   - `text` is a line to say verbatim, no pool. Two-bot scenes use it: the
+ *     summoner owns the script and hands each bot its next line in turn.
  */
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-export type AnnounceRequest = { reason: string; at: number; quiet?: boolean };
+export type AnnounceRequest = {
+  reason: string;
+  at: number;
+  quiet?: boolean;
+  text?: string;
+  vars?: Record<string, string>;
+};
 
 /** One row of moods.json. `prompt` is backstory, never "you are sad". */
 export type MoodEntry = { weight?: number; prompt?: string };
@@ -105,7 +121,18 @@ export class Announcer {
     }
     try {
       const parsed = JSON.parse(raw) as Partial<AnnounceRequest>;
-      return { reason: String(parsed.reason ?? ""), at: Number(parsed.at) || 0, quiet: parsed.quiet === true };
+      const request: AnnounceRequest = {
+        reason: String(parsed.reason ?? ""),
+        at: Number(parsed.at) || 0,
+        quiet: parsed.quiet === true,
+      };
+      if (typeof parsed.text === "string" && parsed.text.trim()) request.text = parsed.text.trim();
+      if (parsed.vars && typeof parsed.vars === "object") {
+        request.vars = Object.fromEntries(
+          Object.entries(parsed.vars).filter(([, v]) => typeof v === "string") as [string, string][],
+        );
+      }
+      return request;
     } catch {
       return { reason: "", at: 0 };
     }
@@ -118,12 +145,14 @@ export class Announcer {
       this.params.log?.(`teamspeak announce: dropped stale '${request.reason}' (${Math.round(age / 1000)}s old)`);
       return;
     }
-    const mood = await this.settleMood(request.reason);
+    const chain = reasonChain(request.reason);
+    const base = chain[chain.length - 1] ?? "";
+    const mood = await this.settleMood(base);
     if (request.quiet) {
       this.params.log?.(`teamspeak announce: '${request.reason}' quiet (empty server)`);
       return;
     }
-    const line = (mood && (await this.pick(`mood:${mood}`))) || (await this.pick(request.reason));
+    const line = request.text ? fill(request.text, request.vars) : await this.choose(chain, mood, request.vars);
     if (!line) {
       this.params.log?.(`teamspeak announce: no lines for '${request.reason}'`);
       return;
@@ -180,7 +209,17 @@ export class Announcer {
     return mood;
   }
 
-  private async pick(reason: string): Promise<string | undefined> {
+  /** Tagged pools (most specific first), then the mood's, then the plain one. */
+  private async choose(chain: string[], mood: string | undefined, vars?: Record<string, string>) {
+    const order = [...chain.slice(0, -1), ...(mood ? [`mood:${mood}`] : []), ...chain.slice(-1)];
+    for (const key of order) {
+      const line = await this.pick(key, vars);
+      if (line) return line;
+    }
+    return undefined;
+  }
+
+  private async pick(reason: string, vars?: Record<string, string>): Promise<string | undefined> {
     let pool: unknown;
     try {
       pool = (JSON.parse(await readFile(this.params.linesFile, "utf8")) as Record<string, unknown>)[reason];
@@ -190,7 +229,12 @@ export class Announcer {
       );
       return undefined;
     }
-    const lines = Array.isArray(pool) ? pool.filter((l): l is string => typeof l === "string" && l.trim() !== "") : [];
+    const lines = Array.isArray(pool)
+      ? pool
+          .filter((l): l is string => typeof l === "string" && l.trim() !== "")
+          .map((l) => fill(l, vars))
+          .filter((l): l is string => l !== undefined)
+      : [];
     if (!lines.length) return undefined;
     const prev = this.last.get(reason);
     const random = this.params.random ?? Math.random;
@@ -202,6 +246,23 @@ export class Announcer {
     this.last.set(reason, i);
     return lines[i];
   }
+}
+
+/** `a:b:c` -> [`a:b:c`, `a:b`, `a`]. */
+export function reasonChain(reason: string): string[] {
+  const parts = reason.split(":");
+  return parts.map((_, i) => parts.slice(0, parts.length - i).join(":"));
+}
+
+/** Fills `{name}` from vars; undefined if any placeholder is left unfilled. */
+export function fill(line: string, vars: Record<string, string> = {}): string | undefined {
+  let missing = false;
+  const out = line.replace(/\{(\w+)\}/g, (_, name: string) => {
+    const v = vars[name];
+    if (typeof v !== "string" || !v.trim()) missing = true;
+    return v ?? "";
+  });
+  return missing ? undefined : out;
 }
 
 /** Weighted pick; weight defaults to 1, zero or negative never comes up. */

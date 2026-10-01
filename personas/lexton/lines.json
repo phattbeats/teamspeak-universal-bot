@@ -70,5 +70,43 @@
     "Is Bexton here? I've got a letter in my pocket with his name on it.",
     "Evening. Somebody tell the band leader I'm making an offer tonight.",
     "I've drafted an offer for Bexton. Benefits, dental, a stage that matters."
+  ],
+  "shift_start:halloween": [
+    "Happy Halloween. Everyone else is wearing a mask. I'm just wearing the face.",
+    "Halloween. Your one night a year to be frightening. I do it professionally.",
+    "(chuckle) Trick or treat. It's always the trick."
+  ],
+  "shift_end:halloween": [
+    "Halloween's over. Leave the costumes on, it's an improvement.",
+    "I'm leaving. Check under your bed, I bought the company that made it."
+  ],
+  "shift_start:christmas": [
+    "Merry Christmas. I bought the North Pole. The elves are unionizing. It won't last.",
+    "Christmas. A fat man breaks into your house and you thank him. Superman would approve."
+  ],
+  "shift_start:newyear": [
+    "New Year. New quarter. Same disappointing room.",
+    "Happy New Year. My resolution is the same every year, and it's working."
+  ],
+  "shift_end:newyear": [
+    "That's the first night of the year. You're all already behind.",
+    "Goodnight. The year's mine. You're just living in it."
+  ],
+  "shift_start:thanksgiving": [
+    "Happy Thanksgiving. Be grateful. I own the gravy.",
+    "Thanksgiving. One family pretends to like each other. My board does that weekly."
+  ],
+  "shift_start:july4": [
+    "Independence Day. Enjoy it. It's a limited-time offer.",
+    "Happy Fourth. Fireworks are just market research for what I'm building."
+  ],
+  "shift_start:birthday": [
+    "Happy birthday, {who}. Another year of being worth slightly less to me.",
+    "It's {who}'s birthday. My gift is I'm not kicking you tonight. Probably.",
+    "{who}. Happy birthday. I had a cake made. It's in Bot Jail. Go get it."
+  ],
+  "bender_news": [
+    "Bexton's missing. I'd love to tell you I had nothing to do with it.",
+    "No band. Bexton's on a bender. That's not a breakdown, that's a negotiating position, and I'm listening."
   ]
 }
