@@ -106,19 +106,37 @@ export function shiftsFor(cfg, calendar, id, p) {
   return { shifts, entries };
 }
 
-/** Is `id` scheduled on at `ts` (calendar included, rare events not)? */
-export function onShift(cfg, calendar, id, ts) {
+/**
+ * The shift `id` is on at `ts`, or null (calendar included, rare events not):
+ *   { key, start, end, startTs, endTs, lateMin }
+ * `jit(key)` (PHA-3839) returns { start, end } minutes to push the shift by;
+ * without it the schedule is exact. `key` names one shift on one date, so a
+ * call-out or a jitter roll sticks to that shift.
+ */
+export function shiftAt(cfg, calendar, id, ts, jit) {
   const today = local(ts, cfg.tz);
-  const { min } = today;
-  for (const s of shiftsFor(cfg, calendar, id, today).shifts) {
-    const a = hm(s.start), b = hm(s.end);
-    if (a < b ? min >= a && min < b : min >= a) return true;
+  const days = [[today, today.min], [yesterday(ts, cfg.tz), today.min + 24 * 60]];
+  for (const [p, min] of days) {
+    const { shifts, entries } = shiftsFor(cfg, calendar, id, p);
+    for (const s of shifts) {
+      const key = `${id}@${p.ymd}@${s.start}`;
+      const j = jit ? jit(key) : { start: 0, end: 0 };
+      const a = hm(s.start), b0 = hm(s.end);
+      const lo = a + j.start, hi = (b0 > a ? b0 : b0 + 24 * 60) + j.end;
+      if (min >= lo && min < hi) {
+        return {
+          key, start: s.start, end: s.end, calendar: entries.length > 0, lateMin: j.start,
+          startTs: ts - (min - lo) * MIN, endTs: ts + (hi - min) * MIN,
+        };
+      }
+    }
   }
-  for (const s of shiftsFor(cfg, calendar, id, yesterday(ts, cfg.tz)).shifts) {
-    const a = hm(s.start), b = hm(s.end);
-    if (a >= b && min < b) return true; // last night's shift, still running
-  }
-  return false;
+  return null;
+}
+
+/** Is `id` scheduled on at `ts`? */
+export function onShift(cfg, calendar, id, ts, jit) {
+  return shiftAt(cfg, calendar, id, ts, jit) !== null;
 }
 
 /** First minute at or after `ts` where pred(t) is `want` (24h horizon). */

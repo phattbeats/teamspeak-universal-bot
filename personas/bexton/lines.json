@@ -134,5 +134,27 @@
     "I'm stepping out for one drink. One. Don't wait up. Don't come looking.",
     "Band's taking five. Or two days. Depends on the bar.",
     "(sighs) I need a drink, and Johnny's is too close to home. Bye."
+  ],
+  "shift_start:late": [
+    "I'm late. The band was ready. I wasn't. Let's go.",
+    "(groans) Sorry. Lost a shoe again. Band's in.",
+    "Yes, I'm late. Johnny wouldn't stop talking. Let's play.",
+    "Fashionably late. Emphasis on fashionably. Evening."
+  ],
+  "shift_start:covering": [
+    "{who}'s out, so the band's filling in. You get keys tonight, not whatever {who} does.",
+    "{who} called out. Trixie and I are covering. Try to look grateful.",
+    "Surprise. {who} bailed, the band's here instead. Upgrade.",
+    "Covering for {who}. Don't get used to it, I've got a lounge to run."
+  ],
+  "shift_end:early_out": [
+    "Half an hour of nothing. The band's packing up. Wake me if somebody claps.",
+    "Dead room. I'm going to the bar, at least Johnny talks back.",
+    "Nobody's said a thing in thirty minutes. That's a review. I'm out."
+  ],
+  "no_show": [
+    "{who} didn't show and nobody's covering. Very professional.",
+    "{who}'s a no-show. The band would write a song about it, but he's not worth the chords.",
+    "Heads up: {who} bailed. I'm not doing his shift, I've got my own problems."
   ]
 }

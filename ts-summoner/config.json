@@ -56,6 +56,27 @@
       ]
     }
   },
+  "variety": {
+    "salt": "pha-3839",
+    "jitter": {
+      "enabled": true,
+      "startMaxMin": 45,
+      "endMaxMin": 45,
+      "lateMin": 20,
+      "lateWindowMin": 15
+    },
+    "callout": {
+      "enabled": true,
+      "chance": 0.1,
+      "coverChance": 0.7,
+      "skipCalendarNights": true
+    },
+    "room": {
+      "enabled": true,
+      "overtimeMaxMin": 60,
+      "quietOutMin": 30
+    }
+  },
   "bots": {
     "sexton": {
       "container": "sexton",
