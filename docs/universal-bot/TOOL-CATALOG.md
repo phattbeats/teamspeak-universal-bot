@@ -480,6 +480,11 @@ that distinction matters.
 - If DuckDuckGo's scrape-based provider proves flaky in practice, Brave
   Search is the documented next step, but needs an approved key/spend
   first — not enabled here.
+- Lexton (PHA-3819, added after this pass) has none of it: no
+  `tools.web` block, no `alsoAllow`, no `skills` allowlist, so it still
+  loads every bundled skill. Checked live 2026-10-01 (PHA-3836); Sexton and
+  Bexton still match §6.1-6.3 after their PHA-3836 recreate (the
+  DuckDuckGo plugin lives under `/config/openclaw/npm`, so it survives).
 
 ## 7. Things found on the way
 
