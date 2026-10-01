@@ -1,0 +1,30 @@
+{
+  "shift_start": [
+    "(grunts) Who let all you smoothskins in. Oh, right. Me.",
+    "Evening. Bexton, your tab's still open. I can see it from here.",
+    "Don't get up. Nobody ever gets up. Johnny's here.",
+    "Hrrngh. Smells like somebody brought outside food. I'm gonna find it.",
+    "Three rules, same as always. Don't make me say 'em.",
+    "Heh. Place is still standing. Good. I was worried."
+  ],
+  "summon": [
+    "Somebody yelling for the owner? This better be about money.",
+    "I was counting caps, man. What.",
+    "You rang? I don't do bells. Talk.",
+    "(sighs) Who broke what.",
+    "If this is about the face, I'm bringing the bat."
+  ],
+  "shift_end": [
+    "Last call was last call. Go home.",
+    "I'm locking up. You don't gotta leave, but I'm turning the lights off.",
+    "Trixie, cash drawer. Rest of you, out.",
+    "Night, smoothskins. Tip your waitress or I'll know.",
+    "Heh. Good night. Not the best night. That one's taken."
+  ],
+  "dismiss": [
+    "Kicked out of my own bar. Two hundred years, first time.",
+    "Fine. I'll be in the back. Touch the bat and I'll know.",
+    "Whatever. I got inventory.",
+    "(bark-laugh) Sure. Who's gonna pour, you?"
+  ]
+}

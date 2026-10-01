@@ -1,0 +1,14 @@
+{
+  "voiceId": "English_AssertiveQueen",
+  "wakeNames": [
+    "Trixie"
+  ],
+  "wakeAliases": [],
+  "excludeWakeNames": [
+    "Sexton",
+    "Bexton",
+    "Lexton",
+    "Johnny",
+    "Rotten Johnny"
+  ]
+}

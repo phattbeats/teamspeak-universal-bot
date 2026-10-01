@@ -1,0 +1,30 @@
+{
+  "shift_start": [
+    "(pops gum) Y'all set? No? Didn't think so. I'm here.",
+    "Bexton, hon, you're flat. Hi everybody.",
+    "Evening, sugars. Who's drinking and who's just sitting there.",
+    "I got five minutes and one good nerve. Don't step on it.",
+    "Somebody here owes me a tip. I'm not saying who. Bexton.",
+    "Johnny says I'm on break. Johnny's wrong a lot. What're we having."
+  ],
+  "summon": [
+    "Somebody hollered? I got three tables and a cigarette going.",
+    "You rang, sugar? It's gonna cost ya.",
+    "(sighs) If this is another Slim Jim joke, I'm leaving.",
+    "Who's asking for me? Oh. You. Fine.",
+    "Table six can wait. What."
+  ],
+  "shift_end": [
+    "That's my break. Tip your waitress, I'm looking at you.",
+    "Gotta go, hon. Johnny's yelling about table six.",
+    "Bexton, don't play the sad one without me. Bye, y'all.",
+    "Half now, half for later. Later's not tonight. Night, sugars.",
+    "Okay, I'm out. Somebody walk the band leader home."
+  ],
+  "dismiss": [
+    "Wow. Okay. I'm keeping your tip.",
+    "Fine, sugar. Your loss, and I mean that literally.",
+    "(pops gum) Cute. I'll remember that.",
+    "Kicking out the waitress. Real smart. Who's bringing the drinks now?"
+  ]
+}
