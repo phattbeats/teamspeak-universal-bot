@@ -1,5 +1,7 @@
 {
+  "nick": "Rotten Johnny",
   "voiceId": "English_Debator",
+  "pitch": -3,
   "wakeNames": [
     "Johnny",
     "Rotten Johnny"

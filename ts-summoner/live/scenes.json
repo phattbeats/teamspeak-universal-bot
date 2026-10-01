@@ -218,5 +218,63 @@
       { "sexton": "The people have spoken. Beat it, baldy." },
       { "lexton": "Enjoy your little coup. I'll remember every name." }
     ]
+  ],
+  "arrive:johnny@bexton": [
+    [
+      { "johnny": "Bexton. Forty caps. I can hear 'em from the door." },
+      { "bexton": "Johnny! I was literally just about to pay that." },
+      { "johnny": "Heh. You were literally about to play another song. Same thing to you." }
+    ],
+    [
+      { "bexton": "Oh shit, the owner's here. Everybody look busy." },
+      { "johnny": "Three rules, smoothskins. Hands off the dancers, hands off the bat, and don't ask about the face." },
+      { "bexton": "He says that every time like it's new." },
+      { "johnny": "Every time somebody breaks one, it is." }
+    ],
+    [
+      { "johnny": "(grunts) Smells like somebody's been drinking on credit." },
+      { "bexton": "That's slander. It's on a tab." },
+      { "johnny": "That's what credit is, man." }
+    ]
+  ],
+  "arrive:trixie@bexton": [
+    [
+      { "trixie": "(pops gum) Bexton, sugar, you call that a song?" },
+      { "bexton": "It's a work in progress, Trix." },
+      { "trixie": "So's your tab, hon. Hi, everybody." }
+    ],
+    [
+      { "bexton": "Trixie! Wanna take a verse?" },
+      { "trixie": "Maybe. If somebody tips first. I'm looking at the whole room." }
+    ],
+    [
+      { "trixie": "Okay, who ordered? Nobody? I'm bringing it anyway." },
+      { "bexton": "I'll take whatever that is." },
+      { "trixie": "You'll take water, sugar. Johnny's orders." }
+    ]
+  ],
+  "leave:johnny@bexton": [
+    [
+      { "johnny": "Last call. That means you too, Bexton." },
+      { "bexton": "I'm the band, Johnny. The band doesn't get last call." },
+      { "johnny": "Band gets the bill. Forty caps. Night." }
+    ],
+    [
+      { "johnny": "I'm going in the back. Nobody touches the bat." },
+      { "bexton": "Wasn't gonna." },
+      { "johnny": "You were thinking about it. I could tell." }
+    ]
+  ],
+  "leave:trixie@bexton": [
+    [
+      { "trixie": "Break's over, hon. Johnny's yelling about table six." },
+      { "bexton": "Save me a song next time?" },
+      { "trixie": "Half now, half for later. Bye, sugars." }
+    ],
+    [
+      { "trixie": "Okay, I'm out. Bexton, stay in key." },
+      { "bexton": "I'm always in key." },
+      { "trixie": "(laughs) Sure you are, hon." }
+    ]
   ]
 }

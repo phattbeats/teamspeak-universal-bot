@@ -143,6 +143,13 @@ export type TeamSpeakVoiceStreamingSpeechConfig = {
   model?: string;
   /** Provider voice id. Free-form; MiniMax accepts any system voice id. */
   voiceId?: string;
+  /**
+   * PHA-3842: per-bot pitch in semitones (MiniMax: -12..12). Passed through
+   * in the provider block; unset keeps the provider's own default.
+   */
+  pitch?: number;
+  /** PHA-3842: per-bot speaking speed (MiniMax: 0.5..2). Unset = provider default. */
+  speed?: number;
   /** Synthesis timeout for one reply. Default: 20000ms. */
   timeoutMs?: number;
 };
@@ -723,6 +730,8 @@ export type ResolvedTeamSpeakSpeechConfig = {
   provider: string;
   model: string;
   voiceId: string | undefined;
+  pitch: number | undefined;
+  speed: number | undefined;
   timeoutMs: number;
 };
 
@@ -734,8 +743,14 @@ export function resolveTeamSpeakSpeechConfig(
     provider: raw?.provider?.trim() || DEFAULT_SPEECH_PROVIDER,
     model: raw?.model?.trim() || DEFAULT_SPEECH_MODEL,
     voiceId: raw?.voiceId?.trim() || undefined,
+    pitch: finiteNumber(raw?.pitch),
+    speed: finiteNumber(raw?.speed),
     timeoutMs: positiveMs(raw?.timeoutMs, DEFAULT_SPEECH_TIMEOUT_MS),
   };
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 export type ResolvedTeamSpeakSegmentationConfig = {

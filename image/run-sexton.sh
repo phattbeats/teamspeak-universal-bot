@@ -31,6 +31,14 @@ set -eu
 # same as every other knob this wrapper owns.
 : "${SEXTON_NO_CATCHUP:=0}"
 
+# PHA-3842 G1: in the shared `guest` container the face changes per visit.
+# guest-switch.mjs writes the visiting persona's nick and avatar here; it wins
+# over the container's env. Absent in every other container.
+: "${SEXTON_GUEST_ENV:=/config/.guest-env}"
+if [ -s "$SEXTON_GUEST_ENV" ]; then
+  . "$SEXTON_GUEST_ENV"
+fi
+
 # The identity is the bot's server-side UID: lose it and the Sexton comes back
 # as a stranger with no permissions and no history. Prefer the mounted config
 # dir (survives an image rebuild) over an env var (visible in `docker inspect`).

@@ -7,6 +7,7 @@ const scenes = JSON.parse(readFileSync(new URL('../live/scenes.json', import.met
 const lines = (bot) => JSON.parse(readFileSync(new URL(`../../personas/${bot}/lines.json`, import.meta.url)));
 const has = (k) => Array.isArray(scenes[k]);
 const BOTS = ['sexton', 'bexton', 'lexton'];
+const ALL = [...BOTS, 'johnny', 'trixie']; // PHA-3842 guests can be in scenes too
 
 test('midnight: Sexton out + Lexton in is one hand-off, Bexton just watches', () => {
   const r = planScenes({
@@ -60,7 +61,7 @@ test('every scene step parses, every takeover jails/releases, lines stay short',
     if (key.startsWith('_')) continue;
     for (const steps of list) {
       for (const raw of steps) {
-        const s = parseStep(raw, BOTS);
+        const s = parseStep(raw, ALL);
         assert.ok(s, `${key}: bad step ${JSON.stringify(raw)}`);
         if (s.do) assert.ok(['jail', 'release'].includes(s.do), `${key}: unknown action ${s.do}`);
         else assert.ok(s.line.length <= 160, `${key}: line too long for one breath: ${s.line}`);

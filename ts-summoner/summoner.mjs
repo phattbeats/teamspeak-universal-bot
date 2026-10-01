@@ -27,6 +27,10 @@
 // late, about one in ten is a call-out (another bot covers, or nobody does),
 // and a bot stays while people are talking and leaves once the room goes quiet.
 //
+// PHA-3842 (guests.mjs) adds the guest-star slot: Rotten Johnny and Trixie
+// share one `guest` container, and on Bexton nights the dice occasionally
+// bring one of them in for 15-45 minutes.
+//
 // No npm deps: `ssh` (+ sshpass) for the query, the Docker socket for exec.
 
 import { spawn } from 'node:child_process';
@@ -37,11 +41,18 @@ import {
 } from './schedule.mjs';
 import { offCooldown, parseStep, pickScene, planScenes, takeoverEligible, tickChance } from './story.mjs';
 import { calledOut, isLate, jitterFor, overtimeOk, pickCover, quietOut, varietyConfig } from './variety.mjs';
+import {
+  candidates as guestCandidates, guestConfig, guestIds, pickGuest, slotHolder, slotOpen, visitChance, visitLength,
+} from './guests.mjs';
 
 const CONFIG_PATH = process.env.SUMMONER_CONFIG || '/app/config.json';
 const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
 const QUERY_PASS = readFileSync(cfg.query.passFile, 'utf8').trim();
 const BOT_NICKS = new Set(Object.values(cfg.bots).map((b) => b.nick.toLowerCase()));
+// PHA-3842: guests never cover a shift and never break news; they only visit.
+const GUESTS = new Set(guestIds(cfg));
+const REGULARS = Object.keys(cfg.bots).filter((id) => !GUESTS.has(id));
+const gc = guestConfig(cfg.guests);
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const MIN = 60_000;
@@ -88,6 +99,7 @@ const nextFlip = (id, ts, want) => nextFlipBy((t) => onShift(id, t), ts, want);
 //   bender:   { lastAt, active: { bot, from, until, newsSaid } | null, returning: <bot>|null }
 //   forced:   { "<entryId>@<day>": true }  calendar-forced events already used
 //   callouts: { "<shift key>": { bot, cover, at, until } }  PHA-3839, decided once per shift
+//   guests:   { visits: [ts], active: { bot, from, until, why } | null }  PHA-3842
 
 const STATE_FILE = cfg.stateFile ?? '/app/state/state.json';
 const events = (() => {
@@ -97,6 +109,7 @@ events.takeover ??= { lastAt: 0, active: null };
 events.bender ??= { lastAt: 0, active: null, returning: null };
 events.forced ??= {};
 events.callouts ??= {};
+events.guests ??= { visits: [], active: null };
 function saveEvents() {
   try {
     mkdirSync(STATE_FILE.replace(/\/[^/]*$/, ''), { recursive: true });
@@ -133,6 +146,12 @@ for (const [id, bot] of Object.entries(cfg.bots)) {
 const room = { humans: 0, lastHumanTalk: 0, lastHumanSeen: 0, lastChat: 0, queryUp: false, clients: [] };
 const BOOT_AT = Date.now();
 
+// A guest visit restored from disk keeps the guest in until it's over.
+if (events.guests.active && state[events.guests.active.bot]) {
+  const a = events.guests.active;
+  state[a.bot].override = { mode: 'on', until: a.until, why: 'guest visit', visit: true };
+}
+
 // A takeover restored from disk puts the villain back on.
 if (events.takeover.active && ev.takeover) {
   state[ev.takeover.villain].override = { mode: 'on', until: events.takeover.active.until, why: 'hostile takeover' };
@@ -153,7 +172,13 @@ function roomQuiet(id, now, since) {
 function desired(id, now) {
   const st = state[id];
   const o = st.override;
+  // PHA-3842: one guest container, one guest. Whoever holds it finishes first.
+  if (GUESTS.has(id) && !st.running) {
+    const holder = slotHolder(cfg, state, id);
+    if (holder) return { on: false, why: `guest slot taken by ${holder}` };
+  }
   if (o && now < o.until) {
+    if (o.visit) return { on: true, why: o.why, visit: true };
     if (o.cover && roomQuiet(id, now, o.since)) return { on: false, why: 'room quiet', quiet: true };
     return { on: o.mode === 'on', why: o.why, cover: o.cover };
   }
@@ -184,7 +209,7 @@ function desired(id, now) {
 // means whoever is in the room says he didn't show.
 
 function calloutTick(now) {
-  const ids = Object.keys(cfg.bots);
+  const ids = REGULARS;
   for (const id of ids) {
     const shift = planned(id, now);
     if (!shift || !calledOut(vc, shift) || events.callouts[shift.key]) continue;
@@ -241,7 +266,7 @@ function dismiss(id, why) {
 
 // ------------------------------------------------------------ docker exec --
 
-function dockerApi(method, path, body) {
+function dockerApi(method, path, body, timeoutMs = 30_000) {
   return new Promise((resolve, reject) => {
     const req = http.request({
       socketPath: '/var/run/docker.sock', method, path,
@@ -254,22 +279,45 @@ function dockerApi(method, path, body) {
         : resolve(data)));
     });
     req.on('error', reject);
-    req.setTimeout(30_000, () => req.destroy(new Error('docker api timeout')));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('docker api timeout')));
     req.end(body ? JSON.stringify(body) : undefined);
   });
 }
 
-async function exec(container, cmd) {
+async function exec(container, cmd, timeoutMs) {
   const { Id } = JSON.parse(await dockerApi('POST', `/containers/${container}/exec`,
     { Cmd: cmd, AttachStdout: true, AttachStderr: true, Tty: true }));
-  return (await dockerApi('POST', `/exec/${Id}/start`, { Detach: false, Tty: true })).trim();
+  return (await dockerApi('POST', `/exec/${Id}/start`, { Detach: false, Tty: true }, timeoutMs)).trim();
 }
 
 // The core is `[program:sexton]` in every bot container. The marker file tells
 // sexton-healthcheck the bot is off duty, not broken.
-async function coreRunning(bot) {
+async function coreRunning(bot, id) {
   const out = await exec(bot.container, ['supervisorctl', 'status', 'sexton']);
-  return /\b(RUNNING|STARTING|BACKOFF)\b/.test(out);
+  const up = /\b(RUNNING|STARTING|BACKOFF)\b/.test(out);
+  if (!up || !bot.guest) return up;
+  // PHA-3842: the guest container's core is up as whoever is in the chair.
+  // Nobody known in it (first boot, a hand restart): nobody would ever stop
+  // it, so stop it here; the next visit switches someone in properly.
+  const who = (await exec(bot.container, ['cat', '/config/.guest']).catch(() => '')).trim();
+  if (!GUESTS.has(who) || cfg.bots[who].container !== bot.container) {
+    log(`${bot.container}: core up with no guest in the chair ('${who}'), stopping it`);
+    await stopCore(bot);
+    return false;
+  }
+  return who === id;
+}
+
+// PHA-3842: put guest `id` in the shared container's chair before his core
+// starts. Restarts that container's gateway when the persona changes (~30s).
+async function prepareGuest(id, bot) {
+  if (!bot.guest) return;
+  const out = await exec(bot.container, ['node', '/usr/local/bin/guest-switch.mjs', id], 180_000);
+  const last = out.split('\n').filter(Boolean).pop() || '';
+  let r;
+  try { r = JSON.parse(last); } catch { throw new Error(`guest-switch ${id}: ${out.slice(0, 200)}`); }
+  if (!r.ok) throw new Error(`guest-switch ${id}: ${r.error}`);
+  log(`${id}: in the guest chair as '${r.nick}'${r.changed ? ' (gateway restarted)' : ''}`);
 }
 async function startCore(bot) {
   await exec(bot.container, ['rm', '-f', '/config/.off-duty']);
@@ -309,6 +357,7 @@ async function lineFinished(bot) {
 }
 
 async function startWithLine(id, bot, reason, vars) {
+  await prepareGuest(id, bot);
   try {
     if (await requestLine(bot, reason, { entrance: true, vars })) log(`${id}: entrance line '${reason}' requested`);
   } catch (e) {
@@ -416,6 +465,7 @@ async function sceneAction(what) {
  */
 async function joinQuietly(id, reason) {
   const bot = cfg.bots[id];
+  await prepareGuest(id, bot);
   await exec(bot.container, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce',
     JSON.stringify({ reason, at: Date.now(), quiet: true }), ANNOUNCE_FILE]);
   log(`${id}: ${await startCore(bot)}`);
@@ -531,7 +581,7 @@ function startBender(now, why) {
 // Someone in the room breaks the news that the band isn't coming.
 function benderNews(now) {
   const a = events.bender.active;
-  const teller = (ev.bender.tellers ?? Object.keys(cfg.bots))
+  const teller = (ev.bender.tellers ?? REGULARS)
     .find((id) => id !== a.bot && state[id].running && !state[id].busy && desired(id, now).on);
   const reason = a.newsSaid ? 'bender_news:day2' : 'bender_news';
   a.newsSaid += 1;
@@ -571,6 +621,57 @@ function benderTick(now, forced) {
   }
 }
 
+// ------------------------------------------------------------ guest stars --
+// PHA-3842 G1. A visit is an 'on' override marked `visit`, so everything else
+// (entrance line, exit line, empty-server cutoff, dismissals) is the ordinary
+// summons machinery. Visit history is persisted for the weekly cap.
+
+const inRoom = (id) => Boolean(state[id]?.running) && !GUESTS.has(id);
+const specialNight = (ids, now) => ids.some((id) => (cfg.bots[id].guest.needs ?? REGULARS)
+  .some((h) => flavorFor(cfg, calendar(), h, now).pool));
+
+function startVisit(id, now, why) {
+  const len = visitLength(gc, cfg.bots[id]);
+  const until = now + len * MIN;
+  events.guests.active = { bot: id, from: now, until, why };
+  events.guests.visits = [...events.guests.visits.filter((t) => now - t < 14 * 24 * 60 * MIN), now];
+  saveEvents();
+  state[id].override = { mode: 'on', until, why: 'guest visit', visit: true };
+  state[id].exitReason = null;
+  log(`GUEST ${id} drops in (${why}) for ${len}m`);
+}
+
+function guestsTick(now) {
+  if (!GUESTS.size) return;
+  const a = events.guests.active;
+  if (a) {
+    const st = state[a.bot];
+    const o = st.override;
+    // `running` is null when a status call failed: that's not the host leaving.
+    const needs = (cfg.bots[a.bot].guest.needs ?? []).filter((h) => state[h]);
+    const hostGone = needs.length > 0 && !needs.some((h) => state[h].running !== false || state[h].busy);
+    if (o?.visit && hostGone && st.running && !st.busy) {
+      log(`GUEST ${a.bot}: the host left, so does the guest`);
+      o.until = now;
+    }
+    if (!o?.visit || now >= a.until || now >= o.until) {
+      if (now < a.until) log(`GUEST ${a.bot}: visit cut short (${o ? o.why : 'override cleared'})`);
+      events.guests.active = null;
+      saveEvents();
+    }
+    return;
+  }
+  if (!gc.enabled) return;
+  const cands = guestCandidates(cfg, inRoom);
+  if (!cands.length) return;
+  const special = specialNight(cands, now);
+  const slotBusy = [...GUESTS].some((g) => state[g].running || state[g].busy || state[g].override?.mode === 'on');
+  if (!slotOpen(gc, { queryUp: room.queryUp, humans: room.humans, slotBusy, visits: events.guests.visits, special, now })) return;
+  if (Math.random() >= visitChance(gc, cfg.reconcileSec, special)) return;
+  const id = pickGuest(cfg, cands);
+  if (id) startVisit(id, now, special ? 'dice, special night' : 'dice');
+}
+
 function eventsTick(now) {
   // Calendar-forced events fire once per entry per service day.
   const forced = {};
@@ -580,10 +681,19 @@ function eventsTick(now) {
   }
   takeoverTick(now, forced.takeover);
   benderTick(now, forced.bender);
+  guestsTick(now);
 }
 
-function startEventByHand(kind) {
+function startEventByHand(kind, who) {
   const now = Date.now();
+  if (kind === 'guest' && GUESTS.size) {
+    if (events.guests.active) return { ok: false, error: `${events.guests.active.bot} is already visiting` };
+    const id = who ? resolveBot(who) : pickGuest(cfg, guestCandidates(cfg, inRoom)) ?? pickGuest(cfg, [...GUESTS]);
+    if (!id || !GUESTS.has(id)) return { ok: false, error: `not a guest: ${who}` };
+    startVisit(id, now, 'by hand');
+    reconcile().catch((e) => log('reconcile', e.message));
+    return { ok: true, guest: id, until: new Date(events.guests.active.until).toISOString() };
+  }
   if (kind === 'takeover' && ev.takeover?.enabled) {
     if (events.takeover.active) return { ok: false, error: 'a takeover is already on' };
     const t = ev.takeover;
@@ -613,6 +723,11 @@ function endEventByHand(kind) {
     saveEvents();
     return { ok: true };
   }
+  if (kind === 'guest' && events.guests.active) {
+    const o = state[events.guests.active.bot].override;
+    if (o?.visit) o.until = now;
+    return { ok: true };
+  }
   return { ok: false, error: `no ${kind} on` };
 }
 
@@ -635,7 +750,7 @@ async function reconcile() {
     }
     for (const [id, bot] of Object.entries(cfg.bots)) {
       try {
-        const up = await coreRunning(bot);
+        const up = await coreRunning(bot, id);
         if (up && state[id].running === false) state[id].onSince = now;
         state[id].running = up;
       } catch (e) {
@@ -673,7 +788,11 @@ async function reconcile() {
       if (d.on) {
         // PHA-3839 tags: `shift_start:late`, `shift_start:covering` ({who}).
         // Back after walking out of a quiet room is a summon (keeps the mood).
-        if (d.cover && st.leftQuiet !== d.cover) {
+        if (d.visit) {
+          // PHA-3842: a guest dropping in uses his shift_start pool, and an
+          // `arrive:<guest>@<host>` scene when scenes.json has one.
+          moves.push({ id, dir: 'start', base: 'shift_start', why: d.why });
+        } else if (d.cover && st.leftQuiet !== d.cover) {
           moves.push({ id, dir: 'start', base: 'shift_start', tag: 'covering', vars: { who: cfg.bots[d.cover].nick }, why: d.why });
         } else if (d.why === 'on shift' && st.leftQuiet !== d.shift.key) {
           moves.push({ id, dir: 'start', base: 'shift_start', tag: isLate(vc, d.shift, now) ? 'late' : null, why: d.why });
@@ -747,9 +866,13 @@ function soloMove(m, now) {
     if (m.base === 'shift_start') st.leftQuiet = null;
     const reason = tagged(tagged(m.base, m.tag), tagFor(id, now, m.base));
     if (m.base === 'shift_start' && events.bender.returning === id) { events.bender.returning = null; saveEvents(); }
+    // A guest's persona switch can restart his gateway; hold reconcile off
+    // him until he's up, or the next tick would start him a second time.
+    if (bot.guest) st.busy = true;
     startWithLine(id, bot, reason, mergeVars(varsFor(id, now), m.vars))
       .then((out) => log(`${id}: ${out}`))
-      .catch((e) => log(`${id}: action failed: ${e.message}`));
+      .catch((e) => log(`${id}: action failed: ${e.message}`))
+      .finally(() => { if (bot.guest) st.busy = false; });
     return;
   }
   const reason = m.base ? tagged(tagged(m.base, m.tag), tagFor(id, now, m.base)) : null;
@@ -1012,6 +1135,10 @@ function status() {
       takeover: { ...events.takeover, lastAt: iso(events.takeover.lastAt) },
       bender: { ...events.bender, lastAt: iso(events.bender.lastAt) },
       callouts: events.callouts,
+      guests: {
+        active: events.guests.active && { ...events.guests.active, from: iso(events.guests.active.from), until: iso(events.guests.active.until) },
+        visits: events.guests.visits.map(iso),
+      },
     },
     bots: Object.fromEntries(Object.keys(cfg.bots).map((id) => [id, {
       running: state[id].running, busy: state[id].busy, desired: desired(id, now), onShift: onShift(id, now),
@@ -1038,8 +1165,9 @@ http.createServer((req, res) => {
   // PHA-3841: fire or end a rare event by hand (testing, or Brandon's whim).
   // POST /event/takeover | /event/bender | /event/end?kind=takeover|bender
   if (req.method === 'POST' && verb === 'event') {
-    const kind = id === 'end' ? new URL(req.url, 'http://x').searchParams.get('kind') : id;
-    const out = id === 'end' ? endEventByHand(kind) : startEventByHand(kind);
+    const qs = new URL(req.url, 'http://x').searchParams;
+    const kind = id === 'end' ? qs.get('kind') : id;
+    const out = id === 'end' ? endEventByHand(kind) : startEventByHand(kind, qs.get('who'));
     return send(out.ok ? 200 : 409, out);
   }
   if (req.method === 'POST' && verb === 'heard') {
@@ -1049,7 +1177,7 @@ http.createServer((req, res) => {
     req.on('end', () => send(200, { summoned: onHeard(by, body) }));
     return;
   }
-  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /heard?by=<speaker> | POST /event/<takeover|bender> | POST /event/end?kind=<takeover|bender>' });
+  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /heard?by=<speaker> | POST /event/<takeover|bender|guest>[?who=<guest>] | POST /event/end?kind=<takeover|bender|guest>' });
 }).listen(cfg.httpPort, () => log(`http on :${cfg.httpPort}`));
 
 setInterval(() => reconcile().catch((e) => log('reconcile', e.message)), cfg.reconcileSec * 1000);

@@ -253,6 +253,10 @@ export function buildTtsOverride(config: ResolvedTeamSpeakSpeechConfig): {
       [config.provider]: {
         model: config.model,
         ...(config.voiceId ? { voiceId: config.voiceId } : {}),
+        // PHA-3842: MiniMax reads pitch/speed from this same block and
+        // range-checks them itself (an out-of-range value is a logged warning).
+        ...(config.pitch !== undefined ? { pitch: config.pitch } : {}),
+        ...(config.speed !== undefined ? { speed: config.speed } : {}),
       },
     },
     timeoutMs: config.timeoutMs,

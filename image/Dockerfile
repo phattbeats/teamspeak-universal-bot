@@ -358,11 +358,25 @@ COPY personas/lexton/AGENTS.md personas/lexton/IDENTITY.md \
 COPY personas/lexton/avatar.png        /usr/local/share/sexton-avatar/lexton.png
 COPY personas/lexton/voice.json personas/lexton/tools.json personas/lexton/lines.json personas/lexton/moods.json /opt/sexton-persona/lexton.config/
 COPY image/lexton/lexton-menace.cjs    /opt/sexton-menace/lexton-menace.cjs
+# PHA-3842 G1: the guest stars. They share ONE container (`guest`); ts-summoner
+# runs /usr/local/bin/guest-switch.mjs <id> before each visit to put one of
+# them in the chair. Same pack shape as the regulars.
+COPY personas/johnny/AGENTS.md personas/johnny/IDENTITY.md \
+     personas/johnny/SOUL.md                                /opt/sexton-persona/johnny/
+COPY personas/johnny/avatar.png        /usr/local/share/sexton-avatar/johnny.png
+COPY personas/johnny/voice.json personas/johnny/tools.json personas/johnny/lines.json /opt/sexton-persona/johnny.config/
+COPY personas/trixie/AGENTS.md personas/trixie/IDENTITY.md \
+     personas/trixie/SOUL.md                                /opt/sexton-persona/trixie/
+COPY personas/trixie/avatar.png        /usr/local/share/sexton-avatar/trixie.png
+COPY personas/trixie/voice.json personas/trixie/tools.json personas/trixie/lines.json /opt/sexton-persona/trixie.config/
+COPY image/guest-switch.mjs           /usr/local/bin/guest-switch.mjs
 # PHA-3787: HUMAN.md is shared by every persona — copied into both persona
 # directories from one source so there is exactly one copy to edit.
 COPY personas/HUMAN.md   /opt/sexton-persona/sexton/HUMAN.md
 COPY personas/HUMAN.md   /opt/sexton-persona/bexton/HUMAN.md
 COPY personas/HUMAN.md   /opt/sexton-persona/lexton/HUMAN.md
+COPY personas/HUMAN.md   /opt/sexton-persona/johnny/HUMAN.md
+COPY personas/HUMAN.md   /opt/sexton-persona/trixie/HUMAN.md
 COPY image/run-sexton.sh             /usr/local/bin/run-sexton
 COPY image/run-whisper.sh            /usr/local/bin/run-whisper
 COPY image/run-pot.sh                /usr/local/bin/run-pot

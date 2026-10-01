@@ -86,6 +86,22 @@ describe("buildTtsOverride", () => {
     const override = buildTtsOverride(resolveTeamSpeakSpeechConfig(undefined));
     expect(override.providers.minimax).toEqual({ model: "speech-2.8-hd" });
   });
+
+  it("passes a per-bot pitch and speed through, and drops non-numbers (PHA-3842)", () => {
+    const tuned = resolveTeamSpeakSpeechConfig({
+      voice: { streaming: { speech: { voiceId: "English_Debator", pitch: -3, speed: 0.9 } } },
+    } as never);
+    expect(buildTtsOverride(tuned).providers.minimax).toEqual({
+      model: "speech-2.8-hd",
+      voiceId: "English_Debator",
+      pitch: -3,
+      speed: 0.9,
+    });
+    const junk = resolveTeamSpeakSpeechConfig({
+      voice: { streaming: { speech: { pitch: "low", speed: Number.NaN } } },
+    } as never);
+    expect(buildTtsOverride(junk).providers.minimax).toEqual({ model: "speech-2.8-hd" });
+  });
 });
 
 describe("RuntimeSpeechSynthesizer", () => {
