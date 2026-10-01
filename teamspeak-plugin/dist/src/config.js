@@ -206,6 +206,14 @@ function nonNegativeMs(value, fallback) {
 function resolveTeamSpeakVoiceMode(config) {
   return config?.voice?.mode ?? DEFAULT_VOICE_MODE;
 }
+function resolveAnnouncePaths(config, env = process.env) {
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || "/config/openclaw";
+  const agentId = env.SEXTON_AGENT_ID?.trim() || "sexton";
+  return {
+    requestFile: config?.requestFile?.trim() || "/config/.announce",
+    linesFile: config?.linesFile?.trim() || `${stateDir}/workspace/agents/${agentId}/lines.json`
+  };
+}
 function resolveVillainPaths(config, env = process.env) {
   const stateDir = env.OPENCLAW_STATE_DIR?.trim() || "/config/openclaw";
   const agentId = env.SEXTON_AGENT_ID?.trim() || "sexton";
@@ -251,6 +259,7 @@ export {
   isTeamSpeakBandEnabled,
   isTeamSpeakMusicEnabled,
   isTeamSpeakVoiceEnabled,
+  resolveAnnouncePaths,
   resolveSextonLogDir,
   resolveTeamSpeakBandConfig,
   resolveTeamSpeakSecondaryTranscriptionConfig,

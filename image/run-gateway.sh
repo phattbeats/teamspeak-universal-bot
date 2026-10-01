@@ -167,6 +167,12 @@ if [ ! -d "$WS" ] && [ -d "$PERSONA_DIR" ]; then
   mkdir -p "$WS"
   cp -a "$PERSONA_DIR"/. "$WS"/
 fi
+# PHA-3824: entrance/exit line pools for ts-summoner starts/stops. Copied in
+# only when missing, never over the top: lines.json is meant to be hand-edited
+# on the live bot, and the plugin re-reads it on every announcement.
+if [ -d "$WS" ] && [ ! -f "$WS/lines.json" ] && [ -f "${PERSONA_CONFIG_DIR}/lines.json" ]; then
+  cp "${PERSONA_CONFIG_DIR}/lines.json" "$WS/lines.json"
+fi
 # HUMAN.md is shared infrastructure, not persona content an operator hand-edits
 # per bot — always sync it from the image, even onto a workspace that already
 # exists, so a HUMAN.md fix ships without every persona needing re-seeding.

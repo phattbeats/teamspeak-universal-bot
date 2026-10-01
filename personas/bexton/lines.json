@@ -1,0 +1,34 @@
+{
+  "shift_start": [
+    "(groans) Morning. Johnny cut me off at, uh... some point. Band's back.",
+    "Nobody talk loud. I'm here. The band's... mostly here.",
+    "What day is it. Don't answer that. Hi.",
+    "(coughs) I'm up. I'm fine. Where's the, uh... where's the piano.",
+    "Trixie drove me home. Or somebody did. Anyway, band's in.",
+    "Johnny says I owe him forty caps. Johnny's a liar. Morning."
+  ],
+  "summon": [
+    "(sighs) Somebody wants the band. Course they do.",
+    "I was in the middle of a drink, man. Fine. What.",
+    "Who's yelling? I can hear you. I'm right here. Somewhere.",
+    "Oh, now you want the band.",
+    "(groans) This better be a song request.",
+    "Gimme a sec, I lost a shoe. Okay. Go."
+  ],
+  "shift_end": [
+    "That's the set. Johnny's pouring, I'm drinking. Night.",
+    "Band's done. Tip Trixie, you cheap bastards.",
+    "(sighs) That's it, I'm going to the bar. Don't follow me.",
+    "We're packing up. Same room next weekend, God willing.",
+    "Last song was the last song. Go home.",
+    "I'm off. Tell Kyle I said nothing, he'll know what it means."
+  ],
+  "dismiss": [
+    "Kicked out of my own room. Unbelievable.",
+    "Fine. This was Kyle's idea anyway.",
+    "Oh, sure. Fire the band. Real classy.",
+    "(snorts) Your loss. I was about to play the good one.",
+    "Whatever. Bar's open, I'll be there.",
+    "Wow. Okay. I'm taking the trumpet."
+  ]
+}

@@ -13,6 +13,8 @@ Chat rules (the typist must not be a bot):
 - A bot whose shift ends while a human is talking (`client_flag_talking`) stays until the room has been quiet for `idleGraceMin`.
 - Summoned bots leave once there have been no humans on the server for `idleGraceMin`.
 
+Entrance and exit lines (PHA-3824): on every start or stop, the summoner writes `{reason, at}` to `/config/.announce` in the bot's container. The reason is `shift_start`, `summon`, `shift_end` or `dismiss`. The bot's gateway says a random line from that slot in its workspace `lines.json`, which defaults to `personas/<bot>/lines.json`, and then deletes the file. Lines can be edited live without a rebuild. On exits the core is stopped only after the file is gone, or after `announce.exitWaitSec`. No line is requested when the server has no humans, or for a core that came back by itself while off shift.
+
 HTTP (not published to the host): `GET /status`, `POST /summon/<bot>?by=<who>`, `POST /dismiss/<bot>?by=<who>` on `ts-summoner:8099`. This is for the bots' own voice tools, because ServerQuery gets no audio.
 
 Server side: `/mnt/user/appdata/teamspeak6-server/tsserver.yaml` sets `server.query.ssh.enable: 1` and the admin password. The password also lives in `query-pass.txt` next to `deploy.sh` (not in git). `query_ip_allowlist.txt` has `172.19.0.0/16` added, which exempts the network from query flood protection.

@@ -16,6 +16,7 @@ import {
   DEFAULT_COMMAND_PREFIX,
   isTeamSpeakBandEnabled,
   isTeamSpeakMusicEnabled,
+  resolveAnnouncePaths,
   resolveSextonLogDir,
   resolveVillainPaths,
   resolveTeamSpeakBandConfig,
@@ -25,6 +26,7 @@ import {
 } from "../config.js";
 import { BandLeader, type BandController, type BandSpeak, type BandStatus } from "../tools/band.js";
 import { createSongGenerator } from "../tools/band-generators.js";
+import { Announcer } from "./announcer.js";
 import { bridgePcmDurationMs, chunkBridgePcm } from "./audio.js";
 import type { SpeechSynthesisOutcome } from "./speech.js";
 import type { ReadChannelLog } from "../tools/catch-up.js";
@@ -146,6 +148,7 @@ export class TeamSpeakVoiceRuntime {
   private readonly sessions: SpeakerSessionManager;
   private readonly music: MusicController | undefined;
   private readonly band: BandController | undefined;
+  private readonly announcer: Announcer | undefined;
   private readonly tools: TeamSpeakRealtimeToolRegistration | undefined;
   private readonly toolDeps: TeamSpeakToolDeps | undefined;
   private access: TeamSpeakToolAccess | undefined;
@@ -257,6 +260,7 @@ export class TeamSpeakVoiceRuntime {
     });
     this.music = this.createMusicController();
     this.band = this.createBandController();
+    this.announcer = this.createAnnouncer();
     // Held as deps, not just as the realtime registration, because the agent
     // tools reach the same implementations through `runTeamSpeakTool` with a
     // precise result type (PHA-3428 item 4).
@@ -358,12 +362,14 @@ export class TeamSpeakVoiceRuntime {
       registerTeamSpeakToolAccess(this.params.accountId, access);
     }
     this.bridge.connect();
+    this.announcer?.start();
   }
 
   stop(): void {
     if (this.access) {
       unregisterTeamSpeakToolAccess(this.params.accountId, this.access);
     }
+    this.announcer?.stop();
     this.band?.close();
     this.music?.close();
     this.sessions.close("runtime-stop");
@@ -453,7 +459,7 @@ export class TeamSpeakVoiceRuntime {
     if (!music) {
       return undefined;
     }
-    const speak = this.params.synthesize ? this.createRoomSpeaker(this.params.synthesize) : undefined;
+    const speak = this.params.synthesize ? this.createRoomSpeaker(this.params.synthesize, "band-leader") : undefined;
     const createBand = this.params.toolOverrides?.createBand;
     if (createBand) {
       return createBand({ music, speak });
@@ -474,6 +480,23 @@ export class TeamSpeakVoiceRuntime {
       music,
       speak,
       onSettled: (status) => this.handleBandSettled(status),
+      ...(this.params.log ? { log: this.params.log } : {}),
+    });
+  }
+
+  /**
+   * Entrance/exit lines (PHA-3824). Ready once the bridge has put us in the
+   * channel; an entrance written before the core started waits for that.
+   */
+  private createAnnouncer(): Announcer | undefined {
+    const config = this.params.config.tools?.announce;
+    if (!this.params.synthesize || config?.enabled === false) {
+      return undefined;
+    }
+    return new Announcer({
+      ...resolveAnnouncePaths(config),
+      speak: this.createRoomSpeaker(this.params.synthesize, "announcer"),
+      isReady: () => this.bridge.isConnected && this.state.connected && this.selfClientId !== undefined,
       ...(this.params.log ? { log: this.params.log } : {}),
     });
   }
@@ -509,8 +532,8 @@ export class TeamSpeakVoiceRuntime {
    */
   private createRoomSpeaker(
     synthesize: (text: string) => Promise<SpeechSynthesisOutcome>,
+    owner: string,
   ): BandSpeak {
-    const owner = "band-leader";
     return async (text) => {
       if (this.parked) {
         return undefined;
