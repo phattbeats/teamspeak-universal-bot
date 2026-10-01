@@ -70,6 +70,8 @@ for (const [id, bot] of Object.entries(cfg.bots)) {
     lastAction: 0,
     onDuty: false, // last decision was 'on'; only an on-duty bot gets talk-grace
     graceLogged: false,
+    exitReason: null, // 'dismiss' once dismissed, until the core is stopped
+    busy: false, // an exit line is playing; reconcile leaves this bot alone
   };
 }
 const room = { humans: 0, lastHumanTalk: 0, lastHumanSeen: 0, queryUp: false };
@@ -107,6 +109,7 @@ function dismiss(id, why) {
     st.override = null; // summoned off-shift: just drop back to the schedule
     room.lastHumanTalk = 0; // and don't let the talk-grace hold him
   }
+  st.exitReason = 'dismiss';
   log(`${id}: DISMISS (${why})`);
   reconcile().catch((e) => log('reconcile', e.message));
 }
@@ -152,6 +155,51 @@ async function stopCore(bot) {
   return exec(bot.container, ['supervisorctl', 'stop', 'sexton']);
 }
 
+// ------------------------------------------------- entrance/exit lines --
+// PHA-3824. The bot's gateway plays a line from its own lines.json when this
+// file appears, and deletes it once the line has finished. Entrances are
+// written before the core starts (the gateway holds it until it's in the
+// channel); exits are written first and the core is stopped once it's gone.
+// Nobody on the server, nobody to hear it: skip the TTS call.
+
+const ANNOUNCE_FILE = cfg.announce?.file ?? '/config/.announce';
+
+async function requestLine(bot, reason) {
+  if (cfg.announce?.enabled === false || !room.queryUp || room.humans === 0) return false;
+  const body = JSON.stringify({ reason, at: Date.now() });
+  await exec(bot.container, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce', body, ANNOUNCE_FILE]);
+  return true;
+}
+
+async function lineFinished(bot) {
+  const out = await exec(bot.container, ['sh', '-c', 'test -e "$1" && echo waiting || echo done', 'announce', ANNOUNCE_FILE]);
+  return out.includes('done');
+}
+
+async function startWithLine(id, bot, reason) {
+  try {
+    if (await requestLine(bot, reason)) log(`${id}: entrance line '${reason}' requested`);
+  } catch (e) {
+    log(`${id}: entrance line failed: ${e.message}`);
+  }
+  return startCore(bot);
+}
+
+async function stopWithLine(id, bot, reason) {
+  try {
+    if (await requestLine(bot, reason)) {
+      const deadline = Date.now() + (cfg.announce?.exitWaitSec ?? 20) * 1000;
+      while (Date.now() < deadline && !(await lineFinished(bot))) await new Promise((r) => setTimeout(r, 1000));
+      log(`${id}: exit line '${reason}' done`);
+    }
+  } catch (e) {
+    log(`${id}: exit line failed: ${e.message}`);
+  }
+  // A leftover request would fire as the next entrance; drop it.
+  await exec(bot.container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+  return stopCore(bot);
+}
+
 let reconciling = false;
 async function reconcile() {
   if (reconciling) return;
@@ -174,18 +222,35 @@ async function reconcile() {
         log(`${id}: status failed: ${e.message}`);
         continue;
       }
+      if (st.busy) continue;
       const d = desired(id, now);
+      const wasOnDuty = st.onDuty;
       st.onDuty = d.on;
-      if (d.on === st.running) continue;
+      if (d.on === st.running) {
+        if (d.on) st.exitReason = null;
+        continue;
+      }
       if (now - st.lastAction < 60_000) continue; // one move per bot per minute
       st.lastAction = now;
       log(`${id}: ${d.on ? 'START' : 'STOP'} core (${d.why})`);
-      try {
-        const out = d.on ? await startCore(bot) : await stopCore(bot);
-        log(`${id}: ${out}`);
-      } catch (e) {
-        log(`${id}: action failed: ${e.message}`);
+      if (d.on) {
+        st.exitReason = null;
+        try {
+          log(`${id}: ${await startWithLine(id, bot, d.why === 'on shift' ? 'shift_start' : 'summon')}`);
+        } catch (e) {
+          log(`${id}: action failed: ${e.message}`);
+        }
+        continue;
       }
+      // A core that came back by itself off shift (PHA-3831) leaves quietly.
+      const reason = wasOnDuty ? (st.exitReason ?? 'shift_end') : null;
+      st.exitReason = null;
+      // The exit line can take a while; don't hold up the other bots for it.
+      st.busy = true;
+      (reason ? stopWithLine(id, bot, reason) : stopCore(bot))
+        .then((out) => log(`${id}: ${out}`))
+        .catch((e) => log(`${id}: action failed: ${e.message}`))
+        .finally(() => { st.busy = false; });
     }
   } finally {
     reconciling = false;

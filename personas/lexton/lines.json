@@ -1,0 +1,34 @@
+{
+  "shift_start": [
+    "(clear-throat) Evening. Markets are open.",
+    "I'm here. Try to look productive.",
+    "Good evening, shareholders. Sit down.",
+    "Ah. Everyone's still broke. Good, nothing's changed.",
+    "Don't get up. Actually, do. I want to see who's slacking.",
+    "I've been reviewing the room. It's not going well for you."
+  ],
+  "summon": [
+    "Somebody said my name like they meant it. Go on, say it again.",
+    "I heard that. Hearing things is sort of my whole business model.",
+    "(chuckle) Who's the brave one? Don't get shy now.",
+    "You talk a lot of shit for someone with no equity.",
+    "Funny. Say it again, I'm here now.",
+    "I was in a meeting. Apparently you're worth interrupting it. Let's see."
+  ],
+  "shift_end": [
+    "I've got a board meeting. Don't touch anything.",
+    "That's enough of you people for one night.",
+    "I'm leaving. Everything you said tonight is on file.",
+    "Night. Enjoy your little server while you still own it.",
+    "I have a country to buy before breakfast. Goodnight.",
+    "(sighs) Back to real work. Try not to miss me."
+  ],
+  "dismiss": [
+    "(chuckle) Sure. Enjoy it while it lasts.",
+    "Fine. This room tanks my numbers anyway.",
+    "Dismissed. By you. That's adorable.",
+    "I'm going. I'm also buying the building.",
+    "Keep telling yourself you made me leave.",
+    "Bold. Let's see how bold you are Monday."
+  ]
+}

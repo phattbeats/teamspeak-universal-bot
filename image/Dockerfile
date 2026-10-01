@@ -345,18 +345,18 @@ COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json
 COPY personas/sexton/AGENTS.md personas/sexton/IDENTITY.md \
      personas/sexton/SOUL.md   personas/sexton/USER.md     /opt/sexton-persona/sexton/
 COPY personas/sexton/avatar.png        /usr/local/share/sexton-avatar/brandon.png
-COPY personas/sexton/voice.json personas/sexton/tools.json /opt/sexton-persona/sexton.config/
+COPY personas/sexton/voice.json personas/sexton/tools.json personas/sexton/lines.json /opt/sexton-persona/sexton.config/
 # PHA-3554: the Bexton persona, seeded into the gateway workspace on first boot
 # when SEXTON_AGENT_ID=bexton. Same image, different agent in the chair.
 COPY personas/bexton/AGENTS.md personas/bexton/IDENTITY.md \
      personas/bexton/SOUL.md                                /opt/sexton-persona/bexton/
 COPY personas/bexton/avatar.png        /usr/local/share/sexton-avatar/bexton.png
-COPY personas/bexton/voice.json personas/bexton/tools.json /opt/sexton-persona/bexton.config/
+COPY personas/bexton/voice.json personas/bexton/tools.json personas/bexton/lines.json /opt/sexton-persona/bexton.config/
 # PHA-3836: the Lexton persona (PHA-3819), same shape as Bexton.
 COPY personas/lexton/AGENTS.md personas/lexton/IDENTITY.md \
      personas/lexton/SOUL.md   personas/lexton/USER.md     /opt/sexton-persona/lexton/
 COPY personas/lexton/avatar.png        /usr/local/share/sexton-avatar/lexton.png
-COPY personas/lexton/voice.json personas/lexton/tools.json /opt/sexton-persona/lexton.config/
+COPY personas/lexton/voice.json personas/lexton/tools.json personas/lexton/lines.json /opt/sexton-persona/lexton.config/
 COPY image/lexton/lexton-menace.cjs    /opt/sexton-menace/lexton-menace.cjs
 # PHA-3787: HUMAN.md is shared by every persona — copied into both persona
 # directories from one source so there is exactly one copy to edit.

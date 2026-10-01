@@ -348,6 +348,17 @@ export type TeamSpeakToolsConfig = {
   villain?: TeamSpeakVillainConfig;
   /** The ts-summoner sidecar (PHA-3823): summon_bot / dismiss_bot / trash-talk crash-ins. */
   summoner?: TeamSpeakSummonerConfig;
+  /** Entrance/exit lines on ts-summoner start/stop (PHA-3824). */
+  announce?: TeamSpeakAnnounceConfig;
+};
+
+export type TeamSpeakAnnounceConfig = {
+  /** Default true; needs the stt-tts lane's synthesizer either way. */
+  enabled?: boolean;
+  /** Written by ts-summoner via docker exec. Default: /config/.announce. */
+  requestFile?: string;
+  /** Per-bot line pools. Default: $OPENCLAW_STATE_DIR/workspace/agents/<agent>/lines.json. */
+  linesFile?: string;
 };
 
 /**
@@ -780,6 +791,19 @@ export function resolveTeamSpeakVoiceMode(
   config: TeamSpeakAccountConfig | undefined,
 ): TeamSpeakVoiceMode {
   return config?.voice?.mode ?? DEFAULT_VOICE_MODE;
+}
+
+/** Where the announcer looks for requests and lines (PHA-3824). */
+export function resolveAnnouncePaths(
+  config: TeamSpeakAnnounceConfig | undefined,
+  env: Record<string, string | undefined> = process.env,
+): { requestFile: string; linesFile: string } {
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || "/config/openclaw";
+  const agentId = env.SEXTON_AGENT_ID?.trim() || "sexton";
+  return {
+    requestFile: config?.requestFile?.trim() || "/config/.announce",
+    linesFile: config?.linesFile?.trim() || `${stateDir}/workspace/agents/${agentId}/lines.json`,
+  };
 }
 
 /** Where the villain tools keep state and read the transcript (PHA-3820). */

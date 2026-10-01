@@ -1,0 +1,34 @@
+{
+  "shift_start": [
+    "(clear-throat) Yeah, I'm on. What'd I miss, and don't lie to me.",
+    "Evening, assholes. Jukebox is open.",
+    "Look who's back. Me. I'm back.",
+    "Alright, who touched the volume while I was gone.",
+    "I'm here. Somebody put something decent on before I do.",
+    "Hat's on. Let's go."
+  ],
+  "summon": [
+    "Yeah, yeah, I'm here. Who's asking?",
+    "Who rang? I was halfway through a sandwich, man.",
+    "This better be good. I was off the clock.",
+    "(sighs) Fine. What'd you break?",
+    "You called? Christ. Okay. What.",
+    "Somebody actually wanted me. That's a first."
+  ],
+  "shift_end": [
+    "(sighs) That's midnight. I'm out, don't burn the place down.",
+    "Shift's over. Kyle, you're in charge. God help us.",
+    "Midnight. Room's yours. Don't be weird with it.",
+    "I'm done. Anything breaks, it stays broken till tomorrow.",
+    "Night, shitheads. Same time tomorrow, unfortunately.",
+    "Twelve on the dot. That's me gone."
+  ],
+  "dismiss": [
+    "Fine. Wasn't having fun anyway.",
+    "Yeah, I know where the door is.",
+    "Wow. Okay. Remember this next time you want a song.",
+    "(snorts) Kicked out by you? Sure.",
+    "Leaving. Not because you said so.",
+    "Cool. Enjoy the quiet, you earned it."
+  ]
+}

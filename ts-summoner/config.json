@@ -14,6 +14,7 @@
   "reconcileSec": 20,
   "summonStayMin": 30,
   "idleGraceMin": 5,
+  "announce": { "enabled": true, "file": "/config/.announce", "exitWaitSec": 20 },
   "bots": {
     "sexton": {
       "container": "sexton",
