@@ -209,9 +209,12 @@ function resolveTeamSpeakVoiceMode(config) {
 function resolveAnnouncePaths(config, env = process.env) {
   const stateDir = env.OPENCLAW_STATE_DIR?.trim() || "/config/openclaw";
   const agentId = env.SEXTON_AGENT_ID?.trim() || "sexton";
+  const ws = `${stateDir}/workspace/agents/${agentId}`;
   return {
     requestFile: config?.requestFile?.trim() || "/config/.announce",
-    linesFile: config?.linesFile?.trim() || `${stateDir}/workspace/agents/${agentId}/lines.json`
+    linesFile: config?.linesFile?.trim() || `${ws}/lines.json`,
+    moodsFile: config?.moodsFile?.trim() || `${ws}/moods.json`,
+    moodPromptFile: config?.moodPromptFile?.trim() || `${ws}/mood/AGENTS.md`
   };
 }
 function resolveVillainPaths(config, env = process.env) {

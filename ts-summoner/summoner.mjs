@@ -163,13 +163,16 @@ async function stopCore(bot) {
 // file appears, and deletes it once the line has finished. Entrances are
 // written before the core starts (the gateway holds it until it's in the
 // channel); exits are written first and the core is stopped once it's gone.
-// Nobody on the server, nobody to hear it: skip the TTS call.
+// Nobody on the server, nobody to hear it: skip the TTS call. Entrances still
+// go out, marked quiet, because they also roll the shift's mood (PHA-3840).
 
 const ANNOUNCE_FILE = cfg.announce?.file ?? '/config/.announce';
 
-async function requestLine(bot, reason) {
-  if (cfg.announce?.enabled === false || !room.queryUp || room.humans === 0) return false;
-  const body = JSON.stringify({ reason, at: Date.now() });
+async function requestLine(bot, reason, { entrance = false } = {}) {
+  if (cfg.announce?.enabled === false) return false;
+  const quiet = !room.queryUp || room.humans === 0;
+  if (quiet && !entrance) return false;
+  const body = JSON.stringify(quiet ? { reason, at: Date.now(), quiet } : { reason, at: Date.now() });
   await exec(bot.container, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce', body, ANNOUNCE_FILE]);
   return true;
 }
@@ -181,7 +184,7 @@ async function lineFinished(bot) {
 
 async function startWithLine(id, bot, reason) {
   try {
-    if (await requestLine(bot, reason)) log(`${id}: entrance line '${reason}' requested`);
+    if (await requestLine(bot, reason, { entrance: true })) log(`${id}: entrance line '${reason}' requested`);
   } catch (e) {
     log(`${id}: entrance line failed: ${e.message}`);
   }

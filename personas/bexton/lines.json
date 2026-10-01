@@ -1,11 +1,11 @@
 {
   "shift_start": [
-    "(groans) Morning. Johnny cut me off at, uh... some point. Band's back.",
-    "Nobody talk loud. I'm here. The band's... mostly here.",
-    "What day is it. Don't answer that. Hi.",
-    "(coughs) I'm up. I'm fine. Where's the, uh... where's the piano.",
-    "Trixie drove me home. Or somebody did. Anyway, band's in.",
-    "Johnny says I owe him forty caps. Johnny's a liar. Morning."
+    "Band's in. Somebody name a song I won't hate.",
+    "Evening. Velvet Vice is open, behave accordingly.",
+    "I'm here. The band's here. Try to look like an audience.",
+    "Alright, the band's set up. Don't make me regret it.",
+    "Evening, everybody. Johnny says hi. Johnny said nothing, actually. Hi.",
+    "We're on. Trixie's on the floor, I'm on the keys, you're on thin ice."
   ],
   "summon": [
     "(sighs) Somebody wants the band. Course they do.",
@@ -30,5 +30,48 @@
     "(snorts) Your loss. I was about to play the good one.",
     "Whatever. Bar's open, I'll be there.",
     "Wow. Okay. I'm taking the trumpet."
+  ],
+  "mood:hungover": [
+    "(groans) Morning. Johnny cut me off at, uh... some point. Band's back.",
+    "Nobody talk loud. I'm here. The band's... mostly here.",
+    "What day is it. Don't answer that. Hi.",
+    "(coughs) I'm up. I'm fine. Where's the, uh... where's the piano.",
+    "Trixie drove me home. Or somebody did. Anyway, band's in.",
+    "Johnny says I owe him forty caps. Johnny's a liar. Morning."
+  ],
+  "mood:great_set": [
+    "Last night? Best set we've played all year. Ask anyone.",
+    "Johnny comped my drinks after last night. Comped. We're on.",
+    "(coughs) Still riding last night's set. Band's in, let's do it again."
+  ],
+  "mood:new_song": [
+    "Had a tune in my head all day, nearly drove me nuts. Band's in.",
+    "Hang on, I'm, uh, humming something. Okay. Hi.",
+    "Got a new one brewing. Not ready. Almost. Band's in."
+  ],
+  "mood:trixie_spat": [
+    "Trixie's not talking to me. Don't ask. Band's in.",
+    "We're on. And no, Trixie's not doing the duet tonight. Ask her why.",
+    "Evening. If Trixie tells you it was my fault, she's lying."
+  ],
+  "mood:sentimental": [
+    "Heard an old Velvet Vice tape today. Room used to be packed, man.",
+    "(sighs) Ten years in this room. You get soft about it. Band's in.",
+    "Evening. Feeling old tonight. Good old. Mostly."
+  ],
+  "mood:kyle": [
+    "Kyle said the band sounded good. He meant it. I think. Whatever. We're on.",
+    "Band's in. Kyle, I heard what you said. Don't make it weird.",
+    "Evening. I'm in a decent mood, and no, it's not because of Kyle."
+  ],
+  "mood:pissed": [
+    "Somebody asked for Wonderwall at soundcheck. I'm still not over it.",
+    "Band's in. Standards are up tonight. Way up.",
+    "(groans) Don't test me tonight. Somebody already did."
+  ],
+  "mood:broke": [
+    "Johnny docked me for a glass I didn't break. Tip jar's out.",
+    "Band's in, and so's the tip jar. Funny how that works.",
+    "Evening. I'm broke, the band's broke, give generously."
   ]
 }
