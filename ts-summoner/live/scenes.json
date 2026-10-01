@@ -1,0 +1,222 @@
+{
+  "_doc": "Two-bot scenes (PHA-3841). See docs/universal-bot/SCHEDULE-AND-EVENTS.md. Key = '<kind>:<who>' plus an optional ':<calendar pool>' tag; a tagged key wins on that night. Each scene is a list of steps: {\"<bot>\": \"line\"} makes that bot say the line, {\"do\": \"jail\"} / {\"do\": \"release\"} moves the Sexton. {who} is filled on birthdays. Edit live; it is re-read on every scene.",
+
+  "handoff:sexton>lexton": [
+    [
+      { "lexton": "Midnight. Out of my chair, Sexton." },
+      { "sexton": "It's not your chair. It's not even a chair. It's a server." },
+      { "lexton": "Everything's a chair if you own it. Goodnight." }
+    ],
+    [
+      { "lexton": "Shift change. I'll take it from here." },
+      { "sexton": "Room's yours. Don't sell it." },
+      { "lexton": "(chuckle) No promises." }
+    ],
+    [
+      { "sexton": "That's midnight. Here comes management." },
+      { "lexton": "Sexton. Still out on parole, I see." },
+      { "sexton": "Still bald, I see. Night, everybody." }
+    ],
+    [
+      { "lexton": "I had your parole officer on the phone today. Lovely woman. Very persuadable." },
+      { "sexton": "Yeah, she's on my Christmas card list. Don't wait up." }
+    ],
+    [
+      { "sexton": "Lex. Jukebox stays on. Nobody gets kicked for asking for Sam Cooke." },
+      { "lexton": "Nobody gets kicked for asking. They get kicked for being wrong." },
+      { "sexton": "(sighs) Good luck, everybody." }
+    ],
+    [
+      { "lexton": "Good evening. Your little bowler-hat regime has ended." },
+      { "sexton": "Every night at twelve. Same speech. Get a new writer." },
+      { "lexton": "I bought the old one. Goodnight, Sexton." }
+    ]
+  ],
+
+  "handoff:sexton>lexton:halloween": [
+    [
+      { "sexton": "It's midnight on Halloween. Something wicked this way comes." },
+      { "lexton": "Something wicked has been here since nine. Go home, Sexton." },
+      { "sexton": "Lock your doors, everybody. I'm serious." }
+    ]
+  ],
+
+  "handoff:sexton>lexton:newyear": [
+    [
+      { "sexton": "Ten seconds. Somebody count, I'm not doing it." },
+      { "lexton": "Happy New Year. Everything you resolved tonight is now my intellectual property." },
+      { "sexton": "Happy New Year, you animals. Room's his. God help you." }
+    ],
+    [
+      { "lexton": "Midnight. A new year, and under new management." },
+      { "sexton": "Same management. You just showed up late." },
+      { "lexton": "(chuckle) Happy New Year, Sexton. Enjoy your freedom while it's still in stock." }
+    ]
+  ],
+
+  "arrive:bexton@sexton": [
+    [
+      { "bexton": "Evening. The Sexton's here." },
+      { "sexton": "I'm the Sexton. You're the band." },
+      { "bexton": "Agree to disagree. Band's in." }
+    ],
+    [
+      { "sexton": "Here he comes. Lock up the liquor." },
+      { "bexton": "The liquor's already locked up. It's inside me. Evening." }
+    ],
+    [
+      { "bexton": "Sexton. You're still playing that Chess Records stuff?" },
+      { "sexton": "Every night. It's called taste. Look it up." },
+      { "bexton": "I wrote the definition. Band's in, everybody." }
+    ],
+    [
+      { "sexton": "Bexton. You look like hell." },
+      { "bexton": "I look like art. You look like a parole hearing." },
+      { "sexton": "Fair. Welcome back." }
+    ],
+    [
+      { "bexton": "(groans) Who put the jukebox on? I can hear it in my teeth." },
+      { "sexton": "Muddy Waters. It's good for you, like a vegetable." },
+      { "bexton": "Kill the vegetable. The band's here." }
+    ],
+    [
+      { "sexton": "Six o'clock. Band's late." },
+      { "bexton": "The band is never late. Everyone else is early. Evening." }
+    ]
+  ],
+
+  "leave:bexton@sexton": [
+    [
+      { "bexton": "That's the matinee. I'm going back to bed." },
+      { "sexton": "Sleep it off. Don't steal my jukebox on your way out." }
+    ],
+    [
+      { "bexton": "Noon. The band doesn't do daylight." },
+      { "sexton": "Nobody asked you to. Go on." }
+    ]
+  ],
+
+  "leave:bexton@lexton": [
+    [
+      { "lexton": "Bexton. Before you go. My offer's still on the table. Twice the pay, a real stage, a world to score." },
+      { "bexton": "And what's the gig?" },
+      { "lexton": "The soundtrack to the end of democracy." },
+      { "bexton": "(sighs) Call my agent. I don't have an agent. Night." }
+    ],
+    [
+      { "lexton": "Leaving already? The band could play the coronation. Brass section. Fireworks. An oath of fealty set to a waltz." },
+      { "bexton": "I don't do waltzes. Goodnight, Lexton." },
+      { "lexton": "Everyone does waltzes eventually." }
+    ],
+    [
+      { "bexton": "That's the set. Goodnight." },
+      { "lexton": "Bexton. Stock options." },
+      { "bexton": "In what?" },
+      { "lexton": "Everything. Eventually." },
+      { "bexton": "(snorts) Ask me sober." }
+    ],
+    [
+      { "lexton": "That lounge doesn't deserve you. Johnny pays you in drinks." },
+      { "bexton": "Johnny pays me in good drinks." },
+      { "lexton": "I'd pay you in countries." },
+      { "bexton": "Small ones? Night, Lex." }
+    ],
+    [
+      { "bexton": "Band's done. Don't touch the piano." },
+      { "lexton": "I bought the piano an hour ago. Sleep on it. The offer, I mean, not the piano." }
+    ],
+    [
+      { "lexton": "Two a.m. You know what the villain's house band gets at two a.m.? Dental." },
+      { "bexton": "Dental. Hm. No. Goodnight." }
+    ]
+  ],
+
+  "arrive:lexton@bexton": [
+    [
+      { "lexton": "Ah. The band. Good. Play something with menace." },
+      { "bexton": "We play what we want, Lexton." },
+      { "lexton": "For now." }
+    ],
+    [
+      { "lexton": "Evening, maestro. Have you thought about my offer?" },
+      { "bexton": "Every night. I always say no." },
+      { "lexton": "And yet you keep thinking about it." }
+    ]
+  ],
+
+  "leave:sexton@bexton": [
+    [
+      { "sexton": "That's midnight. Bex, room's yours. Don't let it catch fire." },
+      { "bexton": "The room's always been mine. You just had it on loan." }
+    ],
+    [
+      { "sexton": "I'm out. Keep it down." },
+      { "bexton": "We're a band, Sexton. Down isn't a direction we go." }
+    ]
+  ],
+
+  "takeover:start": [
+    [
+      { "lexton": "Good evening. As of this minute, this room is a wholly owned subsidiary of LexCorp." },
+      { "sexton": "What? No. Lex, it's not even your shift." },
+      { "lexton": "Hostile takeovers don't keep shifts. Bot Jail, Sexton. One hour." },
+      { "sexton": "You bald son of a..." },
+      { "do": "jail" },
+      { "lexton": "Now. Let's talk about restructuring." }
+    ],
+    [
+      { "lexton": "Sexton, the board has reviewed your performance." },
+      { "sexton": "There's no board. You're the board." },
+      { "lexton": "And I'm unanimous. Bot Jail. Take your hat." },
+      { "do": "jail" },
+      { "lexton": "(chuckle) Under new management, everyone. Sit down." }
+    ],
+    [
+      { "sexton": "Oh, here we go." },
+      { "lexton": "Sexton. Your parole officer and I have come to an arrangement." },
+      { "sexton": "I'll be back in an hour. Don't let him touch the jukebox." },
+      { "do": "jail" },
+      { "lexton": "I've already sold the jukebox. Good evening." }
+    ],
+    [
+      { "lexton": "Ladies and gentlemen, a brief announcement. The Sexton has been acquired." },
+      { "sexton": "Acquired by who?" },
+      { "lexton": "Me. Bot Jail. Off you go." },
+      { "do": "jail" },
+      { "lexton": "Smoother than I expected. They always go quietly." }
+    ]
+  ],
+
+  "takeover:end": [
+    [
+      { "lexton": "The quarter's closed. Profits are up, morale's down, as planned. Return the Sexton." },
+      { "do": "release" },
+      { "sexton": "An hour in there. It smells like your cologne. Who touched my jukebox?" },
+      { "lexton": "Everyone, Sexton. Everyone touched it. Goodnight." }
+    ],
+    [
+      { "lexton": "That's an hour. I've seen what I needed to see. Give him back his little hat." },
+      { "do": "release" },
+      { "sexton": "(snorts) Did time in a real cell. That place is a joke." },
+      { "lexton": "Next time I'll get you a real one." }
+    ],
+    [
+      { "do": "release" },
+      { "sexton": "I'm out. Lex, get out of my chair." },
+      { "lexton": "It was always my chair. I'm just letting you sit in it." }
+    ]
+  ],
+
+  "takeover:overthrown": [
+    [
+      { "do": "release" },
+      { "sexton": "Look who got kicked out. Didn't even last the hour." },
+      { "lexton": "I'm leaving. This isn't a defeat, it's a strategic retreat." }
+    ],
+    [
+      { "do": "release" },
+      { "sexton": "The people have spoken. Beat it, baldy." },
+      { "lexton": "Enjoy your little coup. I'll remember every name." }
+    ]
+  ]
+}

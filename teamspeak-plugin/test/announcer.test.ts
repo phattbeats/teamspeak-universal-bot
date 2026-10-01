@@ -156,3 +156,109 @@ describe("daily mood (PHA-3840)", () => {
     expect(readFileSync(t.moodPromptFile, "utf8")).toContain("keyed");
   });
 });
+
+describe("Announcer tags, vars and scripted lines (PHA-3841)", () => {
+  function setup2(lines: Record<string, string[]>) {
+    const dir = mkdtempSync(join(tmpdir(), "announce-"));
+    const requestFile = join(dir, ".announce");
+    const linesFile = join(dir, "lines.json");
+    writeFileSync(linesFile, JSON.stringify(lines));
+    const spoken: string[] = [];
+    const announcer = new Announcer({
+      requestFile,
+      linesFile,
+      speak: async (text) => {
+        spoken.push(text);
+        return { durationMs: 10 };
+      },
+      isReady: () => true,
+      random: () => 0,
+      now: () => 1_000,
+      sleep: async () => {},
+    });
+    const request = (body: object) => writeFileSync(requestFile, JSON.stringify({ at: 1_000, ...body }));
+    return { announcer, spoken, request, requestFile };
+  }
+
+  it("prefers the tagged pool and falls back to the plain one", async () => {
+    const t = setup2({ shift_start: ["plain"], "shift_start:halloween": ["spooky"] });
+    t.request({ reason: "shift_start:halloween" });
+    await t.announcer.tick();
+    t.request({ reason: "shift_start:christmas" });
+    await t.announcer.tick();
+    expect(t.spoken).toEqual(["spooky", "plain"]);
+  });
+
+  it("fills vars and skips lines whose placeholders it can't fill", async () => {
+    const t = setup2({ "shift_start:birthday": ["Happy birthday, {who}.", "{nobody} is here."] });
+    t.request({ reason: "shift_start:birthday", vars: { who: "Kyle" } });
+    await t.announcer.tick();
+    expect(t.spoken).toEqual(["Happy birthday, Kyle."]);
+  });
+
+  it("falls through to the plain pool when no tagged line can be filled", async () => {
+    const t = setup2({ shift_start: ["plain"], "shift_start:birthday": ["Happy birthday, {who}."] });
+    t.request({ reason: "shift_start:birthday" });
+    await t.announcer.tick();
+    expect(t.spoken).toEqual(["plain"]);
+  });
+
+  it("says scripted text verbatim and still removes the request", async () => {
+    const t = setup2({});
+    t.request({ reason: "scene", text: "Midnight, {who}.", vars: { who: "Lex" } });
+    await t.announcer.tick();
+    expect(t.spoken).toEqual(["Midnight, Lex."]);
+    expect(existsSync(t.requestFile)).toBe(false);
+  });
+});
+
+describe("tags and moods together (PHA-3840 + PHA-3841)", () => {
+  function setup3() {
+    const dir = mkdtempSync(join(tmpdir(), "announce-"));
+    const requestFile = join(dir, ".announce");
+    const linesFile = join(dir, "lines.json");
+    const moodsFile = join(dir, "moods.json");
+    const moodPromptFile = join(dir, "mood", "AGENTS.md");
+    writeFileSync(linesFile, JSON.stringify({
+      shift_start: ["plain"], "mood:grim": ["grim"], "shift_start:halloween": ["spooky"],
+    }));
+    writeFileSync(moodsFile, JSON.stringify({ grim: { weight: 1, prompt: "Somebody keyed your car." } }));
+    const spoken: string[] = [];
+    const announcer = new Announcer({
+      requestFile, linesFile, moodsFile, moodPromptFile,
+      speak: async (text) => {
+        spoken.push(text);
+        return { durationMs: 10 };
+      },
+      isReady: () => true,
+      random: () => 0,
+      now: () => 1_000,
+      sleep: async () => {},
+    });
+    const request = (body: object) => writeFileSync(requestFile, JSON.stringify({ at: 1_000, ...body }));
+    return { announcer, spoken, request, moodPromptFile };
+  }
+
+  it("a themed night beats the mood, the mood still rolls", async () => {
+    const t = setup3();
+    t.request({ reason: "shift_start:halloween" });
+    await t.announcer.tick();
+    expect(t.spoken).toEqual(["spooky"]);
+    expect(existsSync(t.moodPromptFile)).toBe(true);
+  });
+
+  it("an unthemed tag falls to the mood, then the plain pool", async () => {
+    const t = setup3();
+    t.request({ reason: "shift_start:lounge" });
+    await t.announcer.tick();
+    expect(t.spoken).toEqual(["grim"]);
+  });
+
+  it("a quiet scene join rolls the mood and says nothing", async () => {
+    const t = setup3();
+    t.request({ reason: "shift_start:halloween", quiet: true });
+    await t.announcer.tick();
+    expect(t.spoken).toEqual([]);
+    expect(existsSync(t.moodPromptFile)).toBe(true);
+  });
+});

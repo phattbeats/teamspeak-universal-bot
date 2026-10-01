@@ -70,5 +70,55 @@
     "Alright, I'm on and I'm wired. Who's got a story. Somebody.",
     "Had way too much coffee. Somebody talk to me, I mean it.",
     "I'm up, I'm on, I can't sit still. What're we doing tonight?"
+  ],
+  "shift_start:halloween": [
+    "Happy Halloween. I dug the graves, so nobody touch the shovel.",
+    "Spooky night. I've been inside a real cell, so your little costume's not doing much for me.",
+    "Evening. Jukebox is all Screamin' Jay tonight, and you're gonna be grateful."
+  ],
+  "shift_end:halloween": [
+    "Midnight on Halloween, and Lexton gets the room. Fitting. Lock your doors.",
+    "That's me. Whatever's out there tonight, it's his problem now."
+  ],
+  "shift_start:christmas": [
+    "Merry Christmas, you degenerates. No, I didn't get you anything.",
+    "(sighs) Christmas. Sam Cooke's got a Christmas record and you're all gonna hear it.",
+    "Ho ho, whatever. I'm on. Somebody tell me who's drunk already."
+  ],
+  "shift_end:christmas": [
+    "That's Christmas. Go call your mother. I'll know if you didn't.",
+    "Night. Best present you're getting is me shutting up."
+  ],
+  "shift_start:newyear": [
+    "Last day of the year. I've watched you all fuck it up, beginning to end.",
+    "New Year's Eve. I'm staying late, so nobody make me regret it."
+  ],
+  "shift_end:newyear": [
+    "Happy New Year. Same room, same assholes. Wouldn't trade it. Don't repeat that.",
+    "Year's done. That's me, I'm gone."
+  ],
+  "shift_start:thanksgiving": [
+    "Happy Thanksgiving. I'm thankful for the jukebox and nothing else. Don't push it.",
+    "Turkey day. If you're here instead of at the table, I respect it."
+  ],
+  "shift_start:july4": [
+    "Fourth of July. Somebody's losing a finger tonight and it better not be in my room.",
+    "Happy Fourth. Jukebox is all American tonight, so that's Chuck Berry, shut up."
+  ],
+  "shift_start:birthday": [
+    "Hey, {who}. Happy birthday. Don't get used to me being nice.",
+    "It's {who}'s birthday, so everybody be decent for ten minutes. Then back to normal.",
+    "Happy birthday, {who}. Pick a song. One. Then I'm back in charge of the jukebox."
+  ],
+  "bender_news": [
+    "Bexton's not coming. Johnny found him asleep in the walk-in, holding a trumpet like a teddy bear.",
+    "No band tonight. Bexton's on a bender. Last anybody saw, he was challenging a jukebox to a fight. My jukebox.",
+    "Band's off. Bexton called in, and it was forty seconds of breathing and then the word 'Trixie.'",
+    "Bexton's gone. Two-day tour of every bar in New Roswell. Nobody's hosting the weekend but me, so behave."
+  ],
+  "bender_news:day2": [
+    "Still no Bexton. Day two. Somebody saw him crowd-surfing at a funeral.",
+    "Bexton's still out. Johnny's putting his picture behind the bar, next to the 'do not serve' list.",
+    "Day two, no band. Trixie says he's fine. Trixie also says that about the cooler."
   ]
 }

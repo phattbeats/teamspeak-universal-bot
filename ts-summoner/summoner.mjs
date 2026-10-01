@@ -14,11 +14,24 @@
 // HTTP API below. Those bots also forward what they hear to POST /heard, so a
 // spoken jab at Lexton crashes him in under the same cooldown as chat (PHA-3823).
 //
+//
+// PHA-3841 layered three things on top, all documented in
+// docs/universal-bot/SCHEDULE-AND-EVENTS.md:
+//   - a special-nights calendar (calendar.json) that bends shifts and picks
+//     themed entrance/exit pools (Friday lounge, Halloween, birthdays...),
+//   - two-bot scenes (scenes.json) at shift changes instead of lone lines,
+//   - rare events: Lexton's hostile takeover (Sexton to Bot Jail for an hour)
+//     and Bexton's two-day bender. Their state survives restarts (state dir).
+//
 // No npm deps: `ssh` (+ sshpass) for the query, the Docker socket for exec.
 
 import { spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
+import {
+  flavorFor, forcedEvents, local, nextFlip as nextFlipBy, onShift as onShiftWith, shiftsFor, tagged,
+} from './schedule.mjs';
+import { offCooldown, parseStep, pickScene, planScenes, takeoverEligible, tickChance } from './story.mjs';
 
 const CONFIG_PATH = process.env.SUMMONER_CONFIG || '/app/config.json';
 const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
@@ -28,35 +41,61 @@ const BOT_NICKS = new Set(Object.values(cfg.bots).map((b) => b.nick.toLowerCase(
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const MIN = 60_000;
 
+// ------------------------------------------------- live-editable files --
+// calendar.json and scenes.json are re-read when their mtime changes, so an
+// edit on the box takes effect within one reconcile. A broken edit keeps the
+// last good copy and logs why.
+
+function liveJson(path, fallback) {
+  let mtime = -1, value = fallback;
+  return () => {
+    try {
+      const m = statSync(path).mtimeMs;
+      if (m !== mtime) {
+        value = JSON.parse(readFileSync(path, 'utf8'));
+        mtime = m;
+        log(`loaded ${path}`);
+      }
+    } catch (e) {
+      if (mtime !== -2) log(`${path}: ${e.code === 'ENOENT' ? 'missing' : e.message}; keeping the last good copy`);
+      mtime = -2;
+    }
+    return value;
+  };
+}
+const calendar = liveJson(cfg.calendarFile ?? '/app/live/calendar.json', { entries: [] });
+const scenes = liveJson(cfg.scenes?.file ?? '/app/live/scenes.json', {});
+
 // ---------------------------------------------------------------- schedule --
+// The rules live in schedule.mjs. A shift's `days` are the days it STARTS on;
+// start > end crosses midnight; calendar entries bend both.
 
-const DAYS = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-const fmt = new Intl.DateTimeFormat('en-US', {
-  timeZone: cfg.tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-});
-function local(ts) {
-  const p = Object.fromEntries(fmt.formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
-  return { day: DAYS[p.weekday], min: Number(p.hour) * 60 + Number(p.minute) };
-}
-const hm = (s) => { const [h, m] = s.split(':').map(Number); return h * 60 + m; };
+const onShift = (id, ts) => onShiftWith(cfg, calendar(), id, ts);
+const nextFlip = (id, ts, want) => nextFlipBy((t) => onShift(id, t), ts, want);
 
-// A shift's `days` are the days it STARTS on; start > end crosses midnight.
-function onShift(bot, ts) {
-  const { day, min } = local(ts);
-  const yesterday = (day + 6) % 7;
-  return bot.shifts.some((s) => {
-    const days = s.days ?? [0, 1, 2, 3, 4, 5, 6];
-    const a = hm(s.start), b = hm(s.end);
-    if (a < b) return days.includes(day) && min >= a && min < b;
-    return (days.includes(day) && min >= a) || (days.includes(yesterday) && min < b);
-  });
-}
+// ------------------------------------------------------------ event state --
+// Persisted, so a takeover in progress or a bender survives a restart:
+//   takeover: { lastAt, active: { startedAt, until, jailed, overthrown } | null }
+//   bender:   { lastAt, active: { bot, from, until, newsSaid } | null, returning: <bot>|null }
+//   forced:   { "<entryId>@<day>": true }  calendar-forced events already used
 
-// First minute at or after `ts` where onShift() equals `want` (24h horizon).
-function nextFlip(bot, ts, want) {
-  for (let t = ts; t < ts + 24 * 60 * MIN; t += MIN) if (onShift(bot, t) === want) return t;
-  return ts + 24 * 60 * MIN;
+const STATE_FILE = cfg.stateFile ?? '/app/state/state.json';
+const events = (() => {
+  try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')); } catch { return {}; }
+})();
+events.takeover ??= { lastAt: 0, active: null };
+events.bender ??= { lastAt: 0, active: null, returning: null };
+events.forced ??= {};
+function saveEvents() {
+  try {
+    mkdirSync(STATE_FILE.replace(/\/[^/]*$/, ''), { recursive: true });
+    writeFileSync(`${STATE_FILE}.tmp`, JSON.stringify(events, null, 2));
+    renameSync(`${STATE_FILE}.tmp`, STATE_FILE);
+  } catch (e) {
+    log('event state not saved:', e.message);
+  }
 }
+const ev = cfg.events ?? {};
 
 // ------------------------------------------------------------------- state --
 
@@ -72,17 +111,29 @@ for (const [id, bot] of Object.entries(cfg.bots)) {
     graceLogged: false,
     exitReason: null, // 'dismiss' once dismissed, until the core is stopped
     working: false, // running while wanted; only a working bot says goodbye
-    busy: false, // an exit line is playing; reconcile leaves this bot alone
+    busy: false, // an exit line or a scene is playing; reconcile leaves this bot alone
+    baseOn: null, // last tick's onShift(), to spot a shift start a bender swallowed
   };
 }
-const room = { humans: 0, lastHumanTalk: 0, lastHumanSeen: 0, queryUp: false };
+const room = { humans: 0, lastHumanTalk: 0, lastHumanSeen: 0, queryUp: false, clients: [] };
+
+// A takeover restored from disk puts the villain back on.
+if (events.takeover.active && ev.takeover) {
+  state[ev.takeover.villain].override = { mode: 'on', until: events.takeover.active.until, why: 'hostile takeover' };
+}
+
+const benderOn = (id, now) => {
+  const b = events.bender.active;
+  return Boolean(b && b.bot === id && now >= b.from && now < b.until);
+};
 
 function desired(id, now) {
-  const bot = cfg.bots[id], st = state[id];
+  const st = state[id];
   const o = st.override;
   if (o && now < o.until) return { on: o.mode === 'on', why: o.why };
   if (o) { log(`${id}: override '${o.why}' expired`); st.override = null; }
-  if (onShift(bot, now)) return { on: true, why: 'on shift' };
+  if (benderOn(id, now)) return { on: false, why: 'on a bender' };
+  if (onShift(id, now)) return { on: true, why: 'on shift' };
   // Shift over: don't walk out mid-conversation. The query can see who is
   // talking (client_flag_talking), not what about, so any human voice counts.
   // Only for a bot we had on duty: a core that came back by itself (container
@@ -102,10 +153,16 @@ function summon(id, why, stayMin = cfg.summonStayMin) {
 }
 
 function dismiss(id, why) {
-  const now = Date.now(), bot = cfg.bots[id], st = state[id];
-  if (onShift(bot, now)) {
+  const now = Date.now(), st = state[id];
+  // Dismissing the villain mid-takeover overthrows him; the takeover code
+  // plays that scene and frees the Sexton.
+  if (events.takeover.active && id === ev.takeover?.villain) {
+    events.takeover.active.overthrown = why;
+    saveEvents();
+  }
+  if (onShift(id, now)) {
     // Off for the rest of this shift, then the schedule resumes.
-    st.override = { mode: 'off', until: nextFlip(bot, now, false), why };
+    st.override = { mode: 'off', until: nextFlip(id, now, false), why };
   } else {
     // Summoned off shift: back to the schedule, but through a short 'off'
     // override. Zeroing lastHumanTalk alone didn't hold: the next room poll
@@ -168,11 +225,15 @@ async function stopCore(bot) {
 
 const ANNOUNCE_FILE = cfg.announce?.file ?? '/config/.announce';
 
-async function requestLine(bot, reason, { entrance = false } = {}) {
+const audience = () => cfg.announce?.enabled !== false && room.queryUp && room.humans > 0;
+
+// `entrance` requests go out even to an empty server, marked quiet: they also
+// roll the shift's mood (PHA-3840). `vars` fill {who} on a birthday (PHA-3841).
+async function requestLine(bot, reason, { entrance = false, vars } = {}) {
   if (cfg.announce?.enabled === false) return false;
-  const quiet = !room.queryUp || room.humans === 0;
+  const quiet = !audience();
   if (quiet && !entrance) return false;
-  const body = JSON.stringify(quiet ? { reason, at: Date.now(), quiet } : { reason, at: Date.now() });
+  const body = JSON.stringify({ reason, at: Date.now(), ...(quiet ? { quiet } : {}), ...(vars ? { vars } : {}) });
   await exec(bot.container, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce', body, ANNOUNCE_FILE]);
   return true;
 }
@@ -182,18 +243,18 @@ async function lineFinished(bot) {
   return out.includes('done');
 }
 
-async function startWithLine(id, bot, reason) {
+async function startWithLine(id, bot, reason, vars) {
   try {
-    if (await requestLine(bot, reason, { entrance: true })) log(`${id}: entrance line '${reason}' requested`);
+    if (await requestLine(bot, reason, { entrance: true, vars })) log(`${id}: entrance line '${reason}' requested`);
   } catch (e) {
     log(`${id}: entrance line failed: ${e.message}`);
   }
   return startCore(bot);
 }
 
-async function stopWithLine(id, bot, reason) {
+async function stopWithLine(id, bot, reason, vars) {
   try {
-    if (await requestLine(bot, reason)) {
+    if (await requestLine(bot, reason, { vars })) {
       const deadline = Date.now() + (cfg.announce?.exitWaitSec ?? 20) * 1000;
       while (Date.now() < deadline && !(await lineFinished(bot))) await new Promise((r) => setTimeout(r, 1000));
       log(`${id}: exit line '${reason}' done`);
@@ -206,6 +267,292 @@ async function stopWithLine(id, bot, reason) {
   return stopCore(bot);
 }
 
+// ------------------------------------------------------------- scenes --
+// PHA-3841 S5. A scene is a short script from scenes.json, played by handing
+// each bot its next line through the same announce file, one at a time: write
+// the line, wait for the bot to delete the file (= said it), next. The bots
+// never coordinate with each other; the summoner is the stage manager.
+
+const sceneMemory = {};
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function sayAndWait(id, text, vars, timeoutSec) {
+  const bot = cfg.bots[id];
+  await exec(bot.container, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce',
+    JSON.stringify({ reason: 'scene', text, vars, at: Date.now() }), ANNOUNCE_FILE]);
+  const deadline = Date.now() + timeoutSec * 1000;
+  while (Date.now() < deadline) {
+    await wait(1000);
+    if (await lineFinished(bot)) return true;
+  }
+  await exec(bot.container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+  return false;
+}
+
+/**
+ * Plays scene `key` (tag = tonight's calendar pool). `joining` = bots whose
+ * core was just started: their first line gets a longer wait (core start +
+ * channel join is ~10-25s). Lines for a bot that isn't up are skipped; `do`
+ * steps always run, so a takeover still jails even if a line was lost. A line
+ * that times out mutes the rest of the script, the actions still happen.
+ * Returns false if there was no scene to play.
+ */
+async function playScene(key, tag, vars, joining = []) {
+  const pick = pickScene(scenes(), key, tag, Math.random, sceneMemory);
+  if (!pick) return false;
+  log(`scene ${pick.key} #${pick.index}`);
+  const ids = Object.keys(cfg.bots);
+  const waiting = new Set(joining);
+  let muted = !audience();
+  for (const raw of pick.steps) {
+    const step = parseStep(raw, ids);
+    if (!step) { log(`scene ${pick.key}: skipping step ${JSON.stringify(raw)}`); continue; }
+    if (step.do) {
+      await sceneAction(step.do).catch((e) => log(`scene ${pick.key}: ${step.do} failed: ${e.message}`));
+      continue;
+    }
+    if (muted) continue;
+    if (!state[step.bot].running && !waiting.has(step.bot)) continue;
+    const timeoutSec = waiting.has(step.bot) ? (cfg.scenes?.joinWaitSec ?? 90) : (cfg.scenes?.lineWaitSec ?? 30);
+    waiting.delete(step.bot);
+    try {
+      if (!(await sayAndWait(step.bot, step.line, vars, timeoutSec))) {
+        log(`scene ${pick.key}: ${step.bot} never said his line, cutting the dialogue`);
+        muted = true;
+      }
+    } catch (e) {
+      log(`scene ${pick.key}: ${step.bot}: ${e.message}`);
+      muted = true;
+    }
+  }
+  return true;
+}
+
+async function sceneAction(what) {
+  const t = ev.takeover;
+  if (what === 'jail') {
+    await moveClient(t.target, t.jailChannelId);
+    if (events.takeover.active) { events.takeover.active.jailed = true; saveEvents(); }
+    log(`${t.target}: jailed (channel ${t.jailChannelId})`);
+  } else if (what === 'release') {
+    if (events.takeover.active) { events.takeover.active.jailed = false; saveEvents(); }
+    await moveClient(t.target, cfg.channelId);
+    log(`${t.target}: released`);
+  } else {
+    throw new Error(`unknown action '${what}'`);
+  }
+}
+
+/**
+ * Starts a bot that's about to be in a scene. Its own entrance line would
+ * talk over the script, so the request goes out marked quiet: it still rolls
+ * the shift's mood (PHA-3840), says nothing, and its removal tells us he's
+ * in the channel and ready for his first line.
+ */
+async function joinQuietly(id, reason) {
+  const bot = cfg.bots[id];
+  await exec(bot.container, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce',
+    JSON.stringify({ reason, at: Date.now(), quiet: true }), ANNOUNCE_FILE]);
+  log(`${id}: ${await startCore(bot)}`);
+  const deadline = Date.now() + (cfg.scenes?.joinWaitSec ?? 90) * 1000;
+  while (Date.now() < deadline) {
+    await wait(1000);
+    if (await lineFinished(bot)) return true;
+  }
+  log(`${id}: never came up for his scene`);
+  await exec(bot.container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+  return false;
+}
+
+/** Marks bots busy for the length of `fn`, so reconcile leaves them alone. */
+function backstage(ids, label, fn) {
+  for (const id of ids) state[id].busy = true;
+  return fn()
+    .catch((e) => log(`${label}: ${e.message}`))
+    .finally(() => { for (const id of ids) state[id].busy = false; });
+}
+
+// Tonight's line tag for a bot: a rare-event tag beats the calendar pool.
+function tagFor(id, now, base) {
+  if (base === 'shift_start' && events.bender.returning === id) return 'bender_return';
+  if (benderOn(id, now) || (base !== 'shift_start' && events.bender.active?.bot === id && now < events.bender.active.until)) return 'bender';
+  return flavorFor(cfg, calendar(), id, now).pool;
+}
+const varsFor = (id, now) => {
+  const v = flavorFor(cfg, calendar(), id, now).vars;
+  return Object.keys(v).length ? v : undefined;
+};
+
+// ------------------------------------------------------------ rare events --
+// PHA-3841 S7. Both are rare by construction: a cooldown in days, then dice.
+// The calendar can force either one on a date (`"events": ["takeover"]`), and
+// POST /event/<kind> fires one by hand.
+
+function startTakeover(now, why) {
+  const t = ev.takeover;
+  events.takeover.lastAt = now;
+  events.takeover.active = { startedAt: now, until: now + t.durationMin * MIN, jailed: false, overthrown: null, why };
+  saveEvents();
+  const v = state[t.villain];
+  v.override = { mode: 'on', until: events.takeover.active.until, why: 'hostile takeover' };
+  v.lastAction = now;
+  v.exitReason = null;
+  log(`EVENT takeover (${why}) until ${new Date(events.takeover.active.until).toISOString()}`);
+  backstage([t.villain, t.target], 'takeover start', async () => {
+    await joinQuietly(t.villain, 'summon');
+    v.running = true;
+    v.working = true;
+    if (!(await playScene('takeover:start', null, undefined, []))) {
+      await sceneAction('jail'); // no script, still a takeover
+    }
+  });
+}
+
+function endTakeover(now) {
+  const t = ev.takeover, a = events.takeover.active;
+  const overthrown = Boolean(a.overthrown);
+  events.takeover.active = null;
+  saveEvents();
+  const v = state[t.villain];
+  if (v.override?.why === 'hostile takeover') v.override = null;
+  log(`EVENT takeover over (${overthrown ? `overthrown: ${a.overthrown}` : 'time'})`);
+  backstage([t.villain, t.target], 'takeover end', async () => {
+    const played = await playScene(overthrown ? 'takeover:overthrown' : 'takeover:end', null, undefined, []);
+    if (!played || a.jailed) await sceneAction('release').catch(() => {});
+    // The scene was his exit line; leave without another one.
+    if (!desired(t.villain, Date.now()).on && (await coreRunning(cfg.bots[t.villain]))) {
+      v.working = false;
+      v.exitReason = null;
+      v.lastAction = Date.now();
+      await exec(cfg.bots[t.villain].container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+      log(`${t.villain}: ${await stopCore(cfg.bots[t.villain])}`);
+    }
+  });
+}
+
+function takeoverTick(now, forced) {
+  const t = ev.takeover;
+  if (!t?.enabled) return;
+  const a = events.takeover.active;
+  if (a) {
+    if (state[t.villain].busy || state[t.target].busy) return;
+    if (now >= a.until || a.overthrown) endTakeover(now);
+    return;
+  }
+  const tg = state[t.target], vl = state[t.villain];
+  const ok = takeoverEligible({
+    enabled: true, queryUp: room.queryUp, active: false, humans: room.humans, minHumans: t.minHumans ?? 2,
+    targetRunning: tg.running, targetOnShift: onShift(t.target, now), targetOverride: Boolean(tg.override), targetBusy: tg.busy,
+    targetOnShiftAfter: onShift(t.target, now + (t.durationMin + 15) * MIN),
+    villainRunning: vl.running, villainOnShift: onShift(t.villain, now), villainOverride: Boolean(vl.override), villainBusy: vl.busy,
+    offCooldown: forced || offCooldown(events.takeover.lastAt, t.cooldownDays, now),
+  });
+  if (!ok) return;
+  if (forced || Math.random() < tickChance(cfg.reconcileSec, t.meanEligibleMin)) {
+    if (forced) { events.forced[forced] = true; }
+    startTakeover(now, forced ? `calendar ${forced}` : 'dice');
+  }
+}
+
+function startBender(now, why) {
+  const b = ev.bender;
+  events.bender.lastAt = now;
+  events.bender.active = { bot: b.bot, from: now, until: now + b.durationHours * 60 * MIN, newsSaid: 0, why };
+  events.bender.returning = null;
+  saveEvents();
+  log(`EVENT bender: ${b.bot} (${why}) until ${new Date(events.bender.active.until).toISOString()}`);
+}
+
+// Someone in the room breaks the news that the band isn't coming.
+function benderNews(now) {
+  const a = events.bender.active;
+  const teller = (ev.bender.tellers ?? Object.keys(cfg.bots))
+    .find((id) => id !== a.bot && state[id].running && !state[id].busy && desired(id, now).on);
+  const reason = a.newsSaid ? 'bender_news:day2' : 'bender_news';
+  a.newsSaid += 1;
+  saveEvents();
+  if (!teller) return;
+  requestLine(cfg.bots[teller], reason)
+    .then((asked) => asked && log(`${teller}: '${reason}' requested`))
+    .catch((e) => log(`${teller}: bender news failed: ${e.message}`));
+}
+
+function benderTick(now, forced) {
+  const b = ev.bender;
+  if (!b?.enabled) return;
+  const a = events.bender.active;
+  if (a && now >= a.until) {
+    log(`EVENT bender over; ${a.bot} is back on his next shift`);
+    events.bender.active = null;
+    events.bender.returning = a.bot;
+    saveEvents();
+  }
+  // A shift that starts (on the plain schedule) is where a bender is born,
+  // and where the news gets broken while it lasts.
+  const st = state[b.bot];
+  const baseOn = onShift(b.bot, now);
+  const shiftStarted = st.baseOn === false && baseOn;
+  st.baseOn = baseOn;
+  if (!shiftStarted && !forced) return;
+  if (events.bender.active) {
+    if (shiftStarted) benderNews(now);
+    return;
+  }
+  const dayOk = (b.days ?? [5]).includes(local(now, cfg.tz).day);
+  if (forced || (dayOk && offCooldown(events.bender.lastAt, b.cooldownDays, now) && Math.random() < b.chance)) {
+    if (forced) events.forced[forced] = true;
+    startBender(now, forced ? `calendar ${forced}` : 'dice');
+    if (shiftStarted) benderNews(now);
+  }
+}
+
+function eventsTick(now) {
+  // Calendar-forced events fire once per entry per service day.
+  const forced = {};
+  for (const f of forcedEvents(cfg, calendar(), now)) {
+    const k = `${f.entryId}@${f.day}`;
+    if (!events.forced[k]) forced[f.event] = k;
+  }
+  takeoverTick(now, forced.takeover);
+  benderTick(now, forced.bender);
+}
+
+function startEventByHand(kind) {
+  const now = Date.now();
+  if (kind === 'takeover' && ev.takeover?.enabled) {
+    if (events.takeover.active) return { ok: false, error: 'a takeover is already on' };
+    const t = ev.takeover;
+    if (!state[t.target].running || state[t.villain].running || state[t.villain].busy || state[t.target].busy) {
+      return { ok: false, error: `needs ${t.target} in the room and ${t.villain} out of it` };
+    }
+    startTakeover(now, 'by hand');
+    return { ok: true, until: new Date(events.takeover.active.until).toISOString() };
+  }
+  if (kind === 'bender' && ev.bender?.enabled) {
+    if (events.bender.active) return { ok: false, error: 'already on a bender' };
+    startBender(now, 'by hand');
+    return { ok: true, until: new Date(events.bender.active.until).toISOString() };
+  }
+  return { ok: false, error: `unknown or disabled event '${kind}'` };
+}
+
+function endEventByHand(kind) {
+  const now = Date.now();
+  if (kind === 'takeover' && events.takeover.active) {
+    events.takeover.active.until = now;
+    saveEvents();
+    return { ok: true };
+  }
+  if (kind === 'bender' && events.bender.active) {
+    events.bender.active.until = now;
+    saveEvents();
+    return { ok: true };
+  }
+  return { ok: false, error: `no ${kind} on` };
+}
+
+// --------------------------------------------------------------- reconcile --
+
 let reconciling = false;
 async function reconcile() {
   if (reconciling) return;
@@ -213,57 +560,117 @@ async function reconcile() {
   try {
     const now = Date.now();
     // Summoned bots leave once the server has had no humans for a while.
+    // (A takeover isn't a summons; it runs its hour.)
     for (const [id, st] of Object.entries(state)) {
-      if (st.override?.mode === 'on' && room.queryUp && room.humans === 0
+      if (st.override?.mode === 'on' && st.override.why !== 'hostile takeover' && room.queryUp && room.humans === 0
           && now - room.lastHumanSeen > cfg.idleGraceMin * MIN) {
         log(`${id}: server empty, ending '${st.override.why}'`);
         st.override = null;
       }
     }
     for (const [id, bot] of Object.entries(cfg.bots)) {
-      const st = state[id];
       try {
-        st.running = await coreRunning(bot);
+        state[id].running = await coreRunning(bot);
       } catch (e) {
         log(`${id}: status failed: ${e.message}`);
-        continue;
+        state[id].running = null;
       }
-      if (st.busy) continue;
+    }
+    eventsTick(now);
+
+    // Work out every bot's move first, so two moves in the same tick (Sexton
+    // out, Lexton in, at midnight) can become one scene.
+    const moves = [], present = [], lingering = [];
+    for (const id of Object.keys(cfg.bots)) {
+      const st = state[id];
+      if (st.running === null || st.busy) continue;
       const d = desired(id, now);
       st.onDuty = d.on;
       if (d.on && st.running) st.working = true;
       if (d.on === st.running) {
-        if (d.on) st.exitReason = null;
-        continue;
-      }
-      if (now - st.lastAction < 60_000) continue; // one move per bot per minute
-      st.lastAction = now;
-      log(`${id}: ${d.on ? 'START' : 'STOP'} core (${d.why})`);
-      if (d.on) {
-        st.exitReason = null;
-        try {
-          log(`${id}: ${await startWithLine(id, bot, d.why === 'on shift' ? 'shift_start' : 'summon')}`);
-        } catch (e) {
-          log(`${id}: action failed: ${e.message}`);
+        if (d.on) {
+          st.exitReason = null;
+          if (d.why === 'on shift') present.push(id);
+          else if (d.why.startsWith('shift over')) lingering.push(id);
+          else present.push(id);
         }
         continue;
       }
-      // A core that came back by itself off shift (PHA-3831) leaves quietly.
-      // Not `onDuty`: that flips the moment the decision does, and the
-      // one-move-per-minute limit can put a reconcile in between.
-      const reason = st.working ? (st.exitReason ?? 'shift_end') : null;
-      st.exitReason = null;
-      st.working = false;
-      // The exit line can take a while; don't hold up the other bots for it.
-      st.busy = true;
-      (reason ? stopWithLine(id, bot, reason) : stopCore(bot))
-        .then((out) => log(`${id}: ${out}`))
-        .catch((e) => log(`${id}: action failed: ${e.message}`))
-        .finally(() => { st.busy = false; });
+      if (now - st.lastAction < 60_000) continue; // one move per bot per minute
+      if (d.on) {
+        moves.push({ id, dir: 'start', base: d.why === 'on shift' ? 'shift_start' : 'summon', why: d.why });
+      } else {
+        // A core that came back by itself off shift (PHA-3831) leaves quietly.
+        // Not `onDuty`: that flips the moment the decision does, and the
+        // one-move-per-minute limit can put a reconcile in between.
+        const base = st.working ? (st.exitReason ?? 'shift_end') : null;
+        moves.push({ id, dir: 'stop', base, why: d.why });
+      }
     }
+
+    const sceneOn = cfg.scenes?.enabled !== false && audience();
+    const { scenes: plays, rest } = sceneOn
+      ? planScenes({ moves, present, lingering, hasScene: (k) => Array.isArray(scenes()[k]) && scenes()[k].length > 0 })
+      : { scenes: [], rest: moves };
+
+    for (const p of plays) runScene(p, now);
+    for (const m of rest) soloMove(m, now);
   } finally {
     reconciling = false;
   }
+}
+
+function runScene(p, now) {
+  const ids = [p.start, p.stop, p.partner].filter(Boolean);
+  const lead = p.start ?? p.stop;
+  const tag = tagFor(lead, now, p.start ? 'shift_start' : 'shift_end');
+  const vars = varsFor(lead, now);
+  log(`${ids.join('+')}: ${p.key}`);
+  for (const id of ids) state[id].lastAction = now;
+  backstage(ids, p.key, async () => {
+    if (p.start) {
+      const st = state[p.start];
+      st.exitReason = null;
+      if (events.bender.returning === p.start) { events.bender.returning = null; saveEvents(); }
+      await joinQuietly(p.start, tagged('shift_start', tag));
+      st.running = true; // don't wait for the next reconcile to notice
+      st.working = true;
+    }
+    await playScene(p.key, tag, vars, []);
+    if (p.stop) {
+      const st = state[p.stop];
+      st.working = false;
+      st.exitReason = null;
+      await exec(cfg.bots[p.stop].container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+      log(`${p.stop}: ${await stopCore(cfg.bots[p.stop])}`);
+      // Talk grace is over: the hand-off was his goodbye.
+      st.lastAction = Date.now();
+    }
+  });
+}
+
+function soloMove(m, now) {
+  const id = m.id, bot = cfg.bots[id], st = state[id];
+  st.lastAction = now;
+  log(`${id}: ${m.dir === 'start' ? 'START' : 'STOP'} core (${m.why})`);
+  if (m.dir === 'start') {
+    st.exitReason = null;
+    const reason = tagged(m.base, tagFor(id, now, m.base));
+    if (m.base === 'shift_start' && events.bender.returning === id) { events.bender.returning = null; saveEvents(); }
+    startWithLine(id, bot, reason, varsFor(id, now))
+      .then((out) => log(`${id}: ${out}`))
+      .catch((e) => log(`${id}: action failed: ${e.message}`));
+    return;
+  }
+  const reason = m.base ? tagged(m.base, tagFor(id, now, m.base)) : null;
+  st.exitReason = null;
+  st.working = false;
+  // The exit line can take a while; don't hold up the other bots for it.
+  st.busy = true;
+  (reason ? stopWithLine(id, bot, reason, varsFor(id, now)) : stopCore(bot))
+    .then((out) => log(`${id}: ${out}`))
+    .catch((e) => log(`${id}: action failed: ${e.message}`))
+    .finally(() => { st.busy = false; });
 }
 
 // ------------------------------------------------------------ chat rules --
@@ -441,10 +848,34 @@ async function pollRoom(q) {
   room.humans = humans.length;
   if (humans.length) room.lastHumanSeen = now;
   if (humans.some((c) => c.client_flag_talking === '1')) room.lastHumanTalk = now;
+  room.clients = clients;
+  // A jailed Sexton who reconnects (core restart) lands back in the main
+  // channel. He's serving an hour; put him back.
+  const t = events.takeover.active;
+  if (t?.jailed && !t.overthrown && now < t.until) {
+    const c = findClient(ev.takeover.target);
+    if (c && c.cid !== String(ev.takeover.jailChannelId)) {
+      log(`${ev.takeover.target}: walked out of Bot Jail, putting him back`);
+      await moveClient(ev.takeover.target, ev.takeover.jailChannelId).catch((e) => log('rejail:', e.message));
+    }
+  }
+}
+
+let liveQuery = null;
+function findClient(id) {
+  const nick = cfg.bots[id].nick.toLowerCase();
+  return room.clients.find((c) => (c.client_nickname || '').toLowerCase() === nick);
+}
+async function moveClient(id, cid) {
+  const c = findClient(id);
+  if (!liveQuery || !c) throw new Error(`${id} is not on the server`);
+  await liveQuery.cmd(`clientmove clid=${c.clid} cid=${cid}`);
+  c.cid = String(cid);
 }
 
 async function runQuery() {
   const q = new Query();
+  liveQuery = q;
   q.onNotify = (kind, p) => {
     if (kind === 'notifytextmessage') {
       logChat(p.invokername, p.msg || '', p.targetmode);
@@ -465,6 +896,7 @@ async function runQuery() {
   await pollRoom(q);
   await new Promise((resolve) => { q.onClose = resolve; });
   clearInterval(timer);
+  if (liveQuery === q) liveQuery = null;
   log('query connection closed');
 }
 
@@ -481,11 +913,19 @@ async function queryLoop() {
 
 function status() {
   const now = Date.now();
+  const iso = (t) => (t ? new Date(t).toISOString() : null);
+  const today = local(now, cfg.tz);
   return {
-    now: new Date(now).toISOString(), room,
-    bots: Object.fromEntries(Object.entries(cfg.bots).map(([id, b]) => [id, {
-      running: state[id].running, desired: desired(id, now), onShift: onShift(b, now),
-      override: state[id].override && { ...state[id].override, until: new Date(state[id].override.until).toISOString() },
+    now: new Date(now).toISOString(), room: { ...room, clients: undefined },
+    events: {
+      takeover: { ...events.takeover, lastAt: iso(events.takeover.lastAt) },
+      bender: { ...events.bender, lastAt: iso(events.bender.lastAt) },
+    },
+    bots: Object.fromEntries(Object.keys(cfg.bots).map((id) => [id, {
+      running: state[id].running, busy: state[id].busy, desired: desired(id, now), onShift: onShift(id, now),
+      shiftsToday: shiftsFor(cfg, calendar(), id, today).shifts,
+      flavor: flavorFor(cfg, calendar(), id, now),
+      override: state[id].override && { ...state[id].override, until: iso(state[id].override.until) },
     }])),
   };
 }
@@ -502,6 +942,13 @@ http.createServer((req, res) => {
     if (verb === 'summon') summon(bot, `summoned by ${by}`); else dismiss(bot, `dismissed by ${by}`);
     return send(200, { bot, ...before });
   }
+  // PHA-3841: fire or end a rare event by hand (testing, or Brandon's whim).
+  // POST /event/takeover | /event/bender | /event/end?kind=takeover|bender
+  if (req.method === 'POST' && verb === 'event') {
+    const kind = id === 'end' ? new URL(req.url, 'http://x').searchParams.get('kind') : id;
+    const out = id === 'end' ? endEventByHand(kind) : startEventByHand(kind);
+    return send(out.ok ? 200 : 409, out);
+  }
   if (req.method === 'POST' && verb === 'heard') {
     const by = new URL(req.url, 'http://x').searchParams.get('by') || '';
     let body = '';
@@ -509,7 +956,7 @@ http.createServer((req, res) => {
     req.on('end', () => send(200, { summoned: onHeard(by, body) }));
     return;
   }
-  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /heard?by=<speaker>' });
+  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /heard?by=<speaker> | POST /event/<takeover|bender> | POST /event/end?kind=<takeover|bender>' });
 }).listen(cfg.httpPort, () => log(`http on :${cfg.httpPort}`));
 
 setInterval(() => reconcile().catch((e) => log('reconcile', e.message)), cfg.reconcileSec * 1000);
