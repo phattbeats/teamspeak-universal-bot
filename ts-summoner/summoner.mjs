@@ -107,8 +107,10 @@ function dismiss(id, why) {
     // Off for the rest of this shift, then the schedule resumes.
     st.override = { mode: 'off', until: nextFlip(bot, now, false), why };
   } else {
-    st.override = null; // summoned off-shift: just drop back to the schedule
-    room.lastHumanTalk = 0; // and don't let the talk-grace hold him
+    // Summoned off shift: back to the schedule, but through a short 'off'
+    // override. Zeroing lastHumanTalk alone didn't hold: the next room poll
+    // re-set it while anyone was talking, and the talk-grace kept him in.
+    st.override = { mode: 'off', until: now + 2 * MIN, why };
   }
   st.exitReason = 'dismiss';
   log(`${id}: DISMISS (${why})`);
