@@ -108,5 +108,27 @@
   "bender_news": [
     "Bexton's missing. I'd love to tell you I had nothing to do with it.",
     "No band. Bexton's on a bender. That's not a breakdown, that's a negotiating position, and I'm listening."
+  ],
+  "shift_start:late": [
+    "I'm late. Board ran long. You'll live.",
+    "(clear-throat) I wasn't late. You were early. Sit down.",
+    "Delayed by a hostile acquisition. Don't ask whose.",
+    "Yes, I'm late. Billionaires don't punch clocks. We buy them."
+  ],
+  "shift_start:covering": [
+    "{who} called out. I'm covering, which means I'm in charge. Mistake on somebody's part.",
+    "{who}'s out sick. I'll find out which kind of sick. Meanwhile, I'm here.",
+    "With {who} gone, the room needed adult supervision. You're welcome.",
+    "{who} didn't show. I'm stepping in. Consider this a hostile takeover with better manners."
+  ],
+  "shift_end:early_out": [
+    "Thirty minutes of silence. Even my board's more fun than this. Goodnight.",
+    "Nobody's talking. I'm not paying rent on a dead room. I'm out.",
+    "You've all gone quiet. Smart. I'll leave before you say something stupid."
+  ],
+  "no_show": [
+    "{who}'s a no-show. I'm noting it for his performance review. I wrote the review.",
+    "{who} didn't show, and nobody's covering. Funny how loyalty works.",
+    "{who} called out. Don't worry, I've got a file on where he really is."
   ]
 }

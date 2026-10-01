@@ -75,9 +75,31 @@ Times are in `config.json → bots.<id>.shifts`, America/New_York:
 Rules:
 - A shift belongs to the day it **starts**. `start > end` crosses midnight.
 - If someone's still talking when a shift ends, the bot stays until the room
-  has been quiet for `idleGraceMin` ("talk grace").
+  has been quiet for `idleGraceMin` ("talk grace"), at most an hour (S3 below).
 - Summons, dismissals and crash-ins are overrides on top. See `ts-summoner/README.md`.
 - Each bot gets one start/stop per minute at most.
+- The table is the plan. The real clock moves with the variety rules below.
+
+### Variety (PHA-3839, `ts-summoner/variety.mjs`, `config.json → variety`)
+
+Every roll hashes the shift's key (`sexton@2026-10-02@08:00`) with `salt`, so
+a restart lands on the same answer. Change `salt` to re-deal everything.
+
+| | What happens | Line pool |
+|---|---|---|
+| S1 jitter | Each shift starts 0–`startMaxMin` and ends 0–`endMaxMin` min late. A start ≥ `lateMin` late gets a late line, if he comes up within `lateWindowMin` of it | `shift_start:late` |
+| S2 call-out | About `chance` (1 in 10) shifts the bot doesn't show. With `coverChance` (70%) a free bot (off shift, not up, not summoned, not on a bender) covers until the missed shift's end. Otherwise whoever is in the room says he didn't show. Special-calendar nights never call out | `shift_start:covering`, `no_show` (both get `{who}`) |
+| S3 room | A bot on shift (or covering) leaves once nobody has talked or typed for `quietOutMin` (30), counted from his start at the earliest. He comes back (a `summon` entrance, same mood) when someone speaks up. Overtime past the shift lasts only while people talk, capped at `overtimeMaxMin` (60) | `shift_end:early_out` |
+
+- Tags stack in front of the calendar tag: `shift_start:late:halloween` falls
+  back to `shift_start:late`, then the mood, then `shift_start`. Late,
+  covering and early-out moves never become scenes.
+- An `early_out` line is only heard by people idling in the channel; with
+  nobody on the server it's skipped like any exit.
+- `/status → events.callouts` lists decided call-outs (`{bot, cover}`);
+  `/status → bots.<id>.shift` shows the jittered `start`/`end` and `lateMin`.
+- Turn a part off with `"enabled": false` in its block. With `room` off,
+  overtime is uncapped again (the pre-PHA-3839 behaviour).
 
 ---
 
@@ -360,7 +382,7 @@ Summoner (PHATT-RAID):
 
 ```sh
 # from a checkout: copy ts-summoner/ to the box, keep query-pass.txt there
-tar cf - -C ts-summoner summoner.mjs schedule.mjs story.mjs config.json deploy.sh Dockerfile live README.md \
+tar cf - -C ts-summoner summoner.mjs schedule.mjs story.mjs variety.mjs config.json deploy.sh Dockerfile live README.md \
   | ssh root@10.0.0.100 'cd /mnt/user/appdata/ts-summoner && tar xf - --no-same-owner && ./deploy.sh'
 ```
 
@@ -385,7 +407,7 @@ leave existing keys alone, because Brandon hand-edits them. Keep the file
 
 | symptom | look at |
 |---|---|
-| a bot isn't in the room | `docker exec ts-summoner wget -qO- localhost:8099/status`: `desired.why` says `off shift`, `on a bender`, `hostile takeover`... |
+| a bot isn't in the room | `docker exec ts-summoner wget -qO- localhost:8099/status`: `desired.why` says `off shift`, `on a bender`, `hostile takeover`, `called out`, `room quiet`... |
 | scene didn't play | `docker logs ts-summoner \| grep -E 'scene\|handoff\|arrive\|leave'`. `scene X: <bot> never said his line` = TTS/bridge problem on that bot |
 | scene played but silent | the bot image is older than pha-3841 (`docker logs <bot> \| grep "no lines for 'scene'"`) |
 | wrong holiday pool | `/status → bots.<id>.flavor` shows `{pool, vars, entries, serviceDay}` |

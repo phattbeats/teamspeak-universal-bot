@@ -23,15 +23,20 @@
 //   - rare events: Lexton's hostile takeover (Sexton to Bot Jail for an hour)
 //     and Bexton's two-day bender. Their state survives restarts (state dir).
 //
+// PHA-3839 (variety.mjs) loosened the clock: shifts start and end 0-45 min
+// late, about one in ten is a call-out (another bot covers, or nobody does),
+// and a bot stays while people are talking and leaves once the room goes quiet.
+//
 // No npm deps: `ssh` (+ sshpass) for the query, the Docker socket for exec.
 
 import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import {
-  flavorFor, forcedEvents, local, nextFlip as nextFlipBy, onShift as onShiftWith, shiftsFor, tagged,
+  flavorFor, forcedEvents, local, nextFlip as nextFlipBy, shiftAt, shiftsFor, tagged,
 } from './schedule.mjs';
 import { offCooldown, parseStep, pickScene, planScenes, takeoverEligible, tickChance } from './story.mjs';
+import { calledOut, isLate, jitterFor, overtimeOk, pickCover, quietOut, varietyConfig } from './variety.mjs';
 
 const CONFIG_PATH = process.env.SUMMONER_CONFIG || '/app/config.json';
 const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
@@ -68,9 +73,13 @@ const scenes = liveJson(cfg.scenes?.file ?? '/app/live/scenes.json', {});
 
 // ---------------------------------------------------------------- schedule --
 // The rules live in schedule.mjs. A shift's `days` are the days it STARTS on;
-// start > end crosses midnight; calendar entries bend both.
+// start > end crosses midnight; calendar entries bend both. PHA-3839 jitter
+// moves every shift, so "on shift" everywhere below means the jittered one.
 
-const onShift = (id, ts) => onShiftWith(cfg, calendar(), id, ts);
+const vc = varietyConfig(cfg.variety);
+const jit = (key) => jitterFor(vc, key);
+const planned = (id, ts) => shiftAt(cfg, calendar(), id, ts, jit);
+const onShift = (id, ts) => planned(id, ts) !== null;
 const nextFlip = (id, ts, want) => nextFlipBy((t) => onShift(id, t), ts, want);
 
 // ------------------------------------------------------------ event state --
@@ -78,6 +87,7 @@ const nextFlip = (id, ts, want) => nextFlipBy((t) => onShift(id, t), ts, want);
 //   takeover: { lastAt, active: { startedAt, until, jailed, overthrown } | null }
 //   bender:   { lastAt, active: { bot, from, until, newsSaid } | null, returning: <bot>|null }
 //   forced:   { "<entryId>@<day>": true }  calendar-forced events already used
+//   callouts: { "<shift key>": { bot, cover, at, until } }  PHA-3839, decided once per shift
 
 const STATE_FILE = cfg.stateFile ?? '/app/state/state.json';
 const events = (() => {
@@ -86,6 +96,7 @@ const events = (() => {
 events.takeover ??= { lastAt: 0, active: null };
 events.bender ??= { lastAt: 0, active: null, returning: null };
 events.forced ??= {};
+events.callouts ??= {};
 function saveEvents() {
   try {
     mkdirSync(STATE_FILE.replace(/\/[^/]*$/, ''), { recursive: true });
@@ -113,9 +124,14 @@ for (const [id, bot] of Object.entries(cfg.bots)) {
     working: false, // running while wanted; only a working bot says goodbye
     busy: false, // an exit line or a scene is playing; reconcile leaves this bot alone
     baseOn: null, // last tick's onShift(), to spot a shift start a bender swallowed
+    plannedOn: null, // PHA-3839: last tick's onShift(), to time the overtime cap
+    shiftEndedAt: null,
+    onSince: Date.now(), // core last seen coming up; a fresh start gets the full quiet wait
+    leftQuiet: null, // shift key this bot walked out of because the room went quiet
   };
 }
-const room = { humans: 0, lastHumanTalk: 0, lastHumanSeen: 0, queryUp: false, clients: [] };
+const room = { humans: 0, lastHumanTalk: 0, lastHumanSeen: 0, lastChat: 0, queryUp: false, clients: [] };
+const BOOT_AT = Date.now();
 
 // A takeover restored from disk puts the villain back on.
 if (events.takeover.active && ev.takeover) {
@@ -127,21 +143,70 @@ const benderOn = (id, now) => {
   return Boolean(b && b.bot === id && now >= b.from && now < b.until);
 };
 
+// PHA-3839 S3: nobody has said anything (voice or chat) for a while, counting
+// from when the bot came up or the shift began, whichever is later.
+function roomQuiet(id, now, since) {
+  const lastActivity = Math.max(room.lastHumanTalk, room.lastChat, state[id].onSince, BOOT_AT, since ?? 0);
+  return quietOut(vc, { lastActivity, now, queryUp: room.queryUp });
+}
+
 function desired(id, now) {
   const st = state[id];
   const o = st.override;
-  if (o && now < o.until) return { on: o.mode === 'on', why: o.why };
+  if (o && now < o.until) {
+    if (o.cover && roomQuiet(id, now, o.since)) return { on: false, why: 'room quiet', quiet: true };
+    return { on: o.mode === 'on', why: o.why, cover: o.cover };
+  }
   if (o) { log(`${id}: override '${o.why}' expired`); st.override = null; }
   if (benderOn(id, now)) return { on: false, why: 'on a bender' };
-  if (onShift(id, now)) return { on: true, why: 'on shift' };
+  const shift = planned(id, now);
+  if (shift) {
+    if (calledOut(vc, shift)) return { on: false, why: 'called out' };
+    if (roomQuiet(id, now, shift.startTs)) return { on: false, why: 'room quiet', quiet: true };
+    return { on: true, why: 'on shift', shift };
+  }
   // Shift over: don't walk out mid-conversation. The query can see who is
   // talking (client_flag_talking), not what about, so any human voice counts.
   // Only for a bot we had on duty: a core that came back by itself (container
   // restart, supervisord autostart) off shift gets stopped, not held (PHA-3831).
-  if (st.running && st.onDuty && now - room.lastHumanTalk < cfg.idleGraceMin * MIN) {
+  // PHA-3839 caps the overtime at an hour past the shift.
+  const talking = now - room.lastHumanTalk < cfg.idleGraceMin * MIN;
+  if (st.running && st.onDuty && overtimeOk(vc, { shiftEndedAt: st.shiftEndedAt, now, talking })) {
     return { on: true, why: 'shift over, waiting for the room to go quiet' };
   }
   return { on: false, why: 'off shift' };
+}
+
+// ------------------------------------------------------------- call-outs --
+// PHA-3839 S2. Decided once, the first tick a called-out shift is live, and
+// kept in the state file so a restart doesn't hand the shift to someone else.
+// A cover is an 'on' override until the missed shift's end; nobody covering
+// means whoever is in the room says he didn't show.
+
+function calloutTick(now) {
+  const ids = Object.keys(cfg.bots);
+  for (const id of ids) {
+    const shift = planned(id, now);
+    if (!shift || !calledOut(vc, shift) || events.callouts[shift.key]) continue;
+    if (benderOn(id, now) || state[id].override) continue; // not coming anyway, or summoned
+    const free = ids.filter((c) => c !== id && !onShift(c, now) && !state[c].running && !state[c].busy
+      && !state[c].override && !benderOn(c, now));
+    const cover = pickCover(vc, shift.key, free);
+    events.callouts[shift.key] = { bot: id, cover, at: now, until: shift.endTs };
+    for (const [k, c] of Object.entries(events.callouts)) if (now - c.until > 3 * 24 * 60 * MIN) delete events.callouts[k];
+    saveEvents();
+    const who = cfg.bots[id].nick;
+    log(`${id}: CALLED OUT of ${shift.key}; ${cover ? `${cover} covers` : 'nobody covers'}`);
+    if (cover) {
+      state[cover].override = { mode: 'on', until: shift.endTs, why: `covering for ${who}`, cover: id, since: now };
+      continue;
+    }
+    const teller = ids.find((c) => c !== id && state[c].running && !state[c].busy && desired(c, now).on);
+    if (!teller) continue;
+    requestLine(cfg.bots[teller], 'no_show', { vars: { who } })
+      .then((asked) => asked && log(`${teller}: 'no_show' requested`))
+      .catch((e) => log(`${teller}: no-show line failed: ${e.message}`));
+  }
 }
 
 function summon(id, why, stayMin = cfg.summonStayMin) {
@@ -562,7 +627,7 @@ async function reconcile() {
     // Summoned bots leave once the server has had no humans for a while.
     // (A takeover isn't a summons; it runs its hour.)
     for (const [id, st] of Object.entries(state)) {
-      if (st.override?.mode === 'on' && st.override.why !== 'hostile takeover' && room.queryUp && room.humans === 0
+      if (st.override?.mode === 'on' && st.override.why !== 'hostile takeover' && !st.override.cover && room.queryUp && room.humans === 0
           && now - room.lastHumanSeen > cfg.idleGraceMin * MIN) {
         log(`${id}: server empty, ending '${st.override.why}'`);
         st.override = null;
@@ -570,13 +635,21 @@ async function reconcile() {
     }
     for (const [id, bot] of Object.entries(cfg.bots)) {
       try {
-        state[id].running = await coreRunning(bot);
+        const up = await coreRunning(bot);
+        if (up && state[id].running === false) state[id].onSince = now;
+        state[id].running = up;
       } catch (e) {
         log(`${id}: status failed: ${e.message}`);
         state[id].running = null;
       }
     }
     eventsTick(now);
+    for (const [id, st] of Object.entries(state)) {
+      const p = onShift(id, now);
+      if (st.plannedOn && !p) st.shiftEndedAt = now;
+      st.plannedOn = p;
+    }
+    calloutTick(now);
 
     // Work out every bot's move first, so two moves in the same tick (Sexton
     // out, Lexton in, at midnight) can become one scene.
@@ -598,20 +671,33 @@ async function reconcile() {
       }
       if (now - st.lastAction < 60_000) continue; // one move per bot per minute
       if (d.on) {
-        moves.push({ id, dir: 'start', base: d.why === 'on shift' ? 'shift_start' : 'summon', why: d.why });
+        // PHA-3839 tags: `shift_start:late`, `shift_start:covering` ({who}).
+        // Back after walking out of a quiet room is a summon (keeps the mood).
+        if (d.cover && st.leftQuiet !== d.cover) {
+          moves.push({ id, dir: 'start', base: 'shift_start', tag: 'covering', vars: { who: cfg.bots[d.cover].nick }, why: d.why });
+        } else if (d.why === 'on shift' && st.leftQuiet !== d.shift.key) {
+          moves.push({ id, dir: 'start', base: 'shift_start', tag: isLate(vc, d.shift, now) ? 'late' : null, why: d.why });
+        } else {
+          moves.push({ id, dir: 'start', base: 'summon', why: d.why });
+        }
       } else {
         // A core that came back by itself off shift (PHA-3831) leaves quietly.
         // Not `onDuty`: that flips the moment the decision does, and the
         // one-move-per-minute limit can put a reconcile in between.
         const base = st.working ? (st.exitReason ?? 'shift_end') : null;
-        moves.push({ id, dir: 'stop', base, why: d.why });
+        const tag = d.quiet && base === 'shift_end' ? 'early_out' : null;
+        if (d.quiet) st.leftQuiet = planned(id, now)?.key ?? st.override?.cover ?? null;
+        moves.push({ id, dir: 'stop', base, tag, why: d.why });
       }
     }
 
     const sceneOn = cfg.scenes?.enabled !== false && audience();
+    // A late, covering or early-out move has its own line; no scene for it.
+    const plain = moves.filter((m) => !m.tag);
     const { scenes: plays, rest } = sceneOn
-      ? planScenes({ moves, present, lingering, hasScene: (k) => Array.isArray(scenes()[k]) && scenes()[k].length > 0 })
-      : { scenes: [], rest: moves };
+      ? planScenes({ moves: plain, present, lingering, hasScene: (k) => Array.isArray(scenes()[k]) && scenes()[k].length > 0 })
+      : { scenes: [], rest: plain };
+    rest.push(...moves.filter((m) => m.tag));
 
     for (const p of plays) runScene(p, now);
     for (const m of rest) soloMove(m, now);
@@ -649,25 +735,29 @@ function runScene(p, now) {
   });
 }
 
+const mergeVars = (a, b) => (a || b ? { ...a, ...b } : undefined);
+
 function soloMove(m, now) {
   const id = m.id, bot = cfg.bots[id], st = state[id];
   st.lastAction = now;
   log(`${id}: ${m.dir === 'start' ? 'START' : 'STOP'} core (${m.why})`);
   if (m.dir === 'start') {
     st.exitReason = null;
-    const reason = tagged(m.base, tagFor(id, now, m.base));
+    st.onSince = now;
+    if (m.base === 'shift_start') st.leftQuiet = null;
+    const reason = tagged(tagged(m.base, m.tag), tagFor(id, now, m.base));
     if (m.base === 'shift_start' && events.bender.returning === id) { events.bender.returning = null; saveEvents(); }
-    startWithLine(id, bot, reason, varsFor(id, now))
+    startWithLine(id, bot, reason, mergeVars(varsFor(id, now), m.vars))
       .then((out) => log(`${id}: ${out}`))
       .catch((e) => log(`${id}: action failed: ${e.message}`));
     return;
   }
-  const reason = m.base ? tagged(m.base, tagFor(id, now, m.base)) : null;
+  const reason = m.base ? tagged(tagged(m.base, m.tag), tagFor(id, now, m.base)) : null;
   st.exitReason = null;
   st.working = false;
   // The exit line can take a while; don't hold up the other bots for it.
   st.busy = true;
-  (reason ? stopWithLine(id, bot, reason, varsFor(id, now)) : stopCore(bot))
+  (reason ? stopWithLine(id, bot, reason, mergeVars(varsFor(id, now), m.vars)) : stopCore(bot))
     .then((out) => log(`${id}: ${out}`))
     .catch((e) => log(`${id}: action failed: ${e.message}`))
     .finally(() => { st.busy = false; });
@@ -687,6 +777,7 @@ function onChat(invokerName, rawMsg) {
   if (rawMsg.trim().startsWith('{')) return; // TS6 attachment JSON, not speech
   const text = words(rawMsg);
   const now = Date.now();
+  room.lastChat = now; // typing counts as the room being alive (PHA-3839 S3)
   for (const id of namedBots(text)) {
     const bot = cfg.bots[id], st = state[id];
     const on = desired(id, now).on;
@@ -920,9 +1011,11 @@ function status() {
     events: {
       takeover: { ...events.takeover, lastAt: iso(events.takeover.lastAt) },
       bender: { ...events.bender, lastAt: iso(events.bender.lastAt) },
+      callouts: events.callouts,
     },
     bots: Object.fromEntries(Object.keys(cfg.bots).map((id) => [id, {
       running: state[id].running, busy: state[id].busy, desired: desired(id, now), onShift: onShift(id, now),
+      shift: (({ key, startTs, endTs, lateMin }) => key && { key, start: iso(startTs), end: iso(endTs), lateMin })(planned(id, now) ?? {}),
       shiftsToday: shiftsFor(cfg, calendar(), id, today).shifts,
       flavor: flavorFor(cfg, calendar(), id, now),
       override: state[id].override && { ...state[id].override, until: iso(state[id].override.until) },

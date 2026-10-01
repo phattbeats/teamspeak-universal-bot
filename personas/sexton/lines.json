@@ -120,5 +120,27 @@
     "Still no Bexton. Day two. Somebody saw him crowd-surfing at a funeral.",
     "Bexton's still out. Johnny's putting his picture behind the bar, next to the 'do not serve' list.",
     "Day two, no band. Trixie says he's fine. Trixie also says that about the cooler."
+  ],
+  "shift_start:late": [
+    "Yeah, I'm late. Traffic. Don't look at me like that.",
+    "(sighs) I know what time it is. I got a watch.",
+    "Sorry, sorry. Had to see a guy about a thing. Jukebox is open.",
+    "Late, I know. Anybody clocked it, keep it to yourself."
+  ],
+  "shift_start:covering": [
+    "{who} called out, so you got me. Lucky you.",
+    "{who}'s not coming. I'm covering, and I'm not happy about it.",
+    "Guess who's pulling a double 'cause {who} flaked. Me. It's me.",
+    "{who} called in sick. Sick of you, probably. I'm on."
+  ],
+  "shift_end:early_out": [
+    "Nobody's said a word in half an hour. I'm out. Holler if you wake up.",
+    "Room's dead. I'm leaving before it starts to smell.",
+    "Thirty minutes of silence. That's a hint, and I took it. Night."
+  ],
+  "no_show": [
+    "{who}'s a no-show. Nobody's covering, so it's just me and the dust.",
+    "Heads up, {who} didn't show. Don't ask me, I'm not his mother.",
+    "{who} ghosted the shift. I'd write him up if anybody ever read my write-ups."
   ]
 }
