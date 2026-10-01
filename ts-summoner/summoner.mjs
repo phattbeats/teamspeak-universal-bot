@@ -71,6 +71,7 @@ for (const [id, bot] of Object.entries(cfg.bots)) {
     onDuty: false, // last decision was 'on'; only an on-duty bot gets talk-grace
     graceLogged: false,
     exitReason: null, // 'dismiss' once dismissed, until the core is stopped
+    working: false, // running while wanted; only a working bot says goodbye
     busy: false, // an exit line is playing; reconcile leaves this bot alone
   };
 }
@@ -224,8 +225,8 @@ async function reconcile() {
       }
       if (st.busy) continue;
       const d = desired(id, now);
-      const wasOnDuty = st.onDuty;
       st.onDuty = d.on;
+      if (d.on && st.running) st.working = true;
       if (d.on === st.running) {
         if (d.on) st.exitReason = null;
         continue;
@@ -243,8 +244,11 @@ async function reconcile() {
         continue;
       }
       // A core that came back by itself off shift (PHA-3831) leaves quietly.
-      const reason = wasOnDuty ? (st.exitReason ?? 'shift_end') : null;
+      // Not `onDuty`: that flips the moment the decision does, and the
+      // one-move-per-minute limit can put a reconcile in between.
+      const reason = st.working ? (st.exitReason ?? 'shift_end') : null;
       st.exitReason = null;
+      st.working = false;
       // The exit line can take a while; don't hold up the other bots for it.
       st.busy = true;
       (reason ? stopWithLine(id, bot, reason) : stopCore(bot))
