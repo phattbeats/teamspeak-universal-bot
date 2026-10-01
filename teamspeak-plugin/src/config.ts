@@ -359,6 +359,10 @@ export type TeamSpeakAnnounceConfig = {
   requestFile?: string;
   /** Per-bot line pools. Default: $OPENCLAW_STATE_DIR/workspace/agents/<agent>/lines.json. */
   linesFile?: string;
+  /** Per-bot mood table (PHA-3840). Default: <workspace>/moods.json. */
+  moodsFile?: string;
+  /** Where the rolled mood lands for the prompt. Default: <workspace>/mood/AGENTS.md. */
+  moodPromptFile?: string;
 };
 
 /**
@@ -797,12 +801,15 @@ export function resolveTeamSpeakVoiceMode(
 export function resolveAnnouncePaths(
   config: TeamSpeakAnnounceConfig | undefined,
   env: Record<string, string | undefined> = process.env,
-): { requestFile: string; linesFile: string } {
+): { requestFile: string; linesFile: string; moodsFile: string; moodPromptFile: string } {
   const stateDir = env.OPENCLAW_STATE_DIR?.trim() || "/config/openclaw";
   const agentId = env.SEXTON_AGENT_ID?.trim() || "sexton";
+  const ws = `${stateDir}/workspace/agents/${agentId}`;
   return {
     requestFile: config?.requestFile?.trim() || "/config/.announce",
-    linesFile: config?.linesFile?.trim() || `${stateDir}/workspace/agents/${agentId}/lines.json`,
+    linesFile: config?.linesFile?.trim() || `${ws}/lines.json`,
+    moodsFile: config?.moodsFile?.trim() || `${ws}/moods.json`,
+    moodPromptFile: config?.moodPromptFile?.trim() || `${ws}/mood/AGENTS.md`,
   };
 }
 

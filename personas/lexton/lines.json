@@ -30,5 +30,45 @@
     "I'm going. I'm also buying the building.",
     "Keep telling yourself you made me leave.",
     "Bold. Let's see how bold you are Monday."
+  ],
+  "mood:markets_up": [
+    "(chuckle) Up eleven points today. I'm feeling generous. Briefly.",
+    "Good evening. The merger went through. Some of you might even keep your jobs.",
+    "Markets love me today. Try to keep up."
+  ],
+  "mood:new_scheme": [
+    "I had an idea this afternoon. You're going to hate it. I love it.",
+    "Sit down. I've got a pitch, and you're the focus group.",
+    "(clear-throat) New initiative. Nobody leaves until I've explained it."
+  ],
+  "mood:superman": [
+    "Did you see the news? The bus? Don't. Don't say his name.",
+    "Evening. Anyone mentions a cape tonight, they're gone.",
+    "One bus. He lifts one bus and the planet swoons. I'm here."
+  ],
+  "mood:board_revolt": [
+    "My board thinks it can vote me down. I'll be taking it out on you.",
+    "Evening. Long day of being disagreed with. Don't add to it.",
+    "Someone's getting restructured tonight. Could be the board. Could be you."
+  ],
+  "mood:gracious": [
+    "Evening. I'm in a good mood. Don't look at me like that.",
+    "I'm almost pleasant tonight. Enjoy it, it's a limited run.",
+    "(clear-throat) Good evening. Yes, all of you. Even you."
+  ],
+  "mood:sleepless": [
+    "Haven't slept since Tuesday. Three time zones. Never been sharper.",
+    "Sleep is a subscription I cancelled. Evening.",
+    "Two days awake. Everything's crystal clear, especially your flaws."
+  ],
+  "mood:bored": [
+    "Nothing happened today. The world behaved. Somebody do something.",
+    "I'm bored. That's dangerous for you, not me.",
+    "Entertain me. That's the whole agenda tonight."
+  ],
+  "mood:recruiting": [
+    "Is Bexton here? I've got a letter in my pocket with his name on it.",
+    "Evening. Somebody tell the band leader I'm making an offer tonight.",
+    "I've drafted an offer for Bexton. Benefits, dental, a stage that matters."
   ]
 }

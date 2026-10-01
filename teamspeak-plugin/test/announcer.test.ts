@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Announcer } from "../src/voice/announcer.js";
+import { Announcer, rollMood } from "../src/voice/announcer.js";
 
 function setup(opts: { ready?: boolean; random?: () => number; now?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "announce-"));
@@ -71,5 +71,88 @@ describe("Announcer (PHA-3824)", () => {
     await t.announcer.tick();
     expect(t.spoken).toEqual([]);
     expect(existsSync(t.requestFile)).toBe(false);
+  });
+
+});
+
+describe("daily mood (PHA-3840)", () => {
+  function moodSetup(random: () => number, now = { t: 1_000_000 }) {
+    const dir = mkdtempSync(join(tmpdir(), "mood-"));
+    const requestFile = join(dir, ".announce");
+    const linesFile = join(dir, "lines.json");
+    const moodsFile = join(dir, "moods.json");
+    const moodPromptFile = join(dir, "mood", "AGENTS.md");
+    writeFileSync(linesFile, JSON.stringify({ shift_start: ["plain"], summon: ["summoned"], "mood:rough": ["ugh"] }));
+    writeFileSync(
+      moodsFile,
+      JSON.stringify({ easy: { weight: 3 }, rough: { weight: 1, prompt: "Somebody keyed your car this morning." } }),
+    );
+    const spoken: string[] = [];
+    const announcer = new Announcer({
+      requestFile,
+      linesFile,
+      moodsFile,
+      moodPromptFile,
+      speak: async (text) => {
+        spoken.push(text);
+        return { durationMs: 1 };
+      },
+      isReady: () => true,
+      random,
+      now: () => now.t,
+      sleep: async () => {},
+    });
+    const request = (reason: string, quiet = false) =>
+      writeFileSync(requestFile, JSON.stringify({ reason, at: now.t, quiet }));
+    return { announcer, spoken, request, moodPromptFile, requestFile, now };
+  }
+
+  it("rolls by weight", () => {
+    const moods = { a: { weight: 3 }, b: { weight: 1 }, off: { weight: 0 } };
+    expect(rollMood(moods, () => 0)).toBe("a");
+    expect(rollMood(moods, () => 0.74)).toBe("a");
+    expect(rollMood(moods, () => 0.76)).toBe("b");
+    expect(rollMood(moods, () => 0.9999)).toBe("b");
+    expect(rollMood({ off: { weight: 0 } }, () => 0.5)).toBeUndefined();
+  });
+
+  it("writes the mood prompt and uses the mood pool on shift_start", async () => {
+    const t = moodSetup(() => 0.9);
+    t.request("shift_start");
+    await t.announcer.tick();
+    expect(t.spoken).toEqual(["ugh"]);
+    expect(readFileSync(t.moodPromptFile, "utf8")).toContain("Somebody keyed your car");
+  });
+
+  it("falls back to shift_start when the mood has no pool", async () => {
+    const t = moodSetup(() => 0);
+    t.request("shift_start");
+    await t.announcer.tick();
+    expect(t.spoken).toEqual(["plain"]);
+    expect(readFileSync(t.moodPromptFile, "utf8")).toContain("regular shift");
+  });
+
+  it("keeps the shift's mood through a summon, rerolls once stale", async () => {
+    let r = 0.9;
+    const t = moodSetup(() => r);
+    t.request("shift_start");
+    await t.announcer.tick();
+    r = 0;
+    t.request("summon");
+    await t.announcer.tick();
+    expect(readFileSync(t.moodPromptFile, "utf8")).toContain("keyed");
+    t.now.t += 15 * 60 * 60_000;
+    t.request("summon");
+    await t.announcer.tick();
+    expect(readFileSync(t.moodPromptFile, "utf8")).not.toContain("keyed");
+  });
+
+  it("a quiet entrance rolls the mood but says nothing", async () => {
+    const t = moodSetup(() => 0.9);
+    t.request("shift_start", true);
+    await t.announcer.tick();
+    expect(t.spoken).toEqual([]);
+    expect(existsSync(t.requestFile)).toBe(false);
+    expect(readFileSync(t.moodPromptFile, "utf8")).toContain("keyed");
   });
 });

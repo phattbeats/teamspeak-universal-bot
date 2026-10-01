@@ -30,5 +30,45 @@
     "(snorts) Kicked out by you? Sure.",
     "Leaving. Not because you said so.",
     "Cool. Enjoy the quiet, you earned it."
+  ],
+  "mood:good_night": [
+    "Slept like a baby. Don't ruin it, I'm in a good mood.",
+    "Coffee was good, nobody called. I'm feeling generous, ask for something.",
+    "Hat's on, sun's out, I'm feeling nice. Won't last, use it."
+  ],
+  "mood:found_a_record": [
+    "Found a Muddy Waters 78 in a junk bin today. A buck. A fuckin' buck.",
+    "Guess who's got an original Chess pressing now. Me. Go ahead, ask.",
+    "I'm on, and Muddy's going first. I earned it today."
+  ],
+  "mood:nostalgic": [
+    "(sighs) Heard some Sam Cooke today. Took me right back to the old joint.",
+    "Smells like rain. Joint used to fill up on rain nights. Anyway. I'm here.",
+    "Yeah, I'm on. Been thinking about the old place all day, don't ask."
+  ],
+  "mood:frustrated": [
+    "Don't start with me. Some asshole already did today.",
+    "I'm on. Twenty minutes on hold with the parole office. Pick your songs carefully.",
+    "(snorts) Somebody try me. Please. I've been saving it up all day."
+  ],
+  "mood:tired": [
+    "(sighs) Didn't sleep. Nobody make me say anything twice tonight.",
+    "I'm here. Barely. Coffee's doing all the work.",
+    "Neighbor's dog had a lot to say last night. I'm on. Keep it down."
+  ],
+  "mood:flush": [
+    "Guy paid me back today. Didn't even have to ask twice. Feels good, man.",
+    "I'm on, and I'm buying. Figure of speech. I'm not buying.",
+    "Got what I was owed today. First round's on, uh, nobody. But I'm happy."
+  ],
+  "mood:sour_bexton": [
+    "Heard Bexton called himself the Sexton again. Where is he.",
+    "I'm on. Somebody tell the band boy I heard what he said.",
+    "Anybody sees Bexton, tell him there's one Sexton and he's wearing the hat."
+  ],
+  "mood:restless": [
+    "Alright, I'm on and I'm wired. Who's got a story. Somebody.",
+    "Had way too much coffee. Somebody talk to me, I mean it.",
+    "I'm up, I'm on, I can't sit still. What're we doing tonight?"
   ]
 }

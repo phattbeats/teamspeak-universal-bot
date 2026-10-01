@@ -173,6 +173,16 @@ fi
 if [ -d "$WS" ] && [ ! -f "$WS/lines.json" ] && [ -f "${PERSONA_CONFIG_DIR}/lines.json" ]; then
   cp "${PERSONA_CONFIG_DIR}/lines.json" "$WS/lines.json"
 fi
+# PHA-3840: per-shift mood table, same seed-once rule as lines.json. The
+# announcer rolls from it on each shift start and writes mood/AGENTS.md; seed a
+# neutral one so the hook has a file before the first roll.
+if [ -d "$WS" ] && [ ! -f "$WS/moods.json" ] && [ -f "${PERSONA_CONFIG_DIR}/moods.json" ]; then
+  cp "${PERSONA_CONFIG_DIR}/moods.json" "$WS/moods.json"
+fi
+if [ -d "$WS" ] && [ ! -f "$WS/mood/AGENTS.md" ]; then
+  mkdir -p "$WS/mood"
+  printf '# How today is going\n\nNothing special about today. Just a regular shift.\n' > "$WS/mood/AGENTS.md"
+fi
 # HUMAN.md is shared infrastructure, not persona content an operator hand-edits
 # per bot — always sync it from the image, even onto a workspace that already
 # exists, so a HUMAN.md fix ships without every persona needing re-seeding.
@@ -195,12 +205,13 @@ if [ -d "$WS" ] && [ -f "${PERSONA_DIR}/HUMAN.md" ]; then
     const entries = (cfg.hooks.internal.entries = cfg.hooks.internal.entries || {});
     const hook = (entries["bootstrap-extra-files"] = entries["bootstrap-extra-files"] || {});
     const paths = Array.isArray(hook.paths) ? hook.paths : [];
-    if (cfg.hooks.internal.enabled !== true || hook.enabled !== true || !paths.includes("shared-tone/AGENTS.md")) {
+    const want = ["shared-tone/AGENTS.md", "mood/AGENTS.md"]; // mood: PHA-3840
+    if (cfg.hooks.internal.enabled !== true || hook.enabled !== true || !want.every((w) => paths.includes(w))) {
       cfg.hooks.internal.enabled = true;
       hook.enabled = true;
-      hook.paths = paths.includes("shared-tone/AGENTS.md") ? paths : [...paths, "shared-tone/AGENTS.md"];
+      hook.paths = [...paths, ...want.filter((w) => !paths.includes(w))];
       fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
-      console.log("run-gateway: bootstrap-extra-files hook now injects shared-tone/AGENTS.md");
+      console.log("run-gateway: bootstrap-extra-files hook now injects " + hook.paths.join(", "));
     }
   '
 fi

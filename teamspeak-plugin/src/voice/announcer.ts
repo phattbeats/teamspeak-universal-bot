@@ -17,14 +17,32 @@
  * request so swapping lines is a file edit, not a rebuild. A reason with no
  * pool is consumed silently: the summoner never waits on a bot that has
  * nothing to say.
+ *
+ * Daily mood (PHA-3840): a `shift_start` also rolls the bot's mood for the
+ * shift from a weighted table in the workspace (`moods.json`) and writes it to
+ * `mood/AGENTS.md`, which the bootstrap-extra-files hook puts in every prompt.
+ * The entrance line comes from the `mood:<name>` pool when there is one. A
+ * summon keeps the shift's mood, or rolls one if the last is stale. The
+ * summoner sends entrances even into an empty server, marked `quiet`, so the
+ * mood still turns over when nobody's there to hear the line.
  */
-import { readFile, unlink } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
-export type AnnounceRequest = { reason: string; at: number };
+export type AnnounceRequest = { reason: string; at: number; quiet?: boolean };
+
+/** One row of moods.json. `prompt` is backstory, never "you are sad". */
+export type MoodEntry = { weight?: number; prompt?: string };
 
 export type AnnouncerParams = {
   requestFile: string;
   linesFile: string;
+  /** Weighted mood table. Missing = no moods, plain pools. */
+  moodsFile?: string;
+  /** Prompt file the gateway injects; `current.json` beside it remembers the roll. */
+  moodPromptFile?: string;
+  /** A summon after this long rolls a fresh mood instead of keeping the last. */
+  moodTtlMs?: number;
   /** Plays a line; resolves with its audio length, or undefined if nothing played. */
   speak: (text: string) => Promise<{ durationMs: number } | undefined>;
   /** In the channel and able to be heard. Requests wait (not dropped) until it is. */
@@ -40,6 +58,7 @@ export type AnnouncerParams = {
 
 const DEFAULT_POLL_MS = 1_000;
 const DEFAULT_MAX_AGE_MS = 3 * 60_000;
+const DEFAULT_MOOD_TTL_MS = 14 * 60 * 60_000;
 /** Room for the last frames to leave the bridge after the line's own length. */
 const TAIL_MS = 400;
 
@@ -86,7 +105,7 @@ export class Announcer {
     }
     try {
       const parsed = JSON.parse(raw) as Partial<AnnounceRequest>;
-      return { reason: String(parsed.reason ?? ""), at: Number(parsed.at) || 0 };
+      return { reason: String(parsed.reason ?? ""), at: Number(parsed.at) || 0, quiet: parsed.quiet === true };
     } catch {
       return { reason: "", at: 0 };
     }
@@ -99,12 +118,17 @@ export class Announcer {
       this.params.log?.(`teamspeak announce: dropped stale '${request.reason}' (${Math.round(age / 1000)}s old)`);
       return;
     }
-    const line = await this.pick(request.reason);
+    const mood = await this.settleMood(request.reason);
+    if (request.quiet) {
+      this.params.log?.(`teamspeak announce: '${request.reason}' quiet (empty server)`);
+      return;
+    }
+    const line = (mood && (await this.pick(`mood:${mood}`))) || (await this.pick(request.reason));
     if (!line) {
       this.params.log?.(`teamspeak announce: no lines for '${request.reason}'`);
       return;
     }
-    this.params.log?.(`teamspeak announce: ${request.reason}: ${line}`);
+    this.params.log?.(`teamspeak announce: ${request.reason}${mood ? ` (mood ${mood})` : ""}: ${line}`);
     try {
       const played = await this.params.speak(line);
       if (played) {
@@ -115,6 +139,45 @@ export class Announcer {
         `teamspeak announce: failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+
+  /**
+   * Rolls (shift_start, or a summon with a stale mood) or keeps the mood, and
+   * returns its name. Entrance-only: exits leave the mood alone.
+   */
+  private async settleMood(reason: string): Promise<string | undefined> {
+    const { moodsFile, moodPromptFile } = this.params;
+    if (!moodsFile || !moodPromptFile || (reason !== "shift_start" && reason !== "summon")) return undefined;
+    let moods: Record<string, MoodEntry>;
+    try {
+      moods = JSON.parse(await readFile(moodsFile, "utf8")) as Record<string, MoodEntry>;
+    } catch {
+      return undefined;
+    }
+    const stateFile = join(dirname(moodPromptFile), "current.json");
+    const now = (this.params.now ?? Date.now)();
+    if (reason === "summon") {
+      try {
+        const cur = JSON.parse(await readFile(stateFile, "utf8")) as { mood?: string; at?: number };
+        const ttl = this.params.moodTtlMs ?? DEFAULT_MOOD_TTL_MS;
+        if (cur.mood && moods[cur.mood] && now - Number(cur.at) < ttl) return cur.mood;
+      } catch {
+        // nothing rolled yet: roll below
+      }
+    }
+    const mood = rollMood(moods, this.params.random ?? Math.random);
+    if (!mood) return undefined;
+    try {
+      await mkdir(dirname(moodPromptFile), { recursive: true });
+      await writeFile(moodPromptFile, renderMood(moods[mood]?.prompt));
+      await writeFile(stateFile, JSON.stringify({ mood, at: now }) + "\n");
+      this.params.log?.(`teamspeak announce: mood for this shift: ${mood}`);
+    } catch (error) {
+      this.params.log?.(
+        `teamspeak announce: can't write mood: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return mood;
   }
 
   private async pick(reason: string): Promise<string | undefined> {
@@ -139,6 +202,30 @@ export class Announcer {
     this.last.set(reason, i);
     return lines[i];
   }
+}
+
+/** Weighted pick; weight defaults to 1, zero or negative never comes up. */
+export function rollMood(moods: Record<string, MoodEntry>, random: () => number): string | undefined {
+  const rows = Object.entries(moods).map(([name, m]) => [name, Math.max(0, Number(m?.weight ?? 1) || 0)] as const);
+  const total = rows.reduce((sum, [, w]) => sum + w, 0);
+  if (total <= 0) return undefined;
+  let r = random() * total;
+  for (const [name, w] of rows) {
+    if (w > 0 && (r -= w) < 0) return name;
+  }
+  return rows.filter(([, w]) => w > 0).at(-1)?.[0];
+}
+
+export function renderMood(prompt: string | undefined): string {
+  const body = prompt?.trim() || "Nothing special about today. Just a regular shift.";
+  return [
+    "# How today's going",
+    "",
+    body,
+    "",
+    "This colours how you come across tonight. It doesn't run the show. Never name the mood or explain it; let it leak through how you talk. If the night gives you a reason to come round, come round.",
+    "",
+  ].join("\n");
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
