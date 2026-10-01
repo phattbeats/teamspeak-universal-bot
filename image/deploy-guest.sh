@@ -11,8 +11,9 @@
 # adds every other guest's agent and workspace on their first visit.
 #
 # Cost (PHA-3597): one guest container no matter how many guests, its core is
-# off between visits, and it uses the shared whisper pool's coalescing proxy,
-# so a guest in the room with Bexton mostly shares his decodes.
+# off between visits, and it reuses whisper :8082 (the coalescing proxy once
+# PHA-3607's is deployed; until then Lexton's worker, and Lexton is off for
+# most of Bexton's evening) instead of adding a fourth worker.
 #
 # One TeamSpeak identity for all guests: copy it out of `docker logs guest`
 # into $APPDATA/config/sexton-id.txt after the first boot, same as any bot.

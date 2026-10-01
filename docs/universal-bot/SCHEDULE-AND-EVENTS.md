@@ -408,7 +408,7 @@ A guest is an ordinary bot entry (`bots.johnny`, `bots.trixie`) with `container:
 
 **By hand:** `POST /event/guest` (random eligible guest) or `POST /event/guest?who=trixie`, and `POST /event/end?kind=guest`. `GET /status` shows `events.guests` (active visit, recent visit times).
 
-**Cost (PHA-3597).** Only one guest container exists, and its core is down between visits. It uses the whisper pool's coalescing proxy (`:8082`), so what it hears in the room with Bexton is mostly decoded once for both. The week is capped at 3-4 visits of 45 minutes or less.
+**Cost (PHA-3597).** Only one guest container exists, and its core is down between visits. It uses `http://whisper:8082/inference`. With PHA-3607's coalescing proxy deployed, that is the proxy and a guest mostly shares Bexton's decodes. On today's three plain workers, it is Lexton's worker, and Lexton is off for most of Bexton's evening, so no fourth worker is needed. The week is capped at 3-4 visits of 45 minutes or less.
 
 **Adding a guest:** make a `personas/<id>/` pack (`AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `lines.json`, `tools.json`, `voice.json` with `nick`, `avatar.png`) and add its `COPY` lines next to Johnny's in `image/Dockerfile`. Add a `bots.<id>` entry with `container: "guest"`, then rebuild the image and redeploy the guest container. Also add the new nick to the regulars' `excludeWakeNames` (exact nick match, so bots don't wake each other).
 
