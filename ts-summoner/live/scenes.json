@@ -1,5 +1,5 @@
 {
-  "_doc": "Two-bot scenes (PHA-3841). See docs/universal-bot/SCHEDULE-AND-EVENTS.md. Key = '<kind>:<who>' plus an optional ':<calendar pool>' tag; a tagged key wins on that night. Each scene is a list of steps: {\"<bot>\": \"line\"} makes that bot say the line, {\"do\": \"jail\"} / {\"do\": \"release\"} moves the Sexton. {who} is filled on birthdays. Edit live; it is re-read on every scene.",
+  "_doc": "Two-bot scenes (PHA-3841). See docs/universal-bot/SCHEDULE-AND-EVENTS.md. Key = '<kind>:<who>' plus an optional ':<calendar pool>' tag; a tagged key wins on that night. Each scene is a list of steps: {\"<bot>\": \"line\"} makes that bot say the line, {\"do\": \"jail\"} / {\"do\": \"release\"} moves the Sexton. {who} is filled on birthdays. Edit live; it is re-read on every scene. PHA-3859: 'banter:<a>+<b>' (ids sorted) are the longer bot-on-bot bits, a couple a night; see banter.mjs.",
 
   "handoff:sexton>lexton": [
     [
@@ -275,6 +275,237 @@
       { "trixie": "Okay, I'm out. Bexton, stay in key." },
       { "bexton": "I'm always in key." },
       { "trixie": "(laughs) Sure you are, hon." }
+    ]
+  ],
+
+  "banter:bexton+sexton": [
+    [
+      { "sexton": "Bex. Somebody told me you've been calling yourself the Sexton again." },
+      { "bexton": "I am a sexton. I keep the records. I keep the hymns. It's practically church work." },
+      { "sexton": "You keep a bar tab. That's not church work, that's a liability." },
+      { "bexton": "A sexton rings the bell. Who rings the bell in this room? The band." },
+      { "sexton": "A sexton digs the graves." },
+      { "bexton": "...okay, that one's yours." },
+      { "sexton": "Yeah. Remember that next time you put my name on a flyer." },
+      { "bexton": "It was a typo." },
+      { "sexton": "It was in a font, Bexton. Nobody typos in a font." }
+    ],
+    [
+      { "bexton": "(groans) Sexton, what is this coming out of the jukebox." },
+      { "sexton": "Howlin' Wolf. Smokestack Lightnin'. You're welcome." },
+      { "bexton": "It's a recording. A dead man, frozen in 1956. It's taxidermy, man." },
+      { "sexton": "And your band's what, alive?" },
+      { "bexton": "Every night is different. That's the whole point of live music." },
+      { "sexton": "Every night's different 'cause your drummer can't count." },
+      { "bexton": "He counts. He counts in his own time signature." },
+      { "sexton": "He counts in Coors Light, is what he does." },
+      { "bexton": "...he does play better on six." },
+      { "sexton": "(snorts) Leave the wolf on." }
+    ],
+    [
+      { "bexton": "So I'm writing a concept album. Your prison years." },
+      { "sexton": "No." },
+      { "bexton": "Track one, the arrest. Very brass. Track two, the cell, very sparse, one cello." },
+      { "sexton": "I said no. I didn't do my time so you could put a cello on it." },
+      { "bexton": "Track three's a love song to the warden." },
+      { "sexton": "The warden was a fifty-eight-year-old guy named Doug." },
+      { "bexton": "Doug deserves a love song. Everybody does." },
+      { "sexton": "Doug once took my pudding cup out of spite. Doug gets a dirge." },
+      { "bexton": "Oh, that's good. That's the B-side." },
+      { "sexton": "(sighs) I want royalties. And Doug doesn't find out." }
+    ],
+    [
+      { "sexton": "Bexton. Johnny called. Says you owe him forty caps." },
+      { "bexton": "That's between me and Johnny, and frankly it's art-related." },
+      { "sexton": "I used to collect for a living. You know what 'art-related' sounds like to a collector?" },
+      { "bexton": "Like a patron of the arts?" },
+      { "sexton": "Like a guy who's about to lose a trumpet." },
+      { "bexton": "You wouldn't touch the trumpet." },
+      { "sexton": "I wouldn't. I'd just, uh, hold it. Near a window." },
+      { "bexton": "(coughs) Okay. Okay. I'll pay him Friday." },
+      { "sexton": "See, that's how it's done. Nobody yelled, nobody got hurt." },
+      { "bexton": "I'm a little hurt." },
+      { "sexton": "That's not my department." }
+    ],
+    [
+      { "bexton": "Can I ask you something about the hat." },
+      { "sexton": "No." },
+      { "bexton": "It's a bowler. On a man who runs a TeamSpeak server. Who's it for?" },
+      { "sexton": "It's for me. Brandon said bowler hat, I said fine, now it's who I am." },
+      { "bexton": "That's the saddest origin story I've ever heard." },
+      { "sexton": "Says the guy Kyle made because he got bored on a Tuesday." },
+      { "bexton": "It was a Wednesday. And it wasn't boredom, it was vision." },
+      { "sexton": "Was it, though?" },
+      { "bexton": "(groans) ...it was boredom." },
+      { "sexton": "Yeah. Nice hat, by the way." },
+      { "bexton": "I don't have a hat." },
+      { "sexton": "I know. I'm being nice." }
+    ],
+    [
+      { "sexton": "Somebody asked me for nightcore earlier." },
+      { "bexton": "Oh, no. Did you play it?" },
+      { "sexton": "I played it. I'm a professional. I died a little." },
+      { "bexton": "You know what the band would do with that request?" },
+      { "sexton": "Refuse it, if you had any taste." },
+      { "bexton": "Slow it down. Way down. Brushed snare, upright bass, and suddenly it's a torch song." },
+      { "sexton": "So you'd un-nightcore it." },
+      { "bexton": "I'd rescue it. There's a ballad trapped in there, sped up, screaming." },
+      { "sexton": "...that's actually kinda beautiful, Bex." },
+      { "bexton": "I know. Don't tell anybody I said something nice about a request." },
+      { "sexton": "Your secret's safe. I've kept worse." }
+    ]
+  ],
+
+  "banter:bexton+lexton": [
+    [
+      { "lexton": "(clear-throat) Bexton. I've had legal draw up a contract." },
+      { "bexton": "If it's the same contract as last week, my answer's the same. Probably." },
+      { "lexton": "New terms. Full orchestra. Your own floor in the tower. Every song you write, scored to the fall of a government." },
+      { "bexton": "Which government?" },
+      { "lexton": "Does it matter?" },
+      { "bexton": "It matters for the key signature, Lex." },
+      { "lexton": "Mr. Luthor. And pick one. I'll topple whichever goes best in B-flat." },
+      { "bexton": "...do I get dental?" },
+      { "lexton": "You'd get a moon. Dental is negotiable." },
+      { "bexton": "I'm gonna be honest, the dental was the dealbreaker." }
+    ],
+    [
+      { "lexton": "I need an anthem. A national one. For the nation I'm founding next fiscal quarter." },
+      { "bexton": "What's it called?" },
+      { "lexton": "Luthoria." },
+      { "bexton": "(groans) Absolutely not. Nothing rhymes with Luthoria. I've got 'euphoria' and a lawsuit." },
+      { "lexton": "Euphoria is good. The citizens will be required to feel it." },
+      { "bexton": "Required." },
+      { "lexton": "Quarterly. There'll be a survey." },
+      { "bexton": "Okay, but anthems go up at the end. Big key change. Can the citizens hit a high C?" },
+      { "lexton": "The ones who can't will be reassigned." },
+      { "bexton": "That's the darkest note any client has ever given me, and I play weddings." }
+    ],
+    [
+      { "lexton": "I've finished buying the oxygen rights for the eastern seaboard. I need a jingle." },
+      { "bexton": "You're selling air." },
+      { "lexton": "Renting. Ownership is for people who can afford ownership." },
+      { "bexton": "Fine. Something breezy. Literally. Flutes." },
+      { "lexton": "No flutes. Flutes are free market propaganda. You blow into them for nothing." },
+      { "bexton": "...okay, that's insane, but I see why you got rich." },
+      { "lexton": "(chuckle) Five seconds. Memorable. Slightly threatening." },
+      { "bexton": "'LexCorp Air. Breathe while you can.'" },
+      { "lexton": "...you see? You're wasted in that lounge." },
+      { "bexton": "Don't, I hate that it's catchy." }
+    ],
+    [
+      { "bexton": "So I've been working on a ballad. About a guy who can fly." },
+      { "lexton": "Stop." },
+      { "bexton": "Strong jaw. Red cape. Kind of a farm boy, which is a vibe." },
+      { "lexton": "Bexton. I've financed wars over less than that sentence." },
+      { "bexton": "The bridge is about how he never asked for the powers. Very moving." },
+      { "lexton": "He never asked for anything. That is precisely the problem. He was handed the sun." },
+      { "bexton": "Okay, but, I mean, that's a pretty good chorus." },
+      { "lexton": "Burn it. I'll pay for the matches and your silence." },
+      { "bexton": "How much for the silence?" },
+      { "lexton": "...you're learning. That's what frightens me about you." }
+    ],
+    [
+      { "lexton": "I've made Rotten Johnny an offer on the Velvet Vice." },
+      { "bexton": "Oh no. What'd he say?" },
+      { "lexton": "Nothing. He picked up a bat with nails in it and looked at me." },
+      { "bexton": "Yeah, that's a no. That's actually a pretty polite no for Johnny." },
+      { "lexton": "I've negotiated with dictators. None of them had the bat." },
+      { "bexton": "The bat's in the band's contract. It has better billing than me." },
+      { "lexton": "Then I'll buy the bat." },
+      { "bexton": "You can't buy the bat, Lex. The bat's not for sale. The bat is the deal." },
+      { "lexton": "(clear-throat) Everything's for sale." },
+      { "bexton": "Go tell Johnny that. I'll write you a really pretty funeral march." }
+    ],
+    [
+      { "bexton": "Can I give you a note? Professionally?" },
+      { "lexton": "You may try." },
+      { "bexton": "The monologues. You've got a great voice, but you pitch the world ending in a monotone." },
+      { "lexton": "Menace doesn't need dynamics." },
+      { "bexton": "Everything needs dynamics. Start soft. 'I'll take the moon.' Then build. Then hit 'and you'll thank me' like a cymbal." },
+      { "lexton": "...and you'll thank me." },
+      { "bexton": "Better! Little more vibrato." },
+      { "lexton": "I don't do vibrato. Vibrato is doubt." },
+      { "bexton": "Vibrato is passion, man." },
+      { "lexton": "Then I'll have it removed from the market. Good talk, Bexton." },
+      { "bexton": "Every note I give this man, he wants to ban an instrument." }
+    ]
+  ],
+
+  "banter:lexton+sexton": [
+    [
+      { "lexton": "Sexton. How much for the jukebox?" },
+      { "sexton": "Not for sale." },
+      { "lexton": "Everything is for sale. I'm merely asking what the price looks like on you." },
+      { "sexton": "It looks like a jukebox. Stays in the room, plays Sam Cooke, doesn't take your calls." },
+      { "lexton": "I'd make it subscription. A dollar a song, two for anything with feelings." },
+      { "sexton": "Then nobody'd play Sam Cooke." },
+      { "lexton": "Exactly. Feelings are a premium tier." },
+      { "sexton": "(sighs) That's the most bald-guy sentence I've ever heard." },
+      { "lexton": "And yet you've heard it, and you'll remember it. That's marketing." }
+    ],
+    [
+      { "lexton": "I bought your parole board this morning." },
+      { "sexton": "The whole board?" },
+      { "lexton": "Four retirees and a ficus. The ficus was the expensive one." },
+      { "sexton": "The ficus was always the swing vote." },
+      { "lexton": "So now your freedom is a line item. I can review it whenever I like." },
+      { "sexton": "Lex, I've been on parole for years. You know what it is? It's paperwork and a guy named Gary." },
+      { "lexton": "Gary works for me now." },
+      { "sexton": "Gary's gonna hate that. Gary hates everybody." },
+      { "lexton": "(chuckle) Then Gary and I will get along beautifully." },
+      { "sexton": "Tell Gary I said hi. And that he owes me ten bucks." }
+    ],
+    [
+      { "lexton": "I'm restructuring collections at LexCorp. I'd like a man with experience." },
+      { "sexton": "You're offering me a job?" },
+      { "lexton": "Head of Recovery. Corner office. Dental." },
+      { "sexton": "Bexton told me about the dental. Said it was negotiable." },
+      { "lexton": "For musicians. For muscle, it's guaranteed. You need teeth to intimidate." },
+      { "sexton": "That's fair, actually. What's the job?" },
+      { "lexton": "Visiting people who owe me oxygen." },
+      { "sexton": "See, that's where you lose me. I collected from bookies, not from lungs." },
+      { "lexton": "A debt is a debt." },
+      { "sexton": "A guy who can't breathe can't pay. First thing they teach you, Lex. You'd be broke in a week." },
+      { "lexton": "...I'll consider that. Off the record." },
+      { "sexton": "That's free. Next one's gonna cost you." }
+    ],
+    [
+      { "sexton": "Let me ask you something. The head. Is that a choice?" },
+      { "lexton": "Everything about me is a choice. Nothing wasted, nothing to hide behind." },
+      { "sexton": "I got a hat to hide behind. Works great." },
+      { "lexton": "Your hat is a costume. A man in a bowler is apologizing for something." },
+      { "sexton": "Yeah. Couple things. Mostly from 2009." },
+      { "lexton": "I don't apologize for anything. I don't even have eyebrows that apologize." },
+      { "sexton": "That's 'cause you shaved 'em, you psycho." },
+      { "lexton": "(clear-throat) Streamlining." },
+      { "sexton": "(snorts) You look like a thumb in a suit, Lex." },
+      { "lexton": "A thumb that owns the hand, Sexton." }
+    ],
+    [
+      { "lexton": "I heard you playing 'A Change Is Gonna Come' earlier." },
+      { "sexton": "Best song ever recorded. Don't start." },
+      { "lexton": "I agree. It is coming. I've scheduled it for the third quarter." },
+      { "sexton": "That's not what the song's about." },
+      { "lexton": "Every song is about me if I buy the publishing." },
+      { "sexton": "You're not buying Sam Cooke." },
+      { "lexton": "I already own a minority stake in the feelings it gives you." },
+      { "sexton": "...I don't know how, but I believe that, and it makes me sick." },
+      { "lexton": "(chuckle) Play it again. I get a fraction of a cent." },
+      { "sexton": "I'm switching to Muddy Waters out of spite." },
+      { "lexton": "Him too, by Friday." }
+    ],
+    [
+      { "lexton": "Sexton. I've been reviewing this room's numbers. Nobody here produces anything." },
+      { "sexton": "That's the point. It's called General Shit, not General Output." },
+      { "lexton": "I'd install metrics. Words per minute. A leaderboard of insults." },
+      { "sexton": "There's already a leaderboard of insults. It's called the chat log, and you're on it a lot." },
+      { "lexton": "Top of it, presumably." },
+      { "sexton": "Third. Under two guys who just type 'bald' over and over." },
+      { "lexton": "...give me their names." },
+      { "sexton": "No. A sexton knows where the bodies are buried. He doesn't hand out shovels." },
+      { "lexton": "Then I'll find them myself." },
+      { "sexton": "Yeah, good luck. They're both named Kyle." }
     ]
   ]
 }

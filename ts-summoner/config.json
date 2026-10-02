@@ -90,6 +90,29 @@
     "minGapHours": 20,
     "minHumans": 1
   },
+  "banter": {
+    "enabled": true,
+    "maxPerNight": 2,
+    "minGapMin": 75,
+    "meanEligibleMin": 150,
+    "minHumans": 1,
+    "recentTalkMin": 20,
+    "dropIn": true,
+    "pairs": [
+      [
+        "bexton",
+        "sexton"
+      ],
+      [
+        "bexton",
+        "lexton"
+      ],
+      [
+        "lexton",
+        "sexton"
+      ]
+    ]
+  },
   "bots": {
     "sexton": {
       "container": "sexton",
