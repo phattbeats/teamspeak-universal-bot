@@ -29,7 +29,7 @@
 //
 // PHA-3842 (guests.mjs) adds the guest-star slot: Rotten Johnny and Trixie
 // share one `guest` container, and on Bexton nights the dice occasionally
-// bring one of them in for 15-45 minutes.
+// bring one of them in for a few minutes.
 //
 // No npm deps: `ssh` (+ sshpass) for the query, the Docker socket for exec.
 
@@ -236,6 +236,8 @@ function calloutTick(now) {
 
 function summon(id, why, stayMin = cfg.summonStayMin) {
   const now = Date.now(), st = state[id];
+  // PHA-3842: a guest called in by chat gets a visit's few minutes, not a shift.
+  if (GUESTS.has(id)) stayMin = visitLength(gc, cfg.bots[id]);
   st.lastMention = now;
   st.override = { mode: 'on', until: now + stayMin * MIN, why };
   log(`${id}: SUMMON (${why}) for ${stayMin}m`);
@@ -911,7 +913,8 @@ function onChat(invokerName, rawMsg) {
     }
     if (on) {
       // Already here: a mention keeps a summoned bot around a bit longer.
-      if (st.override?.mode === 'on') st.override.until = Math.max(st.override.until, now + cfg.summonStayMin * MIN);
+      // Guests don't get extended: a few minutes, then a graceful exit.
+      if (st.override?.mode === 'on' && !GUESTS.has(id)) st.override.until = Math.max(st.override.until, now + cfg.summonStayMin * MIN);
       st.lastMention = now;
       continue;
     }
