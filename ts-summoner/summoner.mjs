@@ -37,13 +37,14 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import {
-  flavorFor, forcedEvents, local, nextFlip as nextFlipBy, shiftAt, shiftsFor, tagged,
+  flavorFor, forcedEvents, local, nextFlip as nextFlipBy, serviceDay, shiftAt, shiftsFor, tagged,
 } from './schedule.mjs';
 import { offCooldown, parseStep, pickScene, planScenes, takeoverEligible, tickChance } from './story.mjs';
 import { calledOut, isLate, jitterFor, overtimeOk, pickCover, quietOut, varietyConfig } from './variety.mjs';
 import {
   candidates as guestCandidates, guestConfig, guestIds, pickGuest, slotHolder, slotOpen, visitChance, visitLength,
 } from './guests.mjs';
+import { banterChance, banterConfig, banterKey, banterOpen, pickBanter } from './banter.mjs';
 
 const CONFIG_PATH = process.env.SUMMONER_CONFIG || '/app/config.json';
 const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
@@ -53,6 +54,7 @@ const BOT_NICKS = new Set(Object.values(cfg.bots).map((b) => b.nick.toLowerCase(
 const GUESTS = new Set(guestIds(cfg));
 const REGULARS = Object.keys(cfg.bots).filter((id) => !GUESTS.has(id));
 const gc = guestConfig(cfg.guests);
+const bc = banterConfig(cfg.banter);
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const MIN = 60_000;
@@ -100,6 +102,7 @@ const nextFlip = (id, ts, want) => nextFlipBy((t) => onShift(id, t), ts, want);
 //   forced:   { "<entryId>@<day>": true }  calendar-forced events already used
 //   callouts: { "<shift key>": { bot, cover, at, until } }  PHA-3839, decided once per shift
 //   guests:   { visits: [ts], active: { bot, from, until, why } | null }  PHA-3842
+//   banter:   { plays: [{ day, at, key, dropIn }] }  PHA-3859
 
 const STATE_FILE = cfg.stateFile ?? '/app/state/state.json';
 const events = (() => {
@@ -110,6 +113,7 @@ events.bender ??= { lastAt: 0, active: null, returning: null };
 events.forced ??= {};
 events.callouts ??= {};
 events.guests ??= { visits: [], active: null };
+events.banter ??= { plays: [] };
 function saveEvents() {
   try {
     mkdirSync(STATE_FILE.replace(/\/[^/]*$/, ''), { recursive: true });
@@ -684,6 +688,74 @@ function eventsTick(now) {
   takeoverTick(now, forced.takeover);
   benderTick(now, forced.bender);
   guestsTick(now);
+  banterTick(now);
+}
+
+// ------------------------------------------------------------------ banter --
+// PHA-3859. A couple of times a night two regulars have a longer bit with
+// each other (scenes.json `banter:<a>+<b>`). Rules in banter.mjs. A bot
+// that drops in for it comes in quietly, does the bit, and leaves without an
+// exit line; the script's last word is his goodbye.
+
+const banterFree = (id) => REGULARS.includes(id) && !state[id].busy;
+const banterPresent = (id) => banterFree(id) && inRoom(id) && desired(id, Date.now()).on;
+const banterCanDrop = (id) => banterFree(id) && state[id].running === false && !state[id].override
+  && desired(id, Date.now()).why === 'off shift';
+
+function stageBusy() {
+  return Boolean(events.takeover.active || events.guests.active)
+    || Object.values(state).some((s) => s.busy);
+}
+
+function startBanter(pick, now, why) {
+  const day = serviceDay(now, cfg.tz).ymd;
+  events.banter.plays = events.banter.plays.filter((p) => now - p.at < 7 * 24 * 60 * MIN);
+  events.banter.plays.push({ day, at: now, key: pick.key, dropIn: pick.dropIn });
+  saveEvents();
+  log(`BANTER ${pick.key}${pick.dropIn ? `, ${pick.dropIn} drops in` : ''} (${why})`);
+  const d = pick.dropIn;
+  if (d) {
+    // Held on for the bit; the summoner sends him back out right after it.
+    state[d].override = { mode: 'on', until: now + 15 * MIN, why: 'banter drop-in' };
+    state[d].lastAction = now;
+    state[d].exitReason = null;
+  }
+  return backstage([pick.a, pick.b], 'banter', async () => {
+    try {
+      if (d) {
+        if (!(await joinQuietly(d, 'summon'))) return;
+        state[d].running = true;
+        state[d].working = true;
+      }
+      await playScene(pick.key, tagFor(pick.a, Date.now(), 'banter'), undefined, []);
+    } finally {
+      if (d) {
+        const st = state[d];
+        if (st.override?.why === 'banter drop-in') st.override = null;
+        if (!desired(d, Date.now()).on && (await coreRunning(cfg.bots[d]))) {
+          st.working = false;
+          st.exitReason = null;
+          st.lastAction = Date.now();
+          await exec(cfg.bots[d].container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+          log(`${d}: ${await stopCore(cfg.bots[d])} (banter over)`);
+        }
+      }
+    }
+  });
+}
+
+function banterTick(now) {
+  const lastTalk = Math.max(room.lastHumanTalk, room.lastChat);
+  const day = serviceDay(now, cfg.tz).ymd;
+  if (!banterOpen(bc, { queryUp: room.queryUp, humans: room.humans, lastTalk, stageBusy: stageBusy(), plays: events.banter.plays, day, now })) return;
+  if (Math.random() >= banterChance(bc, cfg.reconcileSec)) return;
+  const sc = scenes();
+  const pick = pickBanter(bc, {
+    present: banterPresent, canDrop: banterCanDrop,
+    hasScene: (k) => Array.isArray(sc[k]) && sc[k].length > 0,
+    recent: events.banter.plays.filter((p) => p.day === day).map((p) => p.key),
+  });
+  if (pick) startBanter(pick, now, 'dice');
 }
 
 function startEventByHand(kind, who) {
@@ -704,6 +776,20 @@ function startEventByHand(kind, who) {
     }
     startTakeover(now, 'by hand');
     return { ok: true, until: new Date(events.takeover.active.until).toISOString() };
+  }
+  // who=<a>+<b> picks the pair; without it, any pair that can play now.
+  if (kind === 'banter') {
+    if (stageBusy()) return { ok: false, error: 'something else is on stage' };
+    const ids = (who ?? '').split(/[+, ]+/).map(resolveBot).filter(Boolean);
+    const sc = scenes();
+    const only = ids.length === 2 ? banterKey(ids[0], ids[1]) : null;
+    const pick = pickBanter(only ? { ...bc, pairs: [ids] } : bc, {
+      present: banterPresent, canDrop: banterCanDrop,
+      hasScene: (k) => Array.isArray(sc[k]) && sc[k].length > 0 && (!only || k === only),
+    });
+    if (!pick) return { ok: false, error: `no pair can play now${who ? ` (${who})` : ''}` };
+    startBanter(pick, now, 'by hand');
+    return { ok: true, ...pick };
   }
   if (kind === 'bender' && ev.bender?.enabled) {
     if (events.bender.active) return { ok: false, error: 'already on a bender' };
@@ -1138,6 +1224,7 @@ function status() {
       takeover: { ...events.takeover, lastAt: iso(events.takeover.lastAt) },
       bender: { ...events.bender, lastAt: iso(events.bender.lastAt) },
       callouts: events.callouts,
+      banter: { plays: events.banter.plays.map((p) => ({ ...p, at: iso(p.at) })) },
       guests: {
         active: events.guests.active && { ...events.guests.active, from: iso(events.guests.active.from), until: iso(events.guests.active.until) },
         visits: events.guests.visits.map(iso),
@@ -1180,7 +1267,7 @@ http.createServer((req, res) => {
     req.on('end', () => send(200, { summoned: onHeard(by, body) }));
     return;
   }
-  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /heard?by=<speaker> | POST /event/<takeover|bender|guest>[?who=<guest>] | POST /event/end?kind=<takeover|bender|guest>' });
+  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /heard?by=<speaker> | POST /event/<takeover|bender|guest|banter>[?who=<guest>|<a>+<b>] | POST /event/end?kind=<takeover|bender|guest>' });
 }).listen(cfg.httpPort, () => log(`http on :${cfg.httpPort}`));
 
 setInterval(() => reconcile().catch((e) => log('reconcile', e.message)), cfg.reconcileSec * 1000);

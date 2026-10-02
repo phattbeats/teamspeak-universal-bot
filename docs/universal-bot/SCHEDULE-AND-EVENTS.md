@@ -412,6 +412,14 @@ A guest is an ordinary bot entry (`bots.johnny`, `bots.trixie`) with `container:
 
 **Adding a guest:** make a `personas/<id>/` pack (`AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `lines.json`, `tools.json`, `voice.json` with `nick`, `avatar.png`) and add its `COPY` lines next to Johnny's in `image/Dockerfile`. Add a `bots.<id>` entry with `container: "guest"`, then rebuild the image and redeploy the guest container. Also add the new nick to the regulars' `excludeWakeNames` (exact nick match, so bots don't wake each other).
 
+## 5c. Bot banter (PHA-3859)
+
+A couple of times a night, two regulars have a longer bit with each other: eight to twelve lines, in character, on some topic (the jukebox, Bexton's tab, the bald head, LexCorp's oxygen jingle). The pairs are Bexton+Sexton, Bexton+Lexton, and Lexton+Sexton. The scripts are in `live/scenes.json` under `banter:<a>+<b>`, with the ids sorted. They play like any other scene, so you can edit them live, and a `banter:<a>+<b>:<pool>` key wins on a calendar night.
+
+- **When:** the summoner rolls every reconcile while humans are on the server and someone has talked in the last `recentTalkMin`. Nothing else can be on stage: no takeover, no guest visit, no other scene. The cap is `maxPerNight` (2) per service day, and `minGapMin` must pass between bits. `meanEligibleMin` sets how quickly it fires.
+- **Who:** a pair that's already in the room together is 3x as likely. If one side is off shift, it can **drop in** for the bit (`dropIn`). It joins quietly, says its lines, and the summoner stops it again. That's how Lexton and the Sexton get banter outside midnight. A bot that's called out, on a bender, summoned, or dismissed never drops in. A pair that already played tonight waits while another pair can go.
+- **By hand:** `POST /event/banter` (any pair that can play now) or `POST /event/banter?who=lexton+sexton`. Plays are listed in `/status → events.banter`.
+
 ## 6. Deploy
 
 Summoner (PHATT-RAID):
