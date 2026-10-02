@@ -4,7 +4,9 @@
 // Guests (Rotten Johnny, Trixie, ...) are bots in config.json with a `guest`
 // block and no shifts. They all share ONE container, so at most one is ever
 // in the room. Nobody schedules them: while the slot is open, the summoner
-// rolls dice every reconcile, and a hit starts a 15-45 minute visit.
+// rolls dice every reconcile, and a hit starts a short visit: arrive scene
+// with whoever's in, a few minutes listening for their wake name, exit scene.
+// Brandon: guest stars shouldn't overstay their welcome.
 //
 // Cost (PHA-3597) is bounded by construction: one guest at a time, a hard
 // weekly cap, a minimum gap between visits, only while humans are on the
@@ -22,7 +24,7 @@ const WEEK = 7 * 24 * HOUR;
 export function guestConfig(raw = {}) {
   return {
     enabled: raw.enabled !== false,
-    visitMin: Array.isArray(raw.visitMin) ? raw.visitMin : [15, 45],
+    visitMin: Array.isArray(raw.visitMin) ? raw.visitMin : [3, 6],
     meanEligibleMin: raw.meanEligibleMin ?? 240,
     maxPerWeek: raw.maxPerWeek ?? 3,
     specialNightExtra: raw.specialNightExtra ?? 1,

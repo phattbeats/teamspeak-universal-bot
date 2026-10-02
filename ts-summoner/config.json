@@ -80,8 +80,8 @@
   "guests": {
     "enabled": true,
     "visitMin": [
-      15,
-      45
+      3,
+      6
     ],
     "meanEligibleMin": 240,
     "maxPerWeek": 3,

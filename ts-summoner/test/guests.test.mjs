@@ -59,12 +59,12 @@ test('Bexton nights only: no Bexton in the room, no guest', () => {
   assert.deepEqual(candidates(cfg, (id) => id === 'bexton').sort(), ['johnny', 'trixie']);
 });
 
-test('weighted pick, and visit length inside 15-45', () => {
+test('weighted pick, and visit length a few minutes (3-6)', () => {
   assert.equal(pickGuest(cfg, ['johnny', 'trixie'], () => 0), 'johnny');
   assert.equal(pickGuest(cfg, ['johnny', 'trixie'], () => 0.99), 'trixie');
   assert.equal(pickGuest(cfg, [], () => 0), null);
-  assert.equal(visitLength(g, cfg.bots.johnny, () => 0), 15);
-  assert.equal(visitLength(g, cfg.bots.johnny, () => 1), 45);
+  assert.equal(visitLength(g, cfg.bots.johnny, () => 0), 3);
+  assert.equal(visitLength(g, cfg.bots.johnny, () => 1), 6);
 });
 
 test('one container, one guest: whoever is in or busy holds the slot', () => {

@@ -378,7 +378,7 @@ mount, so after editing it run `docker restart ts-summoner`.
 
 ## 5b. Guest stars (PHA-3842)
 
-Rotten Johnny (the ghoul who owns the Vice) and Trixie (his waitress, the band's second singer) aren't regulars. They **drop in** on Bexton nights for 15-45 minutes, a few times a week.
+Rotten Johnny (the ghoul who owns the Vice) and Trixie (his waitress, the band's second singer) aren't regulars. They **drop in** on Bexton nights a few times a week, and they don't overstay: an arrive scene with Bexton, a few minutes listening for their name, then a leave scene.
 
 **One container for every guest.** `guest` (`image/deploy-guest.sh`, appdata `/mnt/user/appdata/guest`) runs one gateway, one bridge and one TeamSpeak identity. Before each visit the summoner runs `node /usr/local/bin/guest-switch.mjs <id>` in it. That script:
 - rebinds the teamspeak channel to the guest's agent, seeding its workspace from `personas/<id>/` the first time,
@@ -398,7 +398,7 @@ At most one guest is ever on, because they share the container. A guest who's wa
 | `specialBoost` | 3 | dice multiplier on a calendar night |
 | `minGapHours` | 20 | minimum gap between visits (halved on a calendar night) |
 | `minHumans` | 1 | nobody on the server, no visit |
-| `visitMin` | [15, 45] | visit length, uniform |
+| `visitMin` | [3, 6] | visit length in minutes, uniform. A guest summoned from chat gets the same length, and later mentions do not extend it |
 
 Eligible means the slot is free, there are humans on the server, and one of the guest's `needs` bots is in the room. Johnny and Trixie both have `needs: ["bexton"]`. If Bexton leaves, the guest leaves too. Like every summons, a visit also ends once the server has been empty for `idleGraceMin`.
 
