@@ -64,6 +64,7 @@ Message types the bridge accepts (`in`):
 | 0x93 | `server_edit` | `{"name":string?,"welcomeMessage":string?}` (PHA-3786) | — |
 | 0x94 | `server_group_add_client` | `{"serverGroupId":u64,"clientId":u16}` (PHA-3786) | — |
 | 0x95 | `list_channels` | `{}` (PHA-3784: ask for the full channel tree; answered async with `channel_tree` 0x08, no request id) | — |
+| 0x96 | `set_description` | `{"description":string}` (PHA-3857: the bot's own client description, `""` clears it; the music player publishes `♪ <title>` for the PLNT overlay. Needs `b_client_modify_own_description`; no reply frame) | — |
 
 Every 0x8A-0x94 command answers with `moderation_result` (0x07). None of them
 enforce authorization themselves — the Sexton trusts whatever command it is

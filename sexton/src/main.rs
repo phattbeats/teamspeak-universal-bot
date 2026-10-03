@@ -1944,6 +1944,22 @@ async fn handle_bridge_command(
                 Err(e) => warn!(error = %e, "bridge list_channels: get_state failed"),
             }
         }
+        BridgeCommand::SetDescription { description } => {
+            // PHA-3857: `clientupdate` has no description field; the TS3
+            // client sets its own via `clientedit` on its own clid, which the
+            // server gates on `b_client_modify_own_description`. A permission
+            // refusal comes back async as a command error, not from `send`.
+            let part = OutClientEditPart {
+                client_id: own_client_id,
+                description: Some(std::borrow::Cow::Borrowed(description.as_str())),
+                talk_power_granted: None,
+            };
+            let cmd = OutClientEditMessage::new(&mut std::iter::once(part));
+            match cmd.send(con) {
+                Ok(()) => debug!(%description, "bridge set_description sent"),
+                Err(e) => warn!(error = %e, "bridge set_description failed"),
+            }
+        }
     }
 }
 

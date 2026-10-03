@@ -285,6 +285,11 @@ async fn dispatch(
         TYPE_LIST_CHANNELS => {
             let _ = cmd_tx.send(BridgeCommand::ListChannels);
         }
+        TYPE_SET_DESCRIPTION => {
+            if let Ok(h) = serde_json::from_value::<SetDescriptionHeader>(frame.header) {
+                let _ = cmd_tx.send(BridgeCommand::SetDescription { description: h.description });
+            }
+        }
         other => debug!("unknown inbound frame type 0x{other:02x}, ignoring"),
     }
 }
