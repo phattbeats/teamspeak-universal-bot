@@ -14,8 +14,8 @@
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-IMAGE=${IMAGE:-phattbeats/sexton}
-TAG=${TAG:-dev}
+IMAGE=${IMAGE:-phattbeats/teamspeak-universal-bot}
+TAG=${TAG:-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)}
 ALSO_LATEST=${ALSO_LATEST:-0}
 # Set WITH_POT=0 to skip the bgutil POT provider stage (faster build; music
 # still works, it just gets challenged by YouTube more often).
@@ -96,7 +96,17 @@ docker run --rm --entrypoint sh "${IMAGE}:${TAG}" -c '
   check "ffmpeg"              "ffmpeg -version"
   check "yt-dlp"              "yt-dlp --version"
   check "supervisord"         "supervisord --version"
-  check "runner scripts"      "test -x /usr/local/bin/run-sexton -a -x /usr/local/bin/run-whisper -a -x /usr/local/bin/run-pot -a -x /usr/local/bin/run-gateway"
+  check "runner scripts"      "test -x /usr/local/bin/run-sexton -a -x /usr/local/bin/run-whisper-pool -a -x /usr/local/bin/run-pot -a -x /usr/local/bin/run-gateway -a -x /usr/local/bin/run-universal"
+  # --- PHA-3791: the sidecars that moved in ---
+  check "VAD model"           "test -s /opt/whisper/models/ggml-silero-v5.1.2.bin"
+  check "coalescing proxy"    "node --check /opt/whisper/coalescing-proxy.mjs"
+  check "ts-summoner"         "node --check /opt/ts-summoner/summoner.mjs"
+  check "sshpass"             "command -v sshpass"
+  check "suno-api build"      "test -d /opt/suno-api/.next"
+  check "chromium"            "ls /opt/ms-playwright | grep -q chromium"
+  check "persona packs"       "test -s /opt/personas/sexton/voice.json -a -s /opt/personas/HUMAN.md"
+  check "stack generator"     "UNIVERSAL_CONFIG_DIR=/tmp/c UNIVERSAL_RUN_DIR=/tmp/r node /opt/universal/stack.mjs supervisor"
+  check "supervisor conf"     "supervisord -c /etc/supervisor/universal.conf --help"
   # --- PHA-3428 option (a): the gateway and its plugin ---
   # The gateway binary being present is not the interesting assertion — it
   # comes from the base image. The interesting one is the plugin: it is COPYd
@@ -161,4 +171,4 @@ fi
 log "built"
 docker images "${IMAGE}" --format '{{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}' | head -5
 echo
-echo "Next: image/deploy.sh (docker run form), or the Unraid template in image/unraid-sexton.xml"
+echo "Next: TAG=${TAG} image/deploy.sh"

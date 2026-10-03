@@ -3,12 +3,30 @@
     "enabled": true
   },
   "moderation": {
-    "kick": false,
-    "ban": false,
-    "edit": false,
-    "allowGroups": []
+    "kick": true,
+    "ban": true,
+    "edit": true,
+    "allowGroups": [
+      "Server Admin"
+    ]
   },
   "band": {
     "enabled": false
+  },
+  "agent": {
+    "alsoAllow": [
+      "web_search",
+      "web_fetch"
+    ],
+    "skills": [
+      "weather",
+      "summarize",
+      "songsee",
+      "spotify-player",
+      "meme-maker",
+      "model-usage",
+      "healthcheck",
+      "control-ui"
+    ]
   }
 }

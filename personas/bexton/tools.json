@@ -3,10 +3,12 @@
     "enabled": true
   },
   "moderation": {
-    "kick": false,
-    "ban": false,
-    "edit": false,
-    "allowGroups": []
+    "kick": true,
+    "ban": true,
+    "edit": true,
+    "allowGroups": [
+      "Server Admin"
+    ]
   },
   "band": {
     "enabled": true,
@@ -16,7 +18,23 @@
       "Sgt. Bexton and the Digital Heart Club Band"
     ],
     "sunoApi": {
-      "baseUrl": "http://suno-api:3000"
+      "baseUrl": "http://127.0.0.1:3000"
     }
+  },
+  "agent": {
+    "alsoAllow": [
+      "web_search",
+      "web_fetch"
+    ],
+    "skills": [
+      "weather",
+      "songsee",
+      "spotify-player",
+      "sonoscli",
+      "meme-maker",
+      "model-usage",
+      "healthcheck",
+      "control-ui"
+    ]
   }
 }

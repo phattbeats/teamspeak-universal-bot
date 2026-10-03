@@ -1,4 +1,14 @@
-# PHA-3428: the whole Sexton stack as ONE image.
+# PHA-3791: every TeamSpeak bot, and everything they lean on, as ONE image
+# and ONE container (teamspeak-universal-bot). Brandon, 2026-10-02/03: "since
+# openclaw can handle multiple agents, cant they all be under one, expanding
+# container?" ... "combine everything into one". So one gateway runs one agent
+# + one teamspeak account per persona pack, each bot keeps its own Rust core
+# (its own TeamSpeak identity), and the old sidecars are programs in here:
+# the whisper pool + coalescing proxy, the POT provider, suno-api and
+# ts-summoner. image/universal/ holds the per-bot wiring (stack.mjs).
+#
+# PHA-3428 (the history below still holds for each piece): the whole Sexton
+# stack as ONE image.
 #
 # Brandon's decision 2026-09-12: one image, one container, one Unraid template
 # entry. Everything the Sexton needs to keep the hall — text, voice, ears, and
@@ -54,7 +64,7 @@
 # asking anyone to retype them.
 #
 # Build context is the REPO ROOT (bridge-proto and the workspace Cargo.toml are
-# both needed):  docker build -f image/Dockerfile -t phattbeats/sexton:TAG .
+# both needed):  docker build -f image/Dockerfile -t phattbeats/teamspeak-universal-bot:TAG .
 # image/build.sh does this for you, on the box.
 
 # The gateway version, used by TWO `FROM` lines (the plugin builder and the
@@ -137,6 +147,10 @@ RUN mkdir -p /models \
          -o "/models/${WHISPER_MODEL}.part" \
          "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${WHISPER_MODEL}" \
     && mv "/models/${WHISPER_MODEL}.part" "/models/${WHISPER_MODEL}" \
+    && curl -fL --retry 3 --retry-delay 2 \
+         -o /models/ggml-silero-v5.1.2.bin.part \
+         "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin" \
+    && mv /models/ggml-silero-v5.1.2.bin.part /models/ggml-silero-v5.1.2.bin \
     && ls -l /models
 
 # --------------------------------------------------------------------------
@@ -211,6 +225,37 @@ RUN npm install --omit=dev --no-audit --no-fund \
     && test -d /plugin/node_modules/ws
 
 # --------------------------------------------------------------------------
+# 5b. suno-api (PHA-3554), Bexton's band generator. Upstream gcui-art/suno-api
+#     at the commit it stalled on, plus our patches (image/suno-api/
+#     phattbeats.patch: the 2026 Suno UI, Turnstile through 2Captcha, the
+#     v2-web generate path, the proxy, the decrypted-audio route). Built on the
+#     gateway image so its native modules match the node that runs it.
+#     Chromium comes the two ways the old image had it: the
+#     @playwright/browser-chromium postinstall and `playwright install`.
+# --------------------------------------------------------------------------
+FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION} AS suno-builder
+USER root
+ARG SUNO_API_REF=a2e6a823428903af715d3835d1cb44ffa336021d
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    ELECTRON_SKIP_BINARY_DOWNLOAD=1 \
+    NEXT_TELEMETRY_DISABLED=1
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates patch \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/suno-api
+COPY image/suno-api/phattbeats.patch /tmp/phattbeats.patch
+RUN git init -q . \
+    && git fetch -q --depth 1 https://github.com/gcui-art/suno-api.git "$SUNO_API_REF" \
+    && git checkout -q FETCH_HEAD \
+    && git apply /tmp/phattbeats.patch \
+    && rm -rf .git \
+    && npm install --no-audit --no-fund \
+    && npm run build \
+    && npm prune --omit=dev --no-audit --no-fund \
+    && npx -y playwright install chromium \
+    && rm -rf public && ln -s /config/suno-api/public public \
+    && test -d .next && ls /opt/ms-playwright
+
+# --------------------------------------------------------------------------
 # 6. The runtime image.
 #
 #    The base is the stock OpenClaw gateway image, NOT debian:bookworm-slim.
@@ -257,6 +302,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
         ffmpeg \
         supervisor \
+        openssh-client \
+        sshpass \
+        tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp: the official standalone build. Pinned by tag so a deploy is
@@ -305,6 +353,23 @@ COPY --from=pot-builder  /out/                                 /opt/bgutil-pot/
 RUN mkdir -p /etc/yt-dlp/plugins/bgutil \
     && cp -a /opt/bgutil-pot/ytdlp-plugin/yt_dlp_plugins /etc/yt-dlp/plugins/bgutil/ 2>/dev/null || true
 
+# --- PHA-3791: the shared whisper pool (was the `whisper` container) ---
+COPY whisper/run-whisper-pool.sh                               /usr/local/bin/run-whisper-pool
+COPY whisper/coalescing-proxy.mjs                              /opt/whisper/coalescing-proxy.mjs
+
+# --- PHA-3791: suno-api (was the `suno-api` container) + its chromium ---
+COPY --from=suno-builder /opt/suno-api/                        /opt/suno-api/
+COPY --from=suno-builder /opt/ms-playwright/                   /opt/ms-playwright/
+RUN cd /opt/suno-api \
+    && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright npx -y playwright install-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- PHA-3791: ts-summoner (was the `ts-summoner` container) ---
+COPY ts-summoner/summoner.mjs ts-summoner/schedule.mjs ts-summoner/story.mjs \
+     ts-summoner/variety.mjs ts-summoner/guests.mjs ts-summoner/banter.mjs \
+     ts-summoner/config.json                                   /opt/ts-summoner/
+COPY ts-summoner/live/                                         /opt/ts-summoner/live/
+
 # --- the gateway's channel plugin ---
 # Baked in, but NOT installed at build time: `openclaw plugins install --link`
 # writes its install record into the gateway's state dir, which is a mounted
@@ -326,103 +391,58 @@ COPY image/gateway/patch-openclaw-teamspeak.mjs /tmp/patch-openclaw-teamspeak.mj
 RUN node /tmp/patch-openclaw-teamspeak.mjs /app/dist \
     && rm /tmp/patch-openclaw-teamspeak.mjs
 
-COPY image/supervisord.conf          /etc/supervisor/conf.d/sexton.conf
 COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json
-# PHA-3791: one persona pack per bot under personas/<name>/ (SOUL.md,
-# AGENTS.md, IDENTITY.md, USER.md, avatar.png, voice.json, tools.json — see
-# docs/universal-bot/TOOL-CATALOG.md section 3). Copied file-by-file rather
-# than as a whole directory for two reasons: avatar.png does not belong next
-# to the workspace markdown (it goes to /usr/local/share/sexton-avatar/
-# instead, same destination filenames as before so nothing downstream
-# changes), and voice.json/tools.json must NOT land inside
-# /opt/sexton-persona/<id>/ at all — run-gateway.sh's first-boot workspace
-# seed does `cp -a` on every file in that directory, and those two are
-# config for run-gateway.sh itself, not agent workspace content. They go to
-# a sibling <id>.config/ directory the workspace seed never touches.
-#
-# PHA-3787: the Sexton's own persona, seeded the same way Bexton's already
-# was — this is the fix for "Sexton has no persona."
-COPY personas/sexton/AGENTS.md personas/sexton/IDENTITY.md \
-     personas/sexton/SOUL.md   personas/sexton/USER.md     /opt/sexton-persona/sexton/
-COPY personas/sexton/avatar.png        /usr/local/share/sexton-avatar/brandon.png
-COPY personas/sexton/voice.json personas/sexton/tools.json personas/sexton/lines.json personas/sexton/moods.json /opt/sexton-persona/sexton.config/
-# PHA-3554: the Bexton persona, seeded into the gateway workspace on first boot
-# when SEXTON_AGENT_ID=bexton. Same image, different agent in the chair.
-COPY personas/bexton/AGENTS.md personas/bexton/IDENTITY.md \
-     personas/bexton/SOUL.md                                /opt/sexton-persona/bexton/
-COPY personas/bexton/avatar.png        /usr/local/share/sexton-avatar/bexton.png
-COPY personas/bexton/voice.json personas/bexton/tools.json personas/bexton/lines.json personas/bexton/moods.json /opt/sexton-persona/bexton.config/
-# PHA-3836: the Lexton persona (PHA-3819), same shape as Bexton.
-COPY personas/lexton/AGENTS.md personas/lexton/IDENTITY.md \
-     personas/lexton/SOUL.md   personas/lexton/USER.md     /opt/sexton-persona/lexton/
-COPY personas/lexton/avatar.png        /usr/local/share/sexton-avatar/lexton.png
-COPY personas/lexton/voice.json personas/lexton/tools.json personas/lexton/lines.json personas/lexton/moods.json /opt/sexton-persona/lexton.config/
-COPY image/lexton/lexton-menace.cjs    /opt/sexton-menace/lexton-menace.cjs
-# PHA-3842 G1: the guest stars. They share ONE container (`guest`); ts-summoner
-# runs /usr/local/bin/guest-switch.mjs <id> before each visit to put one of
-# them in the chair. Same pack shape as the regulars.
-COPY personas/johnny/AGENTS.md personas/johnny/IDENTITY.md \
-     personas/johnny/SOUL.md                                /opt/sexton-persona/johnny/
-COPY personas/johnny/avatar.png        /usr/local/share/sexton-avatar/johnny.png
-COPY personas/johnny/voice.json personas/johnny/tools.json personas/johnny/lines.json /opt/sexton-persona/johnny.config/
-COPY personas/trixie/AGENTS.md personas/trixie/IDENTITY.md \
-     personas/trixie/SOUL.md                                /opt/sexton-persona/trixie/
-COPY personas/trixie/avatar.png        /usr/local/share/sexton-avatar/trixie.png
-COPY personas/trixie/voice.json personas/trixie/tools.json personas/trixie/lines.json /opt/sexton-persona/trixie.config/
-COPY image/guest-switch.mjs           /usr/local/bin/guest-switch.mjs
-# PHA-3787: HUMAN.md is shared by every persona — copied into both persona
-# directories from one source so there is exactly one copy to edit.
-COPY personas/HUMAN.md   /opt/sexton-persona/sexton/HUMAN.md
-COPY personas/HUMAN.md   /opt/sexton-persona/bexton/HUMAN.md
-COPY personas/HUMAN.md   /opt/sexton-persona/lexton/HUMAN.md
-COPY personas/HUMAN.md   /opt/sexton-persona/johnny/HUMAN.md
-COPY personas/HUMAN.md   /opt/sexton-persona/trixie/HUMAN.md
+# PHA-3791: the persona packs, whole. Each personas/<id>/ is one bot: its
+# workspace markdown, voice.json/tools.json (account seed), lines/moods and
+# avatar. stack.mjs reads them in place; /config/personas/<id>/ adds or
+# overrides a pack without a rebuild. HUMAN.md is the shared tone for all.
+COPY personas/                        /opt/personas/
+COPY image/lexton/lexton-menace.cjs   /opt/sexton-menace/lexton-menace.cjs
+COPY image/universal/stack.mjs image/universal/env-exec.mjs /opt/universal/
+COPY image/universal/supervisord.conf /etc/supervisor/universal.conf
+COPY image/universal/run-universal.sh /usr/local/bin/run-universal
+COPY image/universal/run-summoner.sh  /usr/local/bin/run-summoner
+COPY image/universal/run-suno-api.sh  /usr/local/bin/run-suno-api
+COPY image/universal/healthcheck.sh   /usr/local/bin/universal-healthcheck
 COPY image/run-sexton.sh             /usr/local/bin/run-sexton
-COPY image/run-whisper.sh            /usr/local/bin/run-whisper
 COPY image/run-pot.sh                /usr/local/bin/run-pot
 COPY image/run-gateway.sh            /usr/local/bin/run-gateway
 COPY image/run-menace.sh             /usr/local/bin/run-menace
-COPY image/healthcheck.sh            /usr/local/bin/sexton-healthcheck
-RUN chmod 0755 /usr/local/bin/run-sexton /usr/local/bin/run-whisper \
+RUN chmod 0755 /usr/local/bin/run-sexton /usr/local/bin/run-whisper-pool \
                /usr/local/bin/run-pot /usr/local/bin/run-gateway \
-               /usr/local/bin/run-menace \
-               /usr/local/bin/sexton-healthcheck
+               /usr/local/bin/run-menace /usr/local/bin/run-universal \
+               /usr/local/bin/run-summoner /usr/local/bin/run-suno-api \
+               /usr/local/bin/universal-healthcheck
 
 ENV RUST_LOG=info \
     SEXTON_ADDR=teamspeak6-server \
     SEXTON_PORT=9987 \
-    SEXTON_NICK=Sexton \
     SEXTON_CHANNEL="General Shit" \
     SEXTON_LOG_DIR=/var/sexton-logs \
-    SEXTON_AVATAR=/usr/local/share/sexton-avatar/brandon.png \
-    SEXTON_IDENTITY_FILE=/config/sexton-id.txt \
-    WHISPER_PORT=8080 \
-    WHISPER_THREADS=4 \
+    WHISPER_WORKERS=2 \
+    WHISPER_THREADS=3 \
     WHISPER_LANGUAGE=en \
     POT_PORT=4416 \
-    POT_HOST=0.0.0.0 \
+    POT_HOST=127.0.0.1 \
     OPENCLAW_STATE_DIR=/config/openclaw \
     OPENCLAW_CONFIG_PATH=/config/openclaw/openclaw.json \
     SEXTON_GATEWAY_PORT=18789 \
     SEXTON_GATEWAY_BIND=lan \
-    SEXTON_PLUGIN_DIR=/opt/openclaw-teamspeak-plugin
+    SEXTON_PLUGIN_DIR=/opt/openclaw-teamspeak-plugin \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    TZ=America/New_York
 
-# 9099 the bridge WebSocket, 8080 whisper, 4416 POT, 18789 the gateway.
-# None of them should ever be published to the host. Under option (a) the only
-# client of the first three is the gateway in this same container, over
-# loopback — the whole premise of the local STT lane is that the channel's
-# audio does not leave the box, and a published port is the easiest way to lose
-# that by accident. 18789 is the gateway's own control port; publish it only if
-# you actually want a second Control UI, and put auth on it if you do.
-EXPOSE 9099 8080 4416 18789
+# Nothing here is published to the host. Every service in the container talks
+# to the others over loopback: bridges 9101+, whisper 8080-8082, POT 4416,
+# suno-api 3000, summoner 8099. 18789 is the gateway's own control port.
+EXPOSE 18789
 
-# /config now holds two things: the bot's TeamSpeak identity (sexton-id.txt)
-# and the gateway's whole config+state tree (openclaw/). Both are the kind of
-# state that is painful to lose — the identity IS the bot's server-side UID,
-# and openclaw/ carries the plugin install record and the channel config.
+# /config: bots.json, per-bot identities and state (bots/<id>/), the gateway's
+# config+state (openclaw/), the summoner's editable files (summoner/), and
+# suno-api.env. /var/sexton-logs: each core's room log, by bot.
 VOLUME ["/var/sexton-logs", "/config"]
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=90s \
-    CMD /usr/local/bin/sexton-healthcheck
+HEALTHCHECK --interval=30s --timeout=15s --retries=3 --start-period=120s \
+    CMD /usr/local/bin/universal-healthcheck
 
-ENTRYPOINT ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/sexton.conf"]
+ENTRYPOINT ["/usr/local/bin/run-universal"]

@@ -2,11 +2,8 @@
   "voiceId": "English_ManWithDeepVoice",
   "wakeNames": [
     "Lexton",
-    "lexton",
     "Luthor",
-    "luthor",
-    "Villain",
-    "villain"
+    "Villain"
   ],
   "wakeAliases": [
     "lex",

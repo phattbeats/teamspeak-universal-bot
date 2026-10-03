@@ -15,6 +15,8 @@ export type TeamSpeakSummonerConfig = {
   enabled?: boolean;
   /** Default: http://ts-summoner:8099. */
   url?: string;
+  /** This bot's id at the summoner (PHA-3791: several bots share one gateway). Default: SEXTON_AGENT_ID, else sexton. */
+  self?: string;
   /** Forward every non-empty STT transcript to `/heard` (Lexton's trash-talk crash-in). Default: true. */
   forwardHeard?: boolean;
 };
@@ -31,9 +33,16 @@ export function summonerUrl(config: TeamSpeakSummonerConfig | undefined): string
   return (config?.url?.trim() || DEFAULT_URL).replace(/\/+$/u, "");
 }
 
-/** This bot's own id at the summoner: the agent id, which is the container name. */
-export function selfBotId(env: Record<string, string | undefined> = process.env): string {
-  return env.SEXTON_AGENT_ID?.trim() || "sexton";
+/**
+ * This bot's own id at the summoner. One bot per gateway: the agent id, which
+ * is the container name. Several bots per gateway (PHA-3791): each account
+ * says who it is in `tools.summoner.self`.
+ */
+export function selfBotId(
+  config?: TeamSpeakSummonerConfig,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return config?.self?.trim() || env.SEXTON_AGENT_ID?.trim() || "sexton";
 }
 
 async function post(

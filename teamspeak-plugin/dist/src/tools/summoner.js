@@ -6,8 +6,8 @@ function summonerUrl(config) {
   }
   return (config?.url?.trim() || DEFAULT_URL).replace(/\/+$/u, "");
 }
-function selfBotId(env = process.env) {
-  return env.SEXTON_AGENT_ID?.trim() || "sexton";
+function selfBotId(config, env = process.env) {
+  return config?.self?.trim() || env.SEXTON_AGENT_ID?.trim() || "sexton";
 }
 async function post(base, path, body, fetchFn = fetch) {
   const response = await fetchFn(`${base}${path}`, {

@@ -757,7 +757,7 @@ export class TeamSpeakVoiceRuntime {
         return;
       }
       case "vc-dismiss": {
-        const bot = command.bot ?? selfBotId();
+        const bot = command.bot ?? selfBotId(this.params.config.tools?.summoner);
         void summonerAction(this.params.config.tools?.summoner, "dismiss", bot, message.nickname).then(
           (result) =>
             this.reply(

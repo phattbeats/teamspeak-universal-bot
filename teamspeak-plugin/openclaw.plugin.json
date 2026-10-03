@@ -15,12 +15,29 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "enabled": { "type": "boolean" },
           "bridgeUrl": { "type": "string" },
           "channel": { "type": "string" },
           "commandPrefix": { "type": "string" },
           "commandAllowFrom": { "type": "array", "items": { "type": "number" } },
           "voice": { "type": "object", "additionalProperties": true },
-          "tools": { "type": "object", "additionalProperties": true }
+          "tools": { "type": "object", "additionalProperties": true },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "bridgeUrl": { "type": "string" },
+                "channel": { "type": "string" },
+                "commandPrefix": { "type": "string" },
+                "commandAllowFrom": { "type": "array", "items": { "type": "number" } },
+                "voice": { "type": "object", "additionalProperties": true },
+                "tools": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
         }
       },
       "uiHints": {

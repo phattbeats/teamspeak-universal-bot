@@ -3,9 +3,17 @@
     "enabled": true
   },
   "moderation": {
-    "kick": false,
+    "kick": true,
     "ban": false,
     "edit": false,
-    "allowGroups": []
+    "allowGroups": [
+      "Server Admin",
+      "Normal",
+      "Guest",
+      "Sexton"
+    ]
+  },
+  "villain": {
+    "enabled": true
   }
 }

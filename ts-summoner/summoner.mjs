@@ -290,22 +290,47 @@ function dockerApi(method, path, body, timeoutMs = 30_000) {
   });
 }
 
-async function exec(container, cmd, timeoutMs) {
+// PHA-3791: in the one-container stack the summoner runs NEXT TO the bots,
+// under the same supervisord, so "exec in the bot's container" is just a local
+// process. `bot.program` names the bot's core program there (core-<id>) and
+// `bot.dir` its per-bot dir (announce file, off-duty marker). Without them
+// (the per-container layout) it is still a docker exec into bot.container.
+const LOCAL = cfg.local === true;
+function execLocal(cmd, timeoutMs = 30_000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd[0], cmd.slice(1), { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`${cmd[0]} timeout`)); }, timeoutMs);
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    // Tty-mode docker exec never failed on a non-zero exit either; callers
+    // read the output, so keep that contract.
+    child.on('close', () => { clearTimeout(timer); resolve(out.trim()); });
+  });
+}
+async function exec(bot, cmd, timeoutMs) {
+  if (LOCAL) return execLocal(cmd, timeoutMs);
+  const container = typeof bot === 'string' ? bot : bot.container;
   const { Id } = JSON.parse(await dockerApi('POST', `/containers/${container}/exec`,
     { Cmd: cmd, AttachStdout: true, AttachStderr: true, Tty: true }));
   return (await dockerApi('POST', `/exec/${Id}/start`, { Detach: false, Tty: true }, timeoutMs)).trim();
 }
+const program = (bot) => bot.program ?? 'sexton';
+const offDutyFile = (bot) => `${bot.dir ?? '/config'}/.off-duty`;
 
 // The core is `[program:sexton]` in every bot container. The marker file tells
 // sexton-healthcheck the bot is off duty, not broken.
 async function coreRunning(bot, id) {
-  const out = await exec(bot.container, ['supervisorctl', 'status', 'sexton']);
+  const out = await exec(bot, ['supervisorctl', 'status', program(bot)]);
   const up = /\b(RUNNING|STARTING|BACKOFF)\b/.test(out);
-  if (!up || !bot.guest) return up;
+  // PHA-3791: every guest has a core of his own in the one-container stack;
+  // only the shared-container layout has a chair to check.
+  if (!up || !bot.guest || bot.program) return up;
   // PHA-3842: the guest container's core is up as whoever is in the chair.
   // Nobody known in it (first boot, a hand restart): nobody would ever stop
   // it, so stop it here; the next visit switches someone in properly.
-  const who = (await exec(bot.container, ['cat', '/config/.guest']).catch(() => '')).trim();
+  const who = (await exec(bot, ['cat', '/config/.guest']).catch(() => '')).trim();
   if (!GUESTS.has(who) || cfg.bots[who].container !== bot.container) {
     log(`${bot.container}: core up with no guest in the chair ('${who}'), stopping it`);
     await stopCore(bot);
@@ -317,8 +342,8 @@ async function coreRunning(bot, id) {
 // PHA-3842: put guest `id` in the shared container's chair before his core
 // starts. Restarts that container's gateway when the persona changes (~30s).
 async function prepareGuest(id, bot) {
-  if (!bot.guest) return;
-  const out = await exec(bot.container, ['node', '/usr/local/bin/guest-switch.mjs', id], 180_000);
+  if (!bot.guest || bot.program) return;
+  const out = await exec(bot, ['node', '/usr/local/bin/guest-switch.mjs', id], 180_000);
   const last = out.split('\n').filter(Boolean).pop() || '';
   let r;
   try { r = JSON.parse(last); } catch { throw new Error(`guest-switch ${id}: ${out.slice(0, 200)}`); }
@@ -326,12 +351,12 @@ async function prepareGuest(id, bot) {
   log(`${id}: in the guest chair as '${r.nick}'${r.changed ? ' (gateway restarted)' : ''}`);
 }
 async function startCore(bot) {
-  await exec(bot.container, ['rm', '-f', '/config/.off-duty']);
-  return exec(bot.container, ['supervisorctl', 'start', 'sexton']);
+  await exec(bot, ['rm', '-f', offDutyFile(bot)]);
+  return exec(bot, ['supervisorctl', 'start', program(bot)]);
 }
 async function stopCore(bot) {
-  await exec(bot.container, ['touch', '/config/.off-duty']);
-  return exec(bot.container, ['supervisorctl', 'stop', 'sexton']);
+  await exec(bot, ['touch', offDutyFile(bot)]);
+  return exec(bot, ['supervisorctl', 'stop', program(bot)]);
 }
 
 // ------------------------------------------------- entrance/exit lines --
@@ -343,6 +368,8 @@ async function stopCore(bot) {
 // go out, marked quiet, because they also roll the shift's mood (PHA-3840).
 
 const ANNOUNCE_FILE = cfg.announce?.file ?? '/config/.announce';
+// PHA-3791: one announce file per bot when they share a container.
+const announceFile = (bot) => (bot.dir ? `${bot.dir}/.announce` : ANNOUNCE_FILE);
 
 const audience = () => cfg.announce?.enabled !== false && room.queryUp && room.humans > 0;
 
@@ -353,12 +380,12 @@ async function requestLine(bot, reason, { entrance = false, vars } = {}) {
   const quiet = !audience();
   if (quiet && !entrance) return false;
   const body = JSON.stringify({ reason, at: Date.now(), ...(quiet ? { quiet } : {}), ...(vars ? { vars } : {}) });
-  await exec(bot.container, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce', body, ANNOUNCE_FILE]);
+  await exec(bot, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce', body, announceFile(bot)]);
   return true;
 }
 
 async function lineFinished(bot) {
-  const out = await exec(bot.container, ['sh', '-c', 'test -e "$1" && echo waiting || echo done', 'announce', ANNOUNCE_FILE]);
+  const out = await exec(bot, ['sh', '-c', 'test -e "$1" && echo waiting || echo done', 'announce', announceFile(bot)]);
   return out.includes('done');
 }
 
@@ -383,7 +410,7 @@ async function stopWithLine(id, bot, reason, vars) {
     log(`${id}: exit line failed: ${e.message}`);
   }
   // A leftover request would fire as the next entrance; drop it.
-  await exec(bot.container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+  await exec(bot, ['rm', '-f', announceFile(bot)]).catch(() => {});
   return stopCore(bot);
 }
 
@@ -398,14 +425,14 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function sayAndWait(id, text, vars, timeoutSec) {
   const bot = cfg.bots[id];
-  await exec(bot.container, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce',
-    JSON.stringify({ reason: 'scene', text, vars, at: Date.now() }), ANNOUNCE_FILE]);
+  await exec(bot, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce',
+    JSON.stringify({ reason: 'scene', text, vars, at: Date.now() }), announceFile(bot)]);
   const deadline = Date.now() + timeoutSec * 1000;
   while (Date.now() < deadline) {
     await wait(1000);
     if (await lineFinished(bot)) return true;
   }
-  await exec(bot.container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+  await exec(bot, ['rm', '-f', announceFile(bot)]).catch(() => {});
   return false;
 }
 
@@ -472,8 +499,8 @@ async function sceneAction(what) {
 async function joinQuietly(id, reason) {
   const bot = cfg.bots[id];
   await prepareGuest(id, bot);
-  await exec(bot.container, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce',
-    JSON.stringify({ reason, at: Date.now(), quiet: true }), ANNOUNCE_FILE]);
+  await exec(bot, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce',
+    JSON.stringify({ reason, at: Date.now(), quiet: true }), announceFile(bot)]);
   log(`${id}: ${await startCore(bot)}`);
   const deadline = Date.now() + (cfg.scenes?.joinWaitSec ?? 90) * 1000;
   while (Date.now() < deadline) {
@@ -481,7 +508,7 @@ async function joinQuietly(id, reason) {
     if (await lineFinished(bot)) return true;
   }
   log(`${id}: never came up for his scene`);
-  await exec(bot.container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+  await exec(bot, ['rm', '-f', announceFile(bot)]).catch(() => {});
   return false;
 }
 
@@ -545,7 +572,7 @@ function endTakeover(now) {
       v.working = false;
       v.exitReason = null;
       v.lastAction = Date.now();
-      await exec(cfg.bots[t.villain].container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+      await exec(cfg.bots[t.villain], ['rm', '-f', announceFile(cfg.bots[t.villain])]).catch(() => {});
       log(`${t.villain}: ${await stopCore(cfg.bots[t.villain])}`);
     }
   });
@@ -736,7 +763,7 @@ function startBanter(pick, now, why) {
           st.working = false;
           st.exitReason = null;
           st.lastAction = Date.now();
-          await exec(cfg.bots[d].container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+          await exec(cfg.bots[d], ['rm', '-f', announceFile(cfg.bots[d])]).catch(() => {});
           log(`${d}: ${await stopCore(cfg.bots[d])} (banter over)`);
         }
       }
@@ -934,7 +961,7 @@ function runScene(p, now) {
       const st = state[p.stop];
       st.working = false;
       st.exitReason = null;
-      await exec(cfg.bots[p.stop].container, ['rm', '-f', ANNOUNCE_FILE]).catch(() => {});
+      await exec(cfg.bots[p.stop], ['rm', '-f', announceFile(cfg.bots[p.stop])]).catch(() => {});
       log(`${p.stop}: ${await stopCore(cfg.bots[p.stop])}`);
       // Talk grace is over: the hand-off was his goodbye.
       st.lastAction = Date.now();

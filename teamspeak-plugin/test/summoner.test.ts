@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseTeamSpeakCommand } from "../src/voice/commands.js";
-import { forwardHeard, summonerAction, summonerUrl } from "../src/tools/summoner.js";
+import { forwardHeard, selfBotId, summonerAction, summonerUrl } from "../src/tools/summoner.js";
 
 type Call = { url: string; body?: unknown };
 
@@ -16,6 +16,12 @@ describe("ts-summoner client (PHA-3823)", () => {
     expect(summonerUrl(undefined)).toBe("http://ts-summoner:8099");
     expect(summonerUrl({ url: "http://x:1/" })).toBe("http://x:1");
     expect(summonerUrl({ enabled: false })).toBeUndefined();
+  });
+
+  it("knows which bot it is per account when several share a gateway (PHA-3791)", () => {
+    expect(selfBotId({ self: "bexton" }, { SEXTON_AGENT_ID: "sexton" })).toBe("bexton");
+    expect(selfBotId(undefined, { SEXTON_AGENT_ID: "lexton" })).toBe("lexton");
+    expect(selfBotId(undefined, {})).toBe("sexton");
   });
 
   it("summons by name and words the result for a person to say", async () => {

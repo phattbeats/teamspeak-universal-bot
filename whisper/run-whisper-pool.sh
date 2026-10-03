@@ -1,5 +1,6 @@
-#!/bin/sh
-# PHA-3598: shared whisper.cpp pool for sexton + bexton (own container, base.en).
+#!/bin/bash
+# PHA-3598: shared whisper.cpp pool for every bot (base.en). PHA-3791: a
+# supervisor program in the one container, no longer a container of its own.
 # whisper-server serialises requests behind one mutex and has no request-level
 # parallelism flag, so the pool is N processes on consecutive ports; each bot is
 # pointed at its own port. VAD (silero) trims non-speech before decode so room
@@ -14,7 +15,8 @@
 # worker (the pre-PHA-3607 behavior) without editing this script.
 set -eu
 : "${WHISPER_MODEL_PATH:=/opt/whisper/models/ggml-base.en.bin}"
-: "${WHISPER_VAD_MODEL:=/whisper-data/models/ggml-silero-v5.1.2.bin}"
+: "${WHISPER_VAD_MODEL:=/opt/whisper/models/ggml-silero-v5.1.2.bin}"
+: "${WHISPER_PROXY_SCRIPT:=/opt/whisper/coalescing-proxy.mjs}"
 : "${WHISPER_WORKERS:=2}"
 : "${WHISPER_BASE_PORT:=8080}"
 : "${WHISPER_THREADS:=4}"
@@ -34,7 +36,7 @@ while [ "$i" -lt "$WHISPER_WORKERS" ]; do
   port=$((WHISPER_BASE_PORT + i))
   backend_ports="${backend_ports:+$backend_ports,}$port"
   echo "run-whisper-pool: worker $i on :$port threads=$WHISPER_THREADS vad=${VAD_ARGS:+on}${VAD_ARGS:-off}"
-  /opt/whisper/bin/whisper-server --model "$WHISPER_MODEL_PATH" --host 0.0.0.0 --port "$port" \
+  /opt/whisper/bin/whisper-server --model "$WHISPER_MODEL_PATH" --host 127.0.0.1 --port "$port" \
     --threads "$WHISPER_THREADS" --language "$WHISPER_LANGUAGE" --no-timestamps --convert \
     --tmp-dir /tmp --audio-ctx "${WHISPER_AUDIO_CTX:-768}" --beam-size 1 --best-of 1 --no-fallback \
     --no-speech-thold "${WHISPER_NO_SPEECH_THOLD:-0.6}" $VAD_ARGS &
@@ -44,11 +46,11 @@ done
 if [ "$WHISPER_COALESCE_ENABLED" = "1" ]; then
   echo "run-whisper-pool: coalescing proxy on :$WHISPER_COALESCE_PORT backends=$backend_ports"
   WHISPER_COALESCE_PORT="$WHISPER_COALESCE_PORT" WHISPER_BACKEND_PORTS="$backend_ports" \
-    node /whisper-data/coalescing-proxy.mjs &
+    node "$WHISPER_PROXY_SCRIPT" &
   pids="$pids $!"
 fi
 trap 'kill $pids 2>/dev/null' TERM INT
-# If any worker (or the proxy) dies, exit non-zero so Docker's restart policy
-# relaunches the pool.
-wait -n 2>/dev/null || wait
+# If any worker (or the proxy) dies, exit non-zero so supervisord (PHA-3791:
+# the pool is program `whisper` in the one container) relaunches the pool.
+wait -n
 exit 1

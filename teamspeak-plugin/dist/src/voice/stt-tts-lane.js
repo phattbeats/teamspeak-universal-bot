@@ -85,7 +85,7 @@ function createSttTtsLane(params) {
   } else if (secondary.reason) {
     params.log?.(`teamspeak voice: secondary transcription disabled - ${secondary.reason}`);
   }
-  transcriber = new ConcurrencyLimitedTranscriber(transcriber, 1, 1, params.log);
+  transcriber = new ConcurrencyLimitedTranscriber(transcriber, 2, 2, params.log);
   const synthesizer = params.deps?.createSynthesizer?.() ?? new RuntimeSpeechSynthesizer({
     config: speech,
     cfg: params.cfg,

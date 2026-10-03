@@ -2,14 +2,16 @@
 // Every MENACE_MIN..MENACE_MAX minutes: read the whole-server channel tree off
 // the core's bridge, pick a random human (never a bot, never Emily or
 // miss_shade), have the lexton agent write the line, and PM it via 0x89.
-// Runs as supervisor program `menace`; lives in /config so it survives a
-// container recreate (the supervisor stanza does not — see deploy-lexton.sh).
+// Runs as supervisor program `menace-<bot>` (PHA-3791: generated per bot by
+// /opt/universal/stack.mjs, which also passes the bridge and agent below).
 const { execFile } = require("child_process");
 const WebSocket = require("/opt/openclaw-teamspeak-plugin/node_modules/ws");
 
 const MIN = Number(process.env.MENACE_MIN_MINUTES || 20);
 const MAX = Number(process.env.MENACE_MAX_MINUTES || 60);
-const BOTS = /^(sexton|bexton|lexton)\d*$/i;
+const BOTS = /^(sexton|bexton|lexton|trixie|rotten johnny)\d*$/i;
+const BRIDGE = process.env.MENACE_BRIDGE_URL || "ws://127.0.0.1:9099";
+const AGENT = process.env.MENACE_AGENT || "lexton";
 const SPARED = /emily|miss_shade/i;
 let lastVictim = null;
 
@@ -18,7 +20,7 @@ const frame = (t, o) => { const h = Buffer.from(JSON.stringify(o)); const f = Bu
 
 function withBridge(fn) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket("ws://127.0.0.1:9099");
+    const ws = new WebSocket(BRIDGE);
     const timer = setTimeout(() => { ws.terminate(); reject(new Error("bridge timeout")); }, 10000);
     ws.on("error", (e) => { clearTimeout(timer); reject(e); });
     ws.on("open", () => fn(ws, (v) => { clearTimeout(timer); setTimeout(() => ws.close(), 500); resolve(v); }));
@@ -37,7 +39,7 @@ const sendPm = (clientId, text) => withBridge((ws, done) => { ws.send(frame(0x89
 
 function writeLine(nickname) {
   return new Promise((resolve, reject) => {
-    execFile("openclaw", ["agent", "--agent", "lexton", "--session-id", `menace-${Date.now()}`, "--json", "--thinking", "off",
+    execFile("openclaw", ["agent", "--agent", AGENT, "--session-id", `menace-${Date.now()}`, "--json", "--thinking", "off",
       "--message", `[MENACE DM for ${nickname}]`], { timeout: 120000, maxBuffer: 4 << 20 }, (err, stdout) => {
       if (err) return reject(err);
       try {

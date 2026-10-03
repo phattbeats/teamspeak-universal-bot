@@ -81,10 +81,10 @@ function createTeamSpeakPersonaTools() {
 async function currentAgentId() {
   const runtime = getOptionalTeamSpeakRuntime();
   const cfg = runtime?.config.current();
-  const bound = cfg?.bindings?.find(
-    (b) => b?.match?.channel === "teamspeak"
-  )?.agentId;
-  return bound ?? currentTeamSpeakTurnContext()?.accountId ?? "sexton";
+  const accountId = currentTeamSpeakTurnContext()?.accountId;
+  const bindings = (cfg?.bindings ?? []).filter((b) => b?.match?.channel === "teamspeak");
+  const bound = bindings.find((b) => accountId !== void 0 && b.match?.accountId === accountId)?.agentId ?? bindings.find((b) => !b.match?.accountId || b.match.accountId === "*")?.agentId;
+  return bound ?? accountId ?? "sexton";
 }
 async function showPersona() {
   const runtime = getOptionalTeamSpeakRuntime();
@@ -192,7 +192,9 @@ async function mutateTeamSpeakChannelConfig(apply) {
       mutate: (draft) => {
         draft.channels = draft.channels ?? {};
         draft.channels.teamspeak = draft.channels.teamspeak ?? {};
-        applied = apply(draft.channels.teamspeak);
+        const accountId = currentTeamSpeakTurnContext()?.accountId;
+        const account = accountId ? draft.channels.teamspeak.accounts?.[accountId] : void 0;
+        applied = apply(account ?? draft.channels.teamspeak);
       }
     });
   } catch (error) {
