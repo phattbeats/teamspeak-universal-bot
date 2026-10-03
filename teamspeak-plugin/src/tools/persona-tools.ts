@@ -124,10 +124,15 @@ export function createTeamSpeakPersonaTools(): AgentTool[] {
 async function currentAgentId(): Promise<string> {
   const runtime = getOptionalTeamSpeakRuntime();
   const cfg = runtime?.config.current();
-  const bound = (cfg?.bindings as Array<{ agentId?: string; match?: { channel?: string } }> | undefined)?.find(
-    (b) => b?.match?.channel === "teamspeak",
-  )?.agentId;
-  return bound ?? currentTeamSpeakTurnContext()?.accountId ?? "sexton";
+  const accountId = currentTeamSpeakTurnContext()?.accountId;
+  const bindings = ((cfg?.bindings as Array<{ agentId?: string; match?: { channel?: string; accountId?: string } }> | undefined) ?? [])
+    .filter((b) => b?.match?.channel === "teamspeak");
+  // PHA-3791: one gateway, one account per bot. The binding for this turn's
+  // account wins; a wildcard binding is the one-bot-per-gateway layout.
+  const bound =
+    bindings.find((b) => accountId !== undefined && b.match?.accountId === accountId)?.agentId ??
+    bindings.find((b) => !b.match?.accountId || b.match.accountId === "*")?.agentId;
+  return bound ?? accountId ?? "sexton";
 }
 
 async function showPersona(): Promise<ToolResult> {
@@ -227,10 +232,10 @@ async function setFollowUpWindow(args: Record<string, unknown>): Promise<ToolRes
 }
 
 /**
- * Every setter mutates the same shape: `channels.teamspeak`, the single
- * account config (see config.ts's `TeamSpeakAccountConfig` — this plugin does
- * not run multi-account). One helper keeps the three setters from repeating
- * the read/mutate/persist boilerplate.
+ * Every setter mutates the same shape: the account config of the bot the turn
+ * belongs to. That is `channels.teamspeak.accounts.<id>` when the gateway runs
+ * several bots (PHA-3791), else `channels.teamspeak` itself. One helper keeps
+ * the three setters from repeating the read/mutate/persist boilerplate.
  */
 async function mutateTeamSpeakChannelConfig(
   apply: (ts: Record<string, any>) => Record<string, unknown>,
@@ -247,7 +252,9 @@ async function mutateTeamSpeakChannelConfig(
       mutate: (draft: Record<string, any>) => {
         draft.channels = draft.channels ?? {};
         draft.channels.teamspeak = draft.channels.teamspeak ?? {};
-        applied = apply(draft.channels.teamspeak);
+        const accountId = currentTeamSpeakTurnContext()?.accountId;
+        const account = accountId ? draft.channels.teamspeak.accounts?.[accountId] : undefined;
+        applied = apply(account ?? draft.channels.teamspeak);
       },
     });
   } catch (error) {

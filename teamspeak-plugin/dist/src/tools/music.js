@@ -12,6 +12,14 @@ const LOW_WATER_MS = 1e3;
 const STDERR_KEEP_BYTES = 2e3;
 class MusicError extends Error {
 }
+const MAX_DESCRIPTION_CHARS = 200;
+function formatNowPlayingDescription(track) {
+  if (!track) {
+    return "";
+  }
+  const chars = Array.from(`\u266A ${track.title.replace(/\s+/g, " ").trim()}`);
+  return chars.length <= MAX_DESCRIPTION_CHARS ? chars.join("") : `${chars.slice(0, MAX_DESCRIPTION_CHARS - 1).join("")}\u2026`;
+}
 const defaultRun = (command, args, options) => new Promise((resolve) => {
   execFile(
     command,
@@ -190,6 +198,9 @@ class MusicPlayer {
     this.params.log?.(
       `teamspeak music: stopped reason=${reason} track="${stream.track.title}" playedMs=${stream.framesSent * MUSIC_FRAME_MS}`
     );
+    if (reason !== "replaced") {
+      this.params.onNowPlaying?.(void 0);
+    }
     return true;
   }
   setVolume(volume) {
@@ -324,6 +335,7 @@ class MusicPlayer {
     }));
     this.params.sink.setMusicGain(this.gain);
     stream.timer = this.setIntervalFn(() => this.pump(stream), MUSIC_FRAME_MS);
+    this.params.onNowPlaying?.(track);
     this.params.log?.(
       `teamspeak music: playing "${track.title}" request="${track.request}" volume=${this.gain}${startDelayMs > 0 ? ` startDelayMs=${startDelayMs}` : ""}${track.isFile ? " source=file" : ""}`
     );
@@ -385,6 +397,8 @@ class MusicPlayer {
         `teamspeak music: advancing to queued "${next.title}" remaining=${this.queue.length}`
       );
       this.startStream(next, 0);
+    } else {
+      this.params.onNowPlaying?.(void 0);
     }
   }
   applyBackpressure(stream) {
@@ -433,6 +447,8 @@ class MusicPlayer {
     const next = this.queue.shift();
     if (next) {
       this.startStream(next, 0);
+    } else {
+      this.params.onNowPlaying?.(void 0);
     }
     return next;
   }
@@ -620,5 +636,6 @@ export {
   MUSIC_FRAME_MS,
   MUSIC_FRAME_SAMPLES,
   MusicError,
-  MusicPlayer
+  MusicPlayer,
+  formatNowPlayingDescription
 };

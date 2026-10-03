@@ -1,5 +1,13 @@
 # image/suno-api — the house band's generator (PHA-3554)
 
+> **PHA-3791: built into the one image.** The Dockerfile's `suno-builder` stage
+> checks out upstream at a2e6a82 and applies `phattbeats.patch`, which is the
+> exact diff the hand-built `suno-api` container ran (the 2026 UI selectors
+> `patch-new-ui.py` used to apply, Turnstile via 2Captcha, the v2-web path,
+> the proxy, the decrypted-audio route). It runs as program `suno-api` on
+> `127.0.0.1:3000`, secrets from `/config/suno-api.env`. `deploy.sh` and
+> `patch-new-ui.py` are gone.
+
 Brandon, 2026-09-18, after MiniMax closed its Music API to the account
 (HTTP 410 / status 2153 on every model id, "existing paying customers only"):
 

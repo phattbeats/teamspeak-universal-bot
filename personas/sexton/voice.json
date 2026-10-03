@@ -1,6 +1,9 @@
 {
-  "voiceId": null,
-  "wakeNames": [],
+  "voiceId": "English_WiseScholar",
+  "wakeNames": [
+    "Sexton",
+    "Henchman"
+  ],
   "wakeAliases": [
     "section",
     "sections",
@@ -8,14 +11,23 @@
     "sexin",
     "saxton",
     "sex ton",
-    "sex done"
+    "sex done",
+    "sexting",
+    "sextin",
+    "sextant",
+    "sexten",
+    "texton",
+    "sextons"
   ],
   "excludeWakeNames": [
     "Bexton",
     "band leader",
     "maestro",
+    "Lexton",
+    "Lexton Luthor",
     "Rotten Johnny",
     "Johnny",
     "Trixie"
-  ]
+  ],
+  "followUpSilenceMs": 15000
 }

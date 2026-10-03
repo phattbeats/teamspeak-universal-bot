@@ -23,6 +23,7 @@ vi.mock("../src/runtime.js", () => ({
   }),
 }));
 
+const { runWithTeamSpeakTurnContext } = await import("../src/tools/turn-context.js");
 const {
   createTeamSpeakPersonaTools,
   SHOW_PERSONA_TOOL,
@@ -94,6 +95,24 @@ describe("persona tools", () => {
     expect(result.ok).toBe(true);
     const cfg = runtimeState.cfg as any;
     expect(cfg.channels.teamspeak.voice.wakeNames.sort()).toEqual(["Sexton", "sexton"]);
+  });
+
+  it("one gateway, several bots: tools act on the turn's own account and agent (PHA-3791)", async () => {
+    runtimeState.cfg = {
+      bindings: [
+        { agentId: "sexton", match: { channel: "teamspeak", accountId: "sexton" } },
+        { agentId: "bexton", match: { channel: "teamspeak", accountId: "bexton" } },
+      ],
+      channels: { teamspeak: { accounts: { sexton: { voice: {} }, bexton: { voice: {} } } } },
+    };
+    const turn = { accountId: "bexton", clientId: 7, nickname: "Brandon" };
+    const shown = await runWithTeamSpeakTurnContext(turn, () => callTool(SHOW_PERSONA_TOOL, {}));
+    expect(shown.agentId).toBe("bexton");
+    await runWithTeamSpeakTurnContext(turn, () => callTool(SET_FOLLOW_UP_WINDOW_TOOL, { seconds: 9 }));
+    const ts = (runtimeState.cfg.channels as any).teamspeak;
+    expect(ts.accounts.bexton.voice.followUpSilenceMs).toBe(9000);
+    expect(ts.accounts.sexton.voice.followUpSilenceMs).toBeUndefined();
+    expect(ts.voice).toBeUndefined();
   });
 
   it("set_follow_up_window converts seconds to milliseconds", async () => {

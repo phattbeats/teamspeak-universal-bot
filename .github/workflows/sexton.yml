@@ -16,6 +16,9 @@ on:
       - "sexton/**"
       - "teamspeak-plugin/**"
       - "image/**"
+      - "personas/**"
+      - "ts-summoner/**"
+      - "whisper/**"
       - ".github/workflows/sexton.yml"
   pull_request:
     branches: [main]
@@ -23,6 +26,9 @@ on:
       - "sexton/**"
       - "teamspeak-plugin/**"
       - "image/**"
+      - "personas/**"
+      - "ts-summoner/**"
+      - "whisper/**"
   workflow_dispatch:
 
 jobs:
@@ -151,7 +157,8 @@ jobs:
     # job exists to give that specific change real CI coverage that doesn't
     # depend on the box having headroom on any given day.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # PHA-3791: + the suno-api stage (npm install, next build, chromium).
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -204,6 +211,22 @@ jobs:
           test -f index.ts
           test -f node_modules/ws/package.json
           echo ok
+
+  stack:
+    # PHA-3791: the one-container wiring (image/universal/stack.mjs), the
+    # summoner it now runs next to, and the whisper pool's coalescing proxy.
+    # Plain node:test, no deps.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Test
+        run: node --test image/universal/*.test.mjs ts-summoner/test/*.test.mjs whisper/*.test.mjs
 
   plugin:
     # PHA-3580: folded in from openclaw-teamspeak-plugin's own `test` workflow

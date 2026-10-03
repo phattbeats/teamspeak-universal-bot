@@ -9,8 +9,11 @@
   "excludeWakeNames": [
     "Sexton",
     "Henchman",
+    "Lexton",
+    "Lexton Luthor",
     "Rotten Johnny",
     "Johnny",
     "Trixie"
-  ]
+  ],
+  "followUpSilenceMs": 15000
 }

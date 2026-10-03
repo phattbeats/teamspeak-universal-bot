@@ -1,0 +1,328 @@
+diff --git a/package.json b/package.json
+index efd925e..17060f7 100644
+--- a/package.json
++++ b/package.json
+@@ -19,6 +19,7 @@
+     "@playwright/browser-chromium": "^1.49.1",
+     "@vercel/analytics": "^1.2.2",
+     "axios": "^1.7.8",
++    "https-proxy-agent": "^7.0.5",
+     "bufferutil": "^4.0.8",
+     "chromium-bidi": "^0.10.1",
+     "cookie": "^1.0.2",
+diff --git a/src/app/api/audio/[id]/route.ts b/src/app/api/audio/[id]/route.ts
+new file mode 100644
+index 0000000..5472989
+--- /dev/null
++++ b/src/app/api/audio/[id]/route.ts
+@@ -0,0 +1,32 @@
++import { NextResponse, NextRequest } from "next/server";
++import { cookies } from 'next/headers'
++import { sunoApi } from "@/lib/SunoApi";
++import { corsHeaders } from "@/lib/utils";
++
++export const dynamic = "force-dynamic";
++
++// PHA-3554: serve a clip's media with Suno's playback encryption undone
++// (SunoApi.decryptedAudio), so a plain HTTP client can play the song.
++export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
++  const id = String(params?.id || '');
++  if (!/^[0-9a-f-]{36}$/i.test(id)) {
++    return new NextResponse(JSON.stringify({ error: 'bad clip id' }), { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
++  }
++  try {
++    const { bytes, contentType } = await (await sunoApi((await cookies()).toString())).decryptedAudio(id);
++    return new NextResponse(bytes, {
++      status: 200,
++      headers: { 'Content-Type': contentType, 'Content-Length': String(bytes.length), 'Cache-Control': 'private, max-age=3600', ...corsHeaders }
++    });
++  } catch (error: any) {
++    console.error('Error serving audio:', error);
++    return new NextResponse(JSON.stringify({ error: 'Internal server error. ' + (error?.message ?? error) }), {
++      status: 500,
++      headers: { 'Content-Type': 'application/json', ...corsHeaders }
++    });
++  }
++}
++
++export async function OPTIONS(request: Request) {
++  return new Response(null, { status: 200, headers: corsHeaders });
++}
+diff --git a/src/lib/SunoApi.ts b/src/lib/SunoApi.ts
+index cad506e..7fd66ad 100644
+--- a/src/lib/SunoApi.ts
++++ b/src/lib/SunoApi.ts
+@@ -8,6 +8,8 @@ import { randomUUID } from 'node:crypto';
+ import { Solver } from '@2captcha/captcha-solver';
+ import { paramsCoordinates } from '@2captcha/captcha-solver/dist/structs/2captcha';
+ import { BrowserContext, Page, Locator, chromium, firefox } from 'rebrowser-playwright-core';
++import { HttpsProxyAgent } from 'https-proxy-agent';
++
+ import { createCursor, Cursor } from 'ghost-cursor-playwright';
+ import { promises as fs } from 'fs';
+ import path from 'node:path';
+@@ -20,6 +22,21 @@ globalForSunoApi.sunoApiCache = cache;
+ const logger = pino();
+ export const DEFAULT_MODEL = 'chirp-v3-5';
+ 
++/** PHA-3554: Suno's audio_url is an /api/forbidden placeholder since 2026-08; the file is in media_urls. */
++export const pickAudioUrl = (clip: any): string | undefined => {
++  const direct = typeof clip?.audio_url === 'string' ? clip.audio_url : '';
++  const media: any[] = Array.isArray(clip?.media_urls) ? clip.media_urls : [];
++  const pick = media.find((m) => m?.url && m.delivery === 'progressive') ?? media.find((m) => m?.url);
++  if (pick?.url && pick.encoding) {
++    // Encrypted ("Mango"). Serve it decrypted from this server, see /api/audio/[id].
++    const base = (process.env.SUNO_API_PUBLIC_URL || 'http://suno-api:3000').replace(/\/+$/, '');
++    return `${base}/api/audio/${clip.id}`;
++  }
++  if (pick?.url) return pick.url; // the whole file, no auth, no expiry seen
++  if (direct && !direct.endsWith('/api/forbidden')) return direct; // audiopipe stream while still rendering
++  return undefined;
++};
++
+ export interface AudioInfo {
+   id: string; // Unique identifier for the audio
+   title?: string; // Title of the audio
+@@ -91,13 +108,27 @@ class SunoApi {
+       headers: {
+         'Affiliate-Id': 'undefined',
+         'Device-Id': `"${this.deviceId}"`,
+-        'x-suno-client': 'Android prerelease-4nt180t 1.0.42',
+-        'X-Requested-With': 'com.suno.android',
+-        'sec-ch-ua': '"Chromium";v="130", "Android WebView";v="130", "Not?A_Brand";v="99"',
+-        'sec-ch-ua-mobile': '?1',
+-        'sec-ch-ua-platform': '"Android"',
++        // PHA-3590: present as the suno.com web client, not the Android app.
++        // The Turnstile token we submit is solved against the *web* GEN
++        // sitekey on suno.com/create; pairing it with Android-app headers is
++        // an inconsistency Suno's token validation can see. The web client's
++        // own request shape (Origin/Referer + desktop UA, /generate/v2-web/)
++        // returned 200 on every attempt during the 2026-09-19 failure window.
++        'Origin': 'https://suno.com',
++        'Referer': 'https://suno.com/create',
++        'sec-ch-ua': '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
++        'sec-ch-ua-mobile': '?0',
++        'sec-ch-ua-platform': '"macOS"',
+         'User-Agent': this.userAgent
+-      }
++      },
++      // PHA-3590: pin outbound requests to the same proxy IP the Turnstile
++      // solve uses, so Suno's backend sees one consistent origin IP. axios's
++      // native `proxy` option doesn't CONNECT-tunnel HTTPS correctly (sends
++      // plain HTTP to the HTTPS port); HttpsProxyAgent does it right.
++      ...(process.env.PROXY_HOST ? {
++        proxy: false,
++        httpsAgent: new HttpsProxyAgent(`http://${process.env.PROXY_USER}:${process.env.PROXY_PASS}@${process.env.PROXY_HOST}:${process.env.PROXY_PORT}`)
++      } : {})
+     });
+     this.client.interceptors.request.use(config => {
+       if (this.currentToken && !config.headers.Authorization)
+@@ -305,6 +336,48 @@ class SunoApi {
+    * @returns {string|null} hCaptcha token. If no verification is required, returns null
+    */
+   public async getCaptcha(): Promise<string|null> {
++    // PHA-3554: Suno gates /api/generate/v2/ with Cloudflare Turnstile now
++    // (sitekey below, "interaction-only"), not hCaptcha. Headless chromium
++    // never passes it, but 2Captcha solves Turnstile from the sitekey + page
++    // URL alone and the resulting token is accepted by generate/v2 as
++    // `token`. So: no browser, no DOM selectors. ~$0.0015 and ~5-15 s per song.
++    const sitekey = process.env.SUNO_TURNSTILE_SITEKEY || '0x4AAAAAADI7xDNyj-3LcIbi';
++    const pageurl = 'https://suno.com/create';
++    const key = process.env.TWOCAPTCHA_KEY + '';
++    const base = 'https://2captcha.com';
++    let lastErr: any = null;
++    for (let attempt = 0; attempt < 3; attempt++) {
++      try {
++        logger.info('Requesting a Turnstile token from 2Captcha');
++        const inParams: Record<string, string> = { key, method: 'turnstile', sitekey, pageurl, json: '1' };
++        if (process.env.PROXY_HOST) {
++          inParams.proxy = `${process.env.PROXY_USER}:${process.env.PROXY_PASS}@${process.env.PROXY_HOST}:${process.env.PROXY_PORT}`;
++          inParams.proxytype = 'HTTP';
++        }
++        const inRes: any = await fetch(`${base}/in.php?` + new URLSearchParams(inParams)).then((r) => r.json());
++        if (inRes.status !== 1) throw new Error('2Captcha in.php: ' + JSON.stringify(inRes));
++        const id = String(inRes.request);
++        const started = Date.now();
++        while (Date.now() - started < 180000) {
++          await sleep(5, 5);
++          const res: any = await fetch(`${base}/res.php?` + new URLSearchParams({ key, action: 'get', id, json: '1' })).then((r) => r.json());
++          if (res.status === 1) {
++            logger.info(`Turnstile token received after ${Math.round((Date.now() - started) / 1000)}s`);
++            return String(res.request);
++          }
++          if (res.request !== 'CAPCHA_NOT_READY') throw new Error('2Captcha res.php: ' + JSON.stringify(res));
++        }
++        throw new Error('2Captcha: no Turnstile token within 180s');
++      } catch (err: any) {
++        lastErr = err;
++        logger.info('Turnstile attempt ' + (attempt + 1) + ' failed: ' + err.message);
++      }
++    }
++    throw lastErr;
++  }
++
++  /** PHA-3554: the browser-driven hCaptcha flow this replaced. Unused; kept for diffing against upstream. */
++  public async getCaptchaLegacy(): Promise<string|null> {
+     if (!await this.captchaRequired())
+       return null;
+ 
+@@ -315,7 +388,7 @@ class SunoApi {
+ 
+     logger.info('Waiting for Suno interface to load');
+     // await page.locator('.react-aria-GridList').waitFor({ timeout: 60000 });
+-    await page.waitForResponse('**/api/project/**\\?**', { timeout: 60000 }); // wait for song list API call
++    await page.waitForResponse((r: any) => r.url().includes('/api/project/'), { timeout: 60000 }).catch(() => logger.info('song list call not seen in 60s; continuing')); // PHA-3554: new UI may load /api/project/me with no query
+ 
+     if (this.ghostCursorEnabled)
+       this.cursor = await createCursor(page);
+@@ -326,11 +399,11 @@ class SunoApi {
+       // await this.click(page, { x: 318, y: 13 });
+     } catch(e) {}
+ 
+-    const textarea = page.locator('.custom-textarea');
++    const textarea = page.locator('.custom-textarea, textarea[maxlength], textarea:visible').first(); // PHA-3554: new UI
+     await this.click(textarea);
+     await textarea.pressSequentially('Lorem ipsum', { delay: 80 });
+ 
+-    const button = page.locator('button[aria-label="Create"]').locator('div.flex');
++    const button = page.locator('button[aria-label="Create song"], button[aria-label="Create"]').first(); // PHA-3554: new UI
+     this.click(button);
+ 
+     const controller = new AbortController();
+@@ -419,6 +492,7 @@ class SunoApi {
+           browser.browser()?.close();
+           controller.abort();
+           const request = route.request();
++          try { const b = request.postDataJSON() || {}; logger.info('generate/v2 body keys: ' + Object.keys(b).join(',') + ' project_id=' + String(b.project_id)); } catch (e) {}
+           this.currentToken = request.headers().authorization.split('Bearer ').pop();
+           resolve(request.postDataJSON().token);
+         } catch(err) {
+@@ -428,6 +502,36 @@ class SunoApi {
+     }));
+   }
+ 
++  /** PHA-3554: fetch a clip's media and undo Suno's playback encryption the way the web player does. */
++  public async decryptedAudio(clipId: string): Promise<{ bytes: Buffer; contentType: string }> {
++    await this.keepAlive();
++    const token = this.currentToken + '';
++    const feed = await this.client.get(`${SunoApi.BASE_URL}/api/feed/v2?ids=${clipId}`);
++    const clip = (Array.isArray(feed.data) ? feed.data : feed.data?.clips ?? [])[0];
++    if (!clip) throw new Error('clip not found: ' + clipId);
++    const media: any[] = Array.isArray(clip.media_urls) ? clip.media_urls : [];
++    const item = media.find((m) => m?.url && m.delivery === 'progressive') ?? media.find((m) => m?.url);
++    if (!item) throw new Error('clip has no media yet: ' + clipId + ' (status ' + clip.status + ')');
++    const raw = Buffer.from((await axios.get(item.url, { responseType: 'arraybuffer' })).data);
++    const contentType = String(item.content_type || '').startsWith('webm') ? 'audio/webm' : 'audio/mp4';
++    if (!item.encoding) return { bytes: raw, contentType };
++    const subtle = globalThis.crypto.subtle;
++    const rights = (await this.client.post(`${SunoApi.BASE_URL}/api/mango/rights`,
++      { content_params: { content_id: clipId, content_type: 'clip' } },
++      { headers: { Authorization: `Bearer ${token}` } })).data;
++    const userKey = await subtle.importKey('raw', await subtle.digest('SHA-256', new TextEncoder().encode(token)), { name: 'AES-GCM' }, false, ['decrypt']);
++    const unwrap = async (b64: string) => {
++      const w = Buffer.from(b64, 'base64');
++      return new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: w.subarray(0, 12), additionalData: new TextEncoder().encode(clipId) }, userKey, w.subarray(12)));
++    };
++    const ctrKey = await subtle.importKey('raw', await unwrap(rights.key), { name: 'AES-CTR' }, false, ['decrypt']);
++    const counter = new Uint8Array(16);
++    counter.set((await unwrap(rights.iv)).subarray(0, 16));
++    const dec = await subtle.decrypt({ name: 'AES-CTR', counter, length: 128 }, ctrKey, raw);
++    logger.info(`decrypted ${raw.length} bytes of ${item.content_type} for clip ${clipId}`);
++    return { bytes: Buffer.from(dec), contentType };
++  }
++
+   /**
+    * Imitates Cloudflare Turnstile loading error. Unused right now, left for future
+    */
+@@ -568,6 +672,7 @@ class SunoApi {
+       task: task,
+       token: await this.getCaptcha()
+     };
++    if (process.env.SUNO_PROJECT_ID) payload.project_id = process.env.SUNO_PROJECT_ID; // PHA-3554
+     if (isCustom) {
+       payload.tags = tags;
+       payload.title = title;
+@@ -593,13 +698,33 @@ class SunoApi {
+           2
+         )
+     );
+-    const response = await this.client.post(
+-      `${SunoApi.BASE_URL}/api/generate/v2/`,
+-      payload,
+-      {
+-        timeout: 10000 // 10 seconds timeout
++    // PHA-3590: suno.com's own client posts to /generate/v2-web/ now (its
++    // GEN_ENDPOINT constant); /generate/v2/ is the legacy path. Also retry
++    // once with a freshly solved Turnstile token on token_validation_failed:
++    // 2Captcha tokens come from a shared worker pool and an individual token
++    // can be rejected while the next one passes.
++    const generatePath = process.env.SUNO_GENERATE_PATH || '/api/generate/v2-web/';
++    let response: any;
++    for (let attempt = 0; ; attempt++) {
++      try {
++        response = await this.client.post(
++          `${SunoApi.BASE_URL}${generatePath}`,
++          payload,
++          {
++            timeout: 10000 // 10 seconds timeout
++          }
++        );
++        break;
++      } catch (err: any) {
++        const errType = err?.response?.data?.error_type;
++        if (attempt < 2 && err?.response?.status === 422 && errType === 'token_validation_failed') {
++          logger.info(`generate ${generatePath} rejected the Turnstile token (attempt ${attempt + 1}); re-solving and retrying`);
++          payload.token = await this.getCaptcha();
++          continue;
++        }
++        throw err;
+       }
+-    );
++    }
+     if (response.status !== 200) {
+       throw new Error('Error response:' + response.statusText);
+     }
+@@ -609,10 +734,10 @@ class SunoApi {
+       const startTime = Date.now();
+       let lastResponse: AudioInfo[] = [];
+       await sleep(5, 5);
+-      while (Date.now() - startTime < 100000) {
++      while (Date.now() - startTime < 300000) { // PHA-3554: was 100 s, v6 songs take longer
+         const response = await this.get(songIds);
+         const allCompleted = response.every(
+-          (audio) => audio.status === 'streaming' || audio.status === 'complete'
++          (audio) => audio.status === 'complete' // PHA-3554: was streaming||complete
+         );
+         const allError = response.every((audio) => audio.status === 'error');
+         if (allCompleted || allError) {
+@@ -629,7 +754,7 @@ class SunoApi {
+         title: audio.title,
+         image_url: audio.image_url,
+         lyric: audio.metadata.prompt,
+-        audio_url: audio.audio_url,
++        audio_url: pickAudioUrl(audio), // PHA-3554
+         video_url: audio.video_url,
+         created_at: audio.created_at,
+         model_name: audio.model_name,
+@@ -790,7 +915,7 @@ class SunoApi {
+       lyric: audio.metadata.prompt
+         ? this.parseLyrics(audio.metadata.prompt)
+         : '',
+-      audio_url: audio.audio_url,
++      audio_url: pickAudioUrl(audio), // PHA-3554
+       video_url: audio.video_url,
+       created_at: audio.created_at,
+       model_name: audio.model_name,
+diff --git a/src/lib/utils.ts b/src/lib/utils.ts
+index 0fb70a1..4e2b1a3 100644
+--- a/src/lib/utils.ts
++++ b/src/lib/utils.ts
+@@ -37,7 +37,7 @@ export const isPage = (target: any): target is Page => {
+  */
+ export const waitForRequests = (page: Page, signal: AbortSignal): Promise<void> => {
+   return new Promise((resolve, reject) => {
+-    const urlPattern = /^https:\/\/img[a-zA-Z0-9]*\.hcaptcha\.com\/.*$/;
++    const urlPattern = /^https:\/\/[^/]*hcaptcha[^/]*\/.*$/; // PHA-3554: Suno fronts hCaptcha with its own hosts
+     let timeoutHandle: NodeJS.Timeout | null = null;
+     let activeRequestCount = 0;
+     let requestOccurred = false;

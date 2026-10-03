@@ -1,4 +1,4 @@
-# plnt-sexton
+# teamspeak-universal-bot
 
 The Sexton: a bot that gives teamspeak.phatt.vip's channel chat memory, voice,
 and a handful of tools. Tracked as the PHA-3099 epic in Paperclip.
@@ -9,13 +9,21 @@ and is the platform the later voice/tool work builds on.
 
 ## Deploy
 
-Everything ships as **one container** (PHA-3428): the bot, the audio bridge,
-a local whisper.cpp with its weights baked in, and the music lane's tooling,
-supervised so one process dying does not drop the rest. Build it with
-`image/build.sh` and deploy it with `image/deploy.sh` (or the Unraid template
-in `image/unraid-sexton.xml`) — see [`image/README.md`](image/README.md),
-which also records why the OpenClaw channel plugin stays in the main gateway
-rather than moving in here.
+Everything ships as **one container** (PHA-3791): every bot (Sexton, Bexton,
+Lexton and the guest stars Rotten Johnny and Trixie) under one OpenClaw
+gateway, each with its own TeamSpeak identity, plus the whisper pool,
+suno-api, the POT provider and ts-summoner, all supervised in one place.
+
+```
+image/build.sh                   # on PHATT-RAID; tags phattbeats/teamspeak-universal-bot:<git sha>
+TAG=<sha> image/deploy.sh        # (re)creates the teamspeak-universal-bot container
+```
+
+A bot is a persona pack: `personas/<id>/` (workspace markdown, `voice.json`,
+`tools.json`, lines, moods, avatar). Add one (or drop it into
+`/config/personas/<id>/` on the box) and the next boot gives it a core, a
+bridge port, a gateway account, an agent and a summoner entry. See
+[`image/README.md`](image/README.md).
 
 ## Scope
 

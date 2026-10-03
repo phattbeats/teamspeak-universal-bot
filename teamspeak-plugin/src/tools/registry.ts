@@ -943,8 +943,8 @@ async function dispatch(
       return await summonerAction(
         deps.config?.summoner,
         name === SUMMON_BOT_TOOL ? "summon" : "dismiss",
-        readString(args.name) ?? (name === DISMISS_BOT_TOOL ? selfBotId() : ""),
-        `${selfBotId()} for ${context.nickname}`,
+        readString(args.name) ?? (name === DISMISS_BOT_TOOL ? selfBotId(deps.config?.summoner) : ""),
+        `${selfBotId(deps.config?.summoner)} for ${context.nickname}`,
       );
     default:
       return { ok: false, error: `Unknown TeamSpeak tool "${name}".` };
