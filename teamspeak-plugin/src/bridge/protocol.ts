@@ -55,6 +55,9 @@ export const TYPE_SERVER_GROUP_ADD_CLIENT = 0x94;
 /** Ask for the current channel tree; the bridge answers with `TYPE_CHANNEL_TREE` (PHA-3784). */
 export const TYPE_LIST_CHANNELS = 0x95;
 
+/** Set the bot's own client description; `""` clears it (PHA-3857: music now-playing). */
+export const TYPE_SET_DESCRIPTION = 0x96;
+
 const FRAME_PREFIX_BYTES = 5;
 
 export type TeamSpeakClientId = number;

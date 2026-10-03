@@ -58,6 +58,9 @@ pub const TYPE_SERVER_GROUP_ADD_CLIENT: u8 = 0x94;
 /// PHA-3784: ask for the full channel tree (answered with `TYPE_CHANNEL_TREE`).
 pub const TYPE_LIST_CHANNELS: u8 = 0x95;
 
+/// PHA-3857: set the bot's own client description (music now-playing).
+pub const TYPE_SET_DESCRIPTION: u8 = 0x96;
+
 /// A decoded inbound frame, header-parsed but payload left raw. Same shape
 /// as `bridge_proto::RawFrame` — kept separate so the public WS protocol
 /// can evolve without touching the internal event/command vocabulary.
@@ -273,6 +276,12 @@ pub struct ServerGroupAddClientHeader {
     pub server_group_id: u64,
     #[serde(rename = "clientId")]
     pub client_id: u16,
+}
+
+/// PHA-3857: `set_description` — the bot's own description; `""` clears it.
+#[derive(Deserialize)]
+pub struct SetDescriptionHeader {
+    pub description: String,
 }
 
 /// PCM16LE payload bytes -> i16 samples.
