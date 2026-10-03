@@ -400,7 +400,7 @@ COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json
 # overrides a pack without a rebuild. HUMAN.md is the shared tone for all.
 COPY personas/                        /opt/personas/
 COPY image/lexton/lexton-menace.cjs   /opt/sexton-menace/lexton-menace.cjs
-COPY image/universal/stack.mjs image/universal/env-exec.mjs /opt/universal/
+COPY image/universal/stack.mjs image/universal/env-exec.mjs image/universal/migrate.mjs /opt/universal/
 COPY image/universal/supervisord.conf /etc/supervisor/universal.conf
 COPY image/universal/run-universal.sh /usr/local/bin/run-universal
 COPY image/universal/run-summoner.sh  /usr/local/bin/run-summoner
