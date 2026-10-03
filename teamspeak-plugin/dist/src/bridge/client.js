@@ -23,6 +23,7 @@ import {
   TYPE_JOIN,
   TYPE_MODERATION_RESULT,
   TYPE_LIST_CHANNELS,
+  TYPE_SET_DESCRIPTION,
   TYPE_MUSIC_AUDIO,
   TYPE_MUSIC_GAIN,
   TYPE_MUTE,
@@ -158,6 +159,13 @@ class TeamSpeakBridgeClient {
    */
   listChannels() {
     this.send(encodeFrame(TYPE_LIST_CHANNELS, {}));
+  }
+  /**
+   * Set the bot's own client description (PHA-3857). The PLNT overlay shows
+   * a description starting with `♪` as the bot's now-playing line. No reply.
+   */
+  setDescription(description) {
+    this.send(encodeFrame(TYPE_SET_DESCRIPTION, { description }));
   }
   send(frame) {
     if (!this.socket || !this.connected) {

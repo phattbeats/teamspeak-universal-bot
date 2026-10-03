@@ -15,7 +15,10 @@ import { BandLeader } from "../tools/band.js";
 import { createSongGenerator } from "../tools/band-generators.js";
 import { Announcer } from "./announcer.js";
 import { bridgePcmDurationMs, chunkBridgePcm } from "./audio.js";
-import { MusicPlayer } from "../tools/music.js";
+import {
+  formatNowPlayingDescription,
+  MusicPlayer
+} from "../tools/music.js";
 import { VillainController } from "../tools/villain.js";
 import { selfBotId, summonerAction } from "../tools/summoner.js";
 import {
@@ -79,6 +82,7 @@ class TeamSpeakVoiceRuntime {
           this.sessions.closeAll(`bridge-disconnected:${reason}`);
           this.playback.handleBargeIn("bridge-disconnected", { force: true });
           this.music?.stop(`bridge-disconnected:${reason}`);
+          this.publishedDescription = void 0;
           this.state = { ...this.state, connected: false };
         },
         onState: (state) => {
@@ -159,6 +163,8 @@ class TeamSpeakVoiceRuntime {
   playback;
   sessions;
   music;
+  /** Last description sent to the bridge; undefined = unknown, send the next one. */
+  publishedDescription;
   band;
   announcer;
   tools;
@@ -272,6 +278,18 @@ class TeamSpeakVoiceRuntime {
     }
     this.selfClientId = ownClientId;
     this.sessions.applyRoster(this.sessions.rosterEntries());
+    if (this.music) {
+      this.publishNowPlaying(this.music.nowPlaying);
+    }
+  }
+  /** The bot's `♪ <title>` description for the PLNT overlay (PHA-3857). */
+  publishNowPlaying(track) {
+    const description = formatNowPlayingDescription(track);
+    if (description === this.publishedDescription) {
+      return;
+    }
+    this.publishedDescription = description;
+    this.bridge.setDescription(description);
   }
   /**
    * Ask the bridge for the full channel tree and wait for the answer
@@ -316,6 +334,7 @@ class TeamSpeakVoiceRuntime {
     return new MusicPlayer({
       config: this.params.config.tools?.music,
       sink,
+      onNowPlaying: (track) => this.publishNowPlaying(track),
       ...this.params.log ? { log: this.params.log } : {}
     });
   }
