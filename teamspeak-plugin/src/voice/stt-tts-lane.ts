@@ -211,7 +211,12 @@ export function createSttTtsLane(
   // Shared by every speaker session this account opens, so the in-flight cap
   // is per-bot: whisper.cpp's own decode slot is one process, shared the same
   // way (PHA-3607).
-  transcriber = new ConcurrencyLimitedTranscriber(transcriber, 1, 1, params.log);
+  // PHA-3921: 2 in flight + 2 queued, matching the shared pool's two workers.
+  // At 1/1 a busy room evicted ~3000 segments a day on sexton alone (speech
+  // the bot never heard). Peak CPU is bounded by the pool (2 workers, each
+  // serialised), not by this cap, and the pool's proxy shares one decode
+  // across every bot, so the higher cap buys recall, not load.
+  transcriber = new ConcurrencyLimitedTranscriber(transcriber, 2, 2, params.log);
   const synthesizer =
     params.deps?.createSynthesizer?.() ??
     new RuntimeSpeechSynthesizer({
