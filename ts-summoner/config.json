@@ -94,9 +94,10 @@
     "enabled": true,
     "maxPerNight": 2,
     "minGapMin": 75,
-    "meanEligibleMin": 150,
+    "meanEligibleMin": 40,
     "minHumans": 1,
-    "recentTalkMin": 20,
+    "recentTalkMin": 45,
+    "quietMin": 5,
     "dropIn": true,
     "pairs": [
       [

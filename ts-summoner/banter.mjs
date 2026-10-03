@@ -7,8 +7,10 @@
 // live/scenes.json under `banter:<a>+<b>` (ids sorted), so they're edited
 // live like every other scene.
 //
-// The dice: while the room has humans who've talked recently and nothing
-// else is on stage, every reconcile rolls a hazard-rate chance. A hard cap
+// The dice: while the room has humans who've talked recently but have gone
+// quiet for a few minutes, nobody is streaming, and nothing else is on stage,
+// every reconcile rolls a hazard-rate chance. A bit fills a lull; it never
+// cuts into a conversation or a stream (Brandon, 2026-10-03). A hard cap
 // per night (service day, flips at 06:00) and a minimum gap keep it to "no
 // more than a couple times a night". A pair that's both in the room is
 // preferred; otherwise one of them can drop in for the bit and leave after
@@ -24,9 +26,10 @@ export function banterConfig(raw = {}) {
     enabled: raw.enabled !== false,
     maxPerNight: raw.maxPerNight ?? 2,
     minGapMin: raw.minGapMin ?? 75,
-    meanEligibleMin: raw.meanEligibleMin ?? 150,
+    meanEligibleMin: raw.meanEligibleMin ?? 40,
     minHumans: raw.minHumans ?? 1,
-    recentTalkMin: raw.recentTalkMin ?? 20,
+    recentTalkMin: raw.recentTalkMin ?? 45,
+    quietMin: raw.quietMin ?? 5,
     dropIn: raw.dropIn !== false,
     pairs: Array.isArray(raw.pairs) ? raw.pairs : [['bexton', 'sexton'], ['bexton', 'lexton'], ['lexton', 'sexton']],
   };
@@ -42,14 +45,21 @@ export const playsOn = (plays, day) => (plays ?? []).filter((p) => p.day === day
  * May a bit start now? Plain values:
  *   { queryUp, humans, lastTalk (ms, voice or chat), stageBusy (another event,
  *     a scene, a guest), plays: [{ day, at, key }], day, now }
+ * Someone has to have talked in the last `recentTalkMin` (the room isn't
+ * AFK), but nobody in the last `quietMin` (it's a lull, not a conversation).
+ * Streams are checked separately, see isStreaming.
  */
 export function banterOpen(bc, x) {
   if (!bc.enabled || !x.queryUp || x.stageBusy || x.humans < bc.minHumans) return false;
   if (!x.lastTalk || x.now - x.lastTalk > bc.recentTalkMin * MIN) return false;
+  if (x.now - x.lastTalk < bc.quietMin * MIN) return false;
   if (playsOn(x.plays, x.day) >= bc.maxPerNight) return false;
   const last = Math.max(0, ...(x.plays ?? []).map((p) => p.at));
   return !last || x.now - last >= bc.minGapMin * MIN;
 }
+
+/** A `clientinfo` row says this client is streaming (TS6 screen share). */
+export const isStreaming = (info) => info?.client_is_streaming === '1';
 
 export const banterChance = (bc, tickSec) => tickChance(tickSec, bc.meanEligibleMin);
 
