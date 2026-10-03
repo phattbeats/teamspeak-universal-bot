@@ -23,7 +23,10 @@ NAME=${NAME:-whisper}
 NETWORK=${NETWORK:-phattvip}
 APPDATA=${APPDATA:-/mnt/user/appdata/whisper}
 WORKERS=${WORKERS:-2}
-THREADS=${THREADS:-4}
+# PHA-3921: 3 threads, not 4. With the coalescing proxy deduping across bots,
+# two workers x 3 threads (half of PHATT-RAID's 12) keep up; 4-thread decodes
+# on a box already loaded by other services mostly fought each other.
+THREADS=${THREADS:-3}
 MEMORY=${MEMORY:-1500m}
 VAD_MODEL_URL=${VAD_MODEL_URL:-https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin}
 
@@ -69,5 +72,5 @@ for _ in $(seq 1 30); do
   fi
 done
 docker logs "$NAME" 2>&1 | grep -E "run-whisper-pool|coalescing-proxy|VAD is enabled" | head -6
-echo "deploy: $NAME up on $NETWORK — both bots -> http://$NAME:8082/inference (coalescing proxy, PHA-3607)"
-echo "deploy: workers still reachable directly at :8080 (sexton) / :8081 (bexton) if WHISPER_COALESCE_ENABLED=0"
+echo "deploy: $NAME up on $NETWORK — every bot -> http://$NAME:8082/inference (coalescing proxy, PHA-3607)"
+echo "deploy: dedup rate: docker logs $NAME | grep coalescing-proxy: (one line a minute)"
