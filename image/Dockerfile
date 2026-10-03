@@ -232,6 +232,8 @@ RUN npm install --omit=dev --no-audit --no-fund \
 #     gateway image so its native modules match the node that runs it.
 #     Chromium comes the two ways the old image had it: the
 #     @playwright/browser-chromium postinstall and `playwright install`.
+#     --include=dev: the gateway image sets NODE_ENV=production, and the
+#     build needs tailwind and typescript.
 # --------------------------------------------------------------------------
 FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION} AS suno-builder
 USER root
@@ -248,7 +250,7 @@ RUN git init -q . \
     && git checkout -q FETCH_HEAD \
     && git apply /tmp/phattbeats.patch \
     && rm -rf .git \
-    && npm install --no-audit --no-fund \
+    && npm install --include=dev --no-audit --no-fund \
     && npm run build \
     && npm prune --omit=dev --no-audit --no-fund \
     && npx -y playwright install chromium \
