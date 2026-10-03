@@ -32,6 +32,15 @@
 > front, and point the bots at `:8080`/`:8081` directly again.
 > `whisper/coalescing-proxy.test.mjs` (`node --test`) covers the proxy in
 > isolation against two fake backends.
+>
+> **PHA-3921: the key is the clientId plus a hash of the form content**
+> (boundary ignored), so a hit means the same speaker, byte-identical audio and
+> the same decode options. Every bot (sexton, bexton, lexton, the guest slot)
+> points at `:8082`; the proxy shares one decode across all of them, keeps a
+> finished result answerable for `WHISPER_COALESCE_WINDOW_MS` (5000), and sends
+> fresh decodes to the least busy worker. `docker logs whisper | grep
+> coalescing-proxy:` prints `requests= decodes= coalesced=` once a minute, and
+> `GET :8082/coalesce-stats` returns the same counters as JSON.
 
 The `voice.mode=stt-tts` lane transcribes speaker audio here, on the TS6 host's
 own Docker network, and nowhere else.
