@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { banterConfig, banterKey, banterOpen, pickBanter, playsOn } from '../banter.mjs';
+import { banterConfig, banterKey, banterOpen, isStreaming, pickBanter, playsOn } from '../banter.mjs';
 import { parseStep } from '../story.mjs';
 
 const scenes = JSON.parse(readFileSync(new URL('../live/scenes.json', import.meta.url)));
@@ -10,7 +10,7 @@ const bc = banterConfig(cfg.banter);
 const has = (k) => Array.isArray(scenes[k]) && scenes[k].length > 0;
 const MIN = 60_000;
 const now = Date.UTC(2026, 9, 2, 2, 0);
-const open = (x) => banterOpen(bc, { queryUp: true, humans: 2, lastTalk: now - MIN, stageBusy: false, plays: [], day: '2026-10-01', now, ...x });
+const open = (x) => banterOpen(bc, { queryUp: true, humans: 2, lastTalk: now - 10 * MIN, stageBusy: false, plays: [], day: '2026-10-01', now, ...x });
 
 test('every configured pair has several long-ish scripts, every step a real bot line', () => {
   for (const [a, b] of bc.pairs) {
@@ -46,6 +46,19 @@ test('needs humans who are actually talking, and a free stage', () => {
   assert.equal(open({ lastTalk: 0 }), false);
   assert.equal(open({ stageBusy: true }), false);
   assert.equal(open({ queryUp: false }), false);
+});
+
+test('only in a lull: nobody talked for quietMin, but somebody did within recentTalkMin', () => {
+  assert.equal(open({ lastTalk: now - MIN }), false);
+  assert.equal(open({ lastTalk: now - 4 * MIN }), false);
+  assert.equal(open({ lastTalk: now - 5 * MIN }), true);
+  assert.equal(open({ lastTalk: now - 40 * MIN }), true);
+});
+
+test('a streaming client is spotted from clientinfo', () => {
+  assert.equal(isStreaming({ client_is_streaming: '1' }), true);
+  assert.equal(isStreaming({ client_is_streaming: '0' }), false);
+  assert.equal(isStreaming(undefined), false);
 });
 
 test('pair in the room beats a drop-in; Lexton can drop in on the Sexton', () => {

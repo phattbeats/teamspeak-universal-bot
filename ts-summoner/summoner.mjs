@@ -44,7 +44,7 @@ import { calledOut, isLate, jitterFor, overtimeOk, pickCover, quietOut, varietyC
 import {
   candidates as guestCandidates, guestConfig, guestIds, pickGuest, slotHolder, slotOpen, visitChance, visitLength,
 } from './guests.mjs';
-import { banterChance, banterConfig, banterKey, banterOpen, pickBanter } from './banter.mjs';
+import { banterChance, banterConfig, banterKey, banterOpen, isStreaming, pickBanter } from './banter.mjs';
 
 const CONFIG_PATH = process.env.SUMMONER_CONFIG || '/app/config.json';
 const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
@@ -715,7 +715,7 @@ function eventsTick(now) {
   takeoverTick(now, forced.takeover);
   benderTick(now, forced.bender);
   guestsTick(now);
-  banterTick(now);
+  banterTick(now).catch((e) => log('banter', e.message));
 }
 
 // ------------------------------------------------------------------ banter --
@@ -771,11 +771,38 @@ function startBanter(pick, now, why) {
   });
 }
 
-function banterTick(now) {
+// clientlist doesn't carry client_is_streaming; clientinfo does. Only asked
+// once the dice already said yes, so it's a handful of queries a night. If
+// the query fails we assume someone is streaming and skip.
+async function anyoneStreaming() {
+  if (!liveQuery) return true;
+  const humans = room.clients.filter((c) => c.client_type === '0' && !BOT_NICKS.has((c.client_nickname || '').toLowerCase()));
+  try {
+    for (const c of humans) {
+      const [info] = rows(await liveQuery.cmd(`clientinfo clid=${c.clid}`));
+      if (isStreaming(info)) return c.client_nickname || c.clid;
+    }
+    return false;
+  } catch (e) {
+    log('banter: stream check failed:', e.message);
+    return true;
+  }
+}
+
+let banterChecking = false;
+async function banterTick(now) {
   const lastTalk = Math.max(room.lastHumanTalk, room.lastChat);
   const day = serviceDay(now, cfg.tz).ymd;
+  if (banterChecking) return;
   if (!banterOpen(bc, { queryUp: room.queryUp, humans: room.humans, lastTalk, stageBusy: stageBusy(), plays: events.banter.plays, day, now })) return;
   if (Math.random() >= banterChance(bc, cfg.reconcileSec)) return;
+  banterChecking = true;
+  try {
+    const streamer = await anyoneStreaming();
+    if (streamer) { log(`banter: skipped, ${streamer === true ? 'stream check unavailable' : `${streamer} is streaming`}`); return; }
+  } finally { banterChecking = false; }
+  // Re-check: someone may have spoken, or a scene started, while we asked.
+  if (!banterOpen(bc, { queryUp: room.queryUp, humans: room.humans, lastTalk: Math.max(room.lastHumanTalk, room.lastChat), stageBusy: stageBusy(), plays: events.banter.plays, day, now: Date.now() })) return;
   const sc = scenes();
   const pick = pickBanter(bc, {
     present: banterPresent, canDrop: banterCanDrop,
