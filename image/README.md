@@ -1,4 +1,69 @@
-# image/ — the Sexton as one container (PHA-3428)
+# image/ — every TeamSpeak bot as one container (PHA-3791)
+
+Brandon, 2026-10-02/03: "since openclaw can handle multiple agents, cant they
+all be under one, expanding container?" ... "combine everything into one".
+
+```
+image/Dockerfile               the image: phattbeats/teamspeak-universal-bot
+image/build.sh                 build + verify it (on PHATT-RAID)
+image/deploy.sh                (re)create the teamspeak-universal-bot container
+image/universal/stack.mjs      bots.json + persona packs -> supervisor programs, summoner config, gateway accounts
+image/universal/migrate.mjs    one-time move from the old per-bot containers
+image/universal/supervisord.conf  PID 1 (the bots' programs are generated into /run/universal/bots.conf)
+image/run-*.sh, universal/run-*.sh  env -> argv wrappers for each program
+image/gateway/                 the gateway's seed config and core patches
+```
+
+## What runs in it
+
+| program | what | was |
+| --- | --- | --- |
+| `core-<id>` | one Rust core per bot: its TeamSpeak identity, nick, avatar, bridge socket on `127.0.0.1:91xx` | the `sexton`/`bexton`/`lexton`/`guest` containers |
+| `gateway` | ONE OpenClaw gateway: agent + `channels.teamspeak.accounts.<id>` + binding per bot | one gateway per container |
+| `whisper` | 2 whisper.cpp workers + the coalescing proxy on :8082 (PHA-3921) | the `whisper` container |
+| `pot` | bgutil POT provider for yt-dlp | per container |
+| `suno-api` | gcui-art/suno-api + `suno-api/phattbeats.patch`, chromium, on :3000 | the `suno-api` container |
+| `summoner` | ts-summoner: shifts, summons, scenes, guests; starts/stops `core-<id>` | the `ts-summoner` container |
+| `menace-<id>` | Lexton's menacing DMs, for a bot with `menace: true` | a program in `lexton` |
+
+## Volumes (`/mnt/user/appdata/teamspeak-universal-bot`)
+
+| path | holds |
+| --- | --- |
+| `config/bots.json` | which bots run; bridge ports (assigned once, never move); `identity` sharing (the guests share one); `menace`, `noCatchup`, `noWelcome`, `autostart`, `nick`, `env` |
+| `config/bots/<id>/` | `sexton-id.txt` (the TeamSpeak identity), `.announce`, `.off-duty`, band songs, villain state |
+| `config/openclaw/` | the gateway's `openclaw.json`, agents (transcripts), workspaces |
+| `config/summoner/` | `config.json` (shifts etc., editable), `live/`, `state/`, `query-pass.txt` |
+| `config/suno-api.env` | Suno cookie, 2Captcha key, proxy (0600) |
+| `config/personas/<id>/` | optional: a pack added or overridden without a rebuild |
+| `logs/<id>/` | each core's room log |
+
+## Adding a bot
+
+Drop a pack in `personas/<id>/` (rebuild) or `config/personas/<id>/` (no
+rebuild) with at least a `voice.json`, then restart the container. stack.mjs
+adds it to `bots.json` with the next free port and seeds its workspace,
+agent, account and binding. The summoner keeps a bot it has no shifts for on
+duty around the clock; give it shifts in `config/summoner/config.json`. A new
+identity joins as an unprivileged client: add it to the Sexton server group
+(PHA-3793) if it needs moderation.
+
+What is seeded once (then the operator's): the workspace, the agent entry,
+the account's voice/tool tuning. What follows `bots.json` every boot: the
+bridge URL, announce/villain/log paths, the summoner URL and self id, the
+whisper/POT/suno URLs.
+
+## Tradeoffs (accepted 2026-10-03)
+
+One gateway restart takes every bot offline at once, any gateway config
+change that needs a restart bounces all of them, and the per-container CPU
+limits are gone. In exchange: one deploy, one config, one set of credentials,
+and a guest visit no longer restarts anything.
+
+---
+
+# History: the Sexton as one container (PHA-3428)
+
 
 Brandon's decision, 2026-09-12: the Sexton stack deploys as **one Docker
 container** on PHATT-RAID. One image, one container, one Unraid template entry.

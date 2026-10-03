@@ -1,5 +1,11 @@
 # whisper — the local STT lane (PHA-3228)
 
+> **PHA-3791: a program again, not a container.** `run-whisper-pool.sh` and
+> `coalescing-proxy.mjs` run as program `whisper` inside the one
+> `teamspeak-universal-bot` container (2 workers x 3 threads, proxy on
+> `127.0.0.1:8082`, the silero VAD model baked in). The history below explains
+> why the pool and the proxy exist.
+
 > **Back as a container since PHA-3598, as a pool.** PHA-3428 baked whisper.cpp
 > and `ggml-base.en.bin` into the `phattbeats/sexton` image and ran one server
 > inside each bot. With two bots in one channel that was two decoders doing the

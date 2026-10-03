@@ -1,5 +1,12 @@
 # ts-summoner (PHA-3821)
 
+> **PHA-3791: no longer a container.** It runs as program `summoner` inside the
+> one `teamspeak-universal-bot` container, with `local: true`: it starts and
+> stops each bot's `core-<id>` with a local `supervisorctl`, and each bot has its
+> own announce/off-duty files under `/config/bots/<id>/`. Its editable config
+> is `/config/summoner/config.json`; `image/universal/stack.mjs` adds the
+> wiring. The docker-exec mode below still works for the old layout.
+
 Shift schedule and chat summoning for the TeamSpeak bots, so none of them has to live in the server 24/7.
 
 - An invisible **SSH ServerQuery** login (`serveradmin`, port 10022 on the `phattvip` network only) reads channel and server chat and polls `clientlist -voice`.
