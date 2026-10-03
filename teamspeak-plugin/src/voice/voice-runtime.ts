@@ -30,7 +30,13 @@ import { Announcer } from "./announcer.js";
 import { bridgePcmDurationMs, chunkBridgePcm } from "./audio.js";
 import type { SpeechSynthesisOutcome } from "./speech.js";
 import type { ReadChannelLog } from "../tools/catch-up.js";
-import { MusicPlayer, type MusicController, type MusicSink } from "../tools/music.js";
+import {
+  formatNowPlayingDescription,
+  MusicPlayer,
+  type MusicController,
+  type MusicSink,
+  type MusicTrack,
+} from "../tools/music.js";
 import { VillainController } from "../tools/villain.js";
 import { selfBotId, summonerAction } from "../tools/summoner.js";
 import {
@@ -147,6 +153,8 @@ export class TeamSpeakVoiceRuntime {
   private readonly playback: RoomPlaybackQueue;
   private readonly sessions: SpeakerSessionManager;
   private readonly music: MusicController | undefined;
+  /** Last description sent to the bridge; undefined = unknown, send the next one. */
+  private publishedDescription: string | undefined;
   private readonly band: BandController | undefined;
   private readonly announcer: Announcer | undefined;
   private readonly tools: TeamSpeakRealtimeToolRegistration | undefined;
@@ -214,6 +222,8 @@ export class TeamSpeakVoiceRuntime {
           // Music is paced against a socket that no longer exists; a reconnect
           // would resume mid-track with the wrong clock, so end the track.
           this.music?.stop(`bridge-disconnected:${reason}`);
+          // The clear above went nowhere; the next session re-publishes.
+          this.publishedDescription = undefined;
           this.state = { ...this.state, connected: false };
         },
         onState: (state) => {
@@ -399,6 +409,21 @@ export class TeamSpeakVoiceRuntime {
     }
     this.selfClientId = ownClientId;
     this.sessions.applyRoster(this.sessions.rosterEntries());
+    // TeamSpeak keeps a client's description across sessions, so a bot that
+    // died mid-track would come back still claiming it. Re-state it.
+    if (this.music) {
+      this.publishNowPlaying(this.music.nowPlaying);
+    }
+  }
+
+  /** The bot's `♪ <title>` description for the PLNT overlay (PHA-3857). */
+  private publishNowPlaying(track: MusicTrack | undefined): void {
+    const description = formatNowPlayingDescription(track);
+    if (description === this.publishedDescription) {
+      return;
+    }
+    this.publishedDescription = description;
+    this.bridge.setDescription(description);
   }
 
   /**
@@ -445,6 +470,7 @@ export class TeamSpeakVoiceRuntime {
     return new MusicPlayer({
       config: this.params.config.tools?.music,
       sink,
+      onNowPlaying: (track) => this.publishNowPlaying(track),
       ...(this.params.log ? { log: this.params.log } : {}),
     });
   }

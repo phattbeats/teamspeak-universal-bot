@@ -228,9 +228,34 @@ export type MusicPlayerParams = {
   setIntervalFn?: ((handler: () => void, ms: number) => unknown) | undefined;
   clearIntervalFn?: ((handle: unknown) => void) | undefined;
   log?: ((message: string) => void) | undefined;
+  /**
+   * Called with the track whenever one starts, and with `undefined` once the
+   * lane goes quiet (PHA-3857: the bot's `♪` description for the PLNT
+   * overlay). A replace or queue advance goes straight to the next track
+   * without an `undefined` in between; a `seek()` restart repeats the track.
+   */
+  onNowPlaying?: ((track: MusicTrack | undefined) => void) | undefined;
 };
 
 export class MusicError extends Error {}
+
+/** TeamSpeak caps `client_description` at 200 characters. */
+const MAX_DESCRIPTION_CHARS = 200;
+
+/**
+ * The bot's client description for a track (PHA-3857): `♪ <title>`, which the
+ * PLNT overlay reads as the bot's now-playing line. yt-dlp titles usually
+ * carry the artist already ("Artist - Song"); nothing else names one.
+ */
+export function formatNowPlayingDescription(track: MusicTrack | undefined): string {
+  if (!track) {
+    return "";
+  }
+  const chars = Array.from(`♪ ${track.title.replace(/\s+/g, " ").trim()}`);
+  return chars.length <= MAX_DESCRIPTION_CHARS
+    ? chars.join("")
+    : `${chars.slice(0, MAX_DESCRIPTION_CHARS - 1).join("")}…`;
+}
 
 const defaultRun: MusicCommandRunner = (command, args, options) =>
   new Promise((resolve) => {
@@ -457,6 +482,11 @@ export class MusicPlayer implements MusicController {
     this.params.log?.(
       `teamspeak music: stopped reason=${reason} track="${stream.track.title}" playedMs=${stream.framesSent * MUSIC_FRAME_MS}`,
     );
+    // A replace starts the next track right after this; let it overwrite the
+    // description instead of blanking it for one frame first.
+    if (reason !== "replaced") {
+      this.params.onNowPlaying?.(undefined);
+    }
     return true;
   }
 
@@ -612,6 +642,7 @@ export class MusicPlayer implements MusicController {
     // was last told, including one a previous `set_volume` left at 0.
     this.params.sink.setMusicGain(this.gain);
     stream.timer = this.setIntervalFn(() => this.pump(stream), MUSIC_FRAME_MS);
+    this.params.onNowPlaying?.(track);
     this.params.log?.(
       `teamspeak music: playing "${track.title}" request="${track.request}" volume=${this.gain}${startDelayMs > 0 ? ` startDelayMs=${startDelayMs}` : ""}${track.isFile ? " source=file" : ""}`,
     );
@@ -684,6 +715,8 @@ export class MusicPlayer implements MusicController {
         `teamspeak music: advancing to queued "${next.title}" remaining=${this.queue.length}`,
       );
       this.startStream(next, 0);
+    } else {
+      this.params.onNowPlaying?.(undefined);
     }
   }
 
@@ -739,6 +772,8 @@ export class MusicPlayer implements MusicController {
     const next = this.queue.shift();
     if (next) {
       this.startStream(next, 0);
+    } else {
+      this.params.onNowPlaying?.(undefined);
     }
     return next;
   }

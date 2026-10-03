@@ -12,6 +12,7 @@ import {
   TYPE_JOIN,
   TYPE_MUTE,
   TYPE_SEND_TEXT,
+  TYPE_SET_DESCRIPTION,
   TYPE_VOICE_AUDIO,
 } from "../src/bridge/protocol.js";
 import type { RosterEntry } from "../src/bridge/protocol.js";
@@ -264,6 +265,38 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
     harness.bridge.accept();
     harness.bridge.deliver({ type: "roster", roster: [rosterEntry(11, "brandon")] });
     expect(harness.runtime.snapshot().speakerSessions).toBe(1);
+  });
+
+  // PHA-3857: TeamSpeak keeps a client's description across sessions, so a
+  // music bot re-states its `♪` line (here: nothing playing) on every new
+  // session — once, not on every state frame.
+  it("re-states the now-playing description once per session when music is enabled", () => {
+    vi.useFakeTimers();
+    harness = createHarness({ tools: { music: { enabled: true } } });
+    const state = {
+      type: "state" as const,
+      state: { connected: true, channelId: 1, channelName: "General Shit", ownClientId: 9 },
+    };
+    harness.bridge.deliver(state);
+    harness.bridge.deliver(state);
+    expect(harness.bridge.sentOfType(TYPE_SET_DESCRIPTION).map((f) => f.header)).toEqual([
+      { description: "" },
+    ]);
+
+    harness.bridge.drop("bridge-restart");
+    vi.runOnlyPendingTimers(); // the client's reconnect backoff
+    harness.bridge.accept();
+    harness.bridge.deliver({ ...state, state: { ...state.state, ownClientId: 14 } });
+    expect(harness.bridge.sentOfType(TYPE_SET_DESCRIPTION)).toHaveLength(2);
+    vi.useRealTimers();
+  });
+
+  it("leaves the description alone on a bot without music", () => {
+    harness.bridge.deliver({
+      type: "state",
+      state: { connected: true, channelId: 1, channelName: "General Shit", ownClientId: 9 },
+    });
+    expect(harness.bridge.sentOfType(TYPE_SET_DESCRIPTION)).toHaveLength(0);
   });
 
   it("survives a malformed frame without dropping the connection", () => {

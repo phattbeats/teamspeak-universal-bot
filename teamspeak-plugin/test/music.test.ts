@@ -13,6 +13,7 @@ import {
   MUSIC_FRAME_MS,
   MusicError,
   MusicPlayer,
+  formatNowPlayingDescription,
   type MusicChildProcess,
   type MusicCommandResult,
 } from "../src/tools/music.js";
@@ -85,6 +86,8 @@ type Harness = {
   gains: number[];
   logs: string[];
   children: FakeFfmpeg[];
+  /** `onNowPlaying` calls, as the track's request (or `null` for "nothing"). */
+  announced: (string | null)[];
   ytdlpCalls: { command: string; args: string[] }[];
   tick(): void;
   advance(ms: number): void;
@@ -102,6 +105,7 @@ function createHarness(
   const gains: number[] = [];
   const logs: string[] = [];
   const children: FakeFfmpeg[] = [];
+  const announced: (string | null)[] = [];
   const ytdlpCalls: { command: string; args: string[] }[] = [];
   let clock = 1_000;
   const ticks: (() => void)[] = [];
@@ -143,6 +147,7 @@ function createHarness(
       }
     },
     log: (message) => logs.push(message),
+    onNowPlaying: (track) => announced.push(track ? track.request : null),
   });
 
   return {
@@ -151,6 +156,7 @@ function createHarness(
     gains,
     logs,
     children,
+    announced,
     ytdlpCalls,
     tick: () => {
       for (const handler of [...ticks]) {
@@ -399,6 +405,58 @@ describe("MusicPlayer queueing (PHA-3635)", () => {
     expect(harness.children[0]?.signals).toEqual(["SIGKILL"]);
     expect(harness.player.queueLength).toBe(0);
     expect(harness.player.nowPlaying?.request).toBe("interrupt");
+  });
+});
+
+describe("MusicPlayer now-playing announcements (PHA-3857)", () => {
+  it("announces each track as it starts and nothing once the lane goes quiet", async () => {
+    const harness = createHarness({ prebufferMs: 20 });
+    await harness.player.play({ query: "first" });
+    expect(harness.announced).toEqual(["first"]);
+
+    harness.children[0]?.emitFrames(1);
+    harness.children[0]?.end(0);
+    harness.advance(5 * MUSIC_FRAME_MS);
+    harness.tick();
+    harness.tick();
+    expect(harness.player.isPlaying).toBe(false);
+    expect(harness.announced).toEqual(["first", null]);
+  });
+
+  it("a replace or a queue advance goes straight to the next track, no blank in between", async () => {
+    const harness = createHarness({ prebufferMs: 20 });
+    await harness.player.play({ query: "first" });
+    await harness.player.play({ query: "second" });
+    await harness.player.play({ query: "third", enqueue: true });
+    expect(harness.announced).toEqual(["first", "second"]);
+
+    harness.children[1]?.emitFrames(1);
+    harness.children[1]?.end(0);
+    harness.advance(5 * MUSIC_FRAME_MS);
+    harness.tick();
+    harness.tick();
+    expect(harness.announced).toEqual(["first", "second", "third"]);
+  });
+
+  it("stop, close, and a skip with nothing queued all clear it", async () => {
+    const harness = createHarness();
+    await harness.player.play({ query: "first" });
+    harness.player.stop("stop_music");
+    await harness.player.play({ query: "second" });
+    harness.player.skip();
+    await harness.player.play({ query: "third" });
+    harness.player.close();
+    expect(harness.announced).toEqual(["first", null, "second", null, "third", null]);
+  });
+
+  it("formats the description the PLNT overlay reads, capped at TeamSpeak's 200 characters", () => {
+    const track = { id: "t1", title: "  Daft Punk -\n Around the World ", streamUrl: "x", request: "x" };
+    expect(formatNowPlayingDescription(track)).toBe("♪ Daft Punk - Around the World");
+    expect(formatNowPlayingDescription(undefined)).toBe("");
+
+    const long = formatNowPlayingDescription({ ...track, title: "a".repeat(500) });
+    expect(Array.from(long)).toHaveLength(200);
+    expect(long.endsWith("…")).toBe(true);
   });
 });
 

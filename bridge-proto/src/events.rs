@@ -115,6 +115,12 @@ pub enum BridgeCommand {
     /// no request/response correlation because `ws_server::run` only ever
     /// serves the one bridge client a live Sexton has.
     ListChannels,
+    /// Set the bot's own client description (PHA-3857). The music player
+    /// publishes `♪ <title>` here while a track plays and `""` when it
+    /// stops, which the PLNT overlay pins under the bot's row. Not a
+    /// moderation command: it only ever edits the bot itself, and needs
+    /// `b_client_modify_own_description`, not `b_client_modify_description`.
+    SetDescription { description: String },
 }
 
 /// One channel and who is sitting in it, as of the last `ListChannels`
@@ -361,6 +367,13 @@ mod tests {
         }))
         .unwrap();
         assert!(entry.server_groups.is_empty());
+    }
+
+    #[test]
+    fn set_description_command_parses_including_the_empty_clear() {
+        let cmd: BridgeCommand =
+            serde_json::from_value(serde_json::json!({ "SetDescription": { "description": "" } })).unwrap();
+        assert!(matches!(cmd, BridgeCommand::SetDescription { description } if description.is_empty()));
     }
 
     #[test]
