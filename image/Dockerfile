@@ -369,7 +369,9 @@ RUN cd /opt/suno-api \
 # --- PHA-3791: ts-summoner (was the `ts-summoner` container) ---
 COPY ts-summoner/summoner.mjs ts-summoner/schedule.mjs ts-summoner/story.mjs \
      ts-summoner/variety.mjs ts-summoner/guests.mjs ts-summoner/banter.mjs \
+     ts-summoner/insights.mjs ts-summoner/insights-stats.mjs ts-summoner/insights-web.mjs \
      ts-summoner/config.json                                   /opt/ts-summoner/
+COPY ts-summoner/insights/                                     /opt/ts-summoner/insights/
 COPY ts-summoner/live/                                         /opt/ts-summoner/live/
 
 # --- the gateway's channel plugin ---
@@ -404,6 +406,7 @@ COPY image/universal/stack.mjs image/universal/env-exec.mjs image/universal/migr
 COPY image/universal/supervisord.conf /etc/supervisor/universal.conf
 COPY image/universal/run-universal.sh /usr/local/bin/run-universal
 COPY image/universal/run-summoner.sh  /usr/local/bin/run-summoner
+COPY image/universal/run-insights.sh  /usr/local/bin/run-insights
 COPY image/universal/run-suno-api.sh  /usr/local/bin/run-suno-api
 COPY image/universal/healthcheck.sh   /usr/local/bin/universal-healthcheck
 COPY image/run-sexton.sh             /usr/local/bin/run-sexton
@@ -414,6 +417,7 @@ RUN chmod 0755 /usr/local/bin/run-sexton /usr/local/bin/run-whisper-pool \
                /usr/local/bin/run-pot /usr/local/bin/run-gateway \
                /usr/local/bin/run-menace /usr/local/bin/run-universal \
                /usr/local/bin/run-summoner /usr/local/bin/run-suno-api \
+               /usr/local/bin/run-insights \
                /usr/local/bin/universal-healthcheck
 
 ENV RUST_LOG=info \
@@ -434,10 +438,11 @@ ENV RUST_LOG=info \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     TZ=America/New_York
 
-# Nothing here is published to the host. Every service in the container talks
-# to the others over loopback: bridges 9101+, whisper 8080-8082, POT 4416,
-# suno-api 3000, summoner 8099. 18789 is the gateway's own control port.
-EXPOSE 18789
+# Every service in the container talks to the others over loopback: bridges
+# 9101+, whisper 8080-8082, POT 4416, suno-api 3000, summoner 8099. 18789 is
+# the gateway's own control port. 8097 is the insights dashboard (PHA-3963),
+# the one port deploy.sh publishes; it sits behind basic auth.
+EXPOSE 18789 8097
 
 # /config: bots.json, per-bot identities and state (bots/<id>/), the gateway's
 # config+state (openclaw/), the summoner's editable files (summoner/), and

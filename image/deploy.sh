@@ -14,6 +14,7 @@
 #   config/openclaw/            the one gateway: openclaw.json, agents, workspaces
 #   config/summoner/            shifts/scenes/guests config.json, live/, state/, query-pass.txt
 #   config/suno-api.env         Suno cookie + 2Captcha key + proxy (0600)
+#   config/insights/            the insights db + auth.txt, the dashboard login (PHA-3963)
 #   config/personas/<id>/       optional: add or override a persona pack without a rebuild
 #   logs/<id>/                  each bot's room log
 #
@@ -33,6 +34,8 @@ MAIN_GATEWAY=${MAIN_GATEWAY:-OpenClaw}
 MAIN_CONFIG_PATH=${MAIN_CONFIG_PATH:-/root/.openclaw/openclaw.json}
 # Extra `docker run` args, e.g. EXTRA_ARGS="-e SUMMONER_ENABLED=0" for a test instance.
 EXTRA_ARGS=${EXTRA_ARGS:-}
+# Host port for the insights dashboard (PHA-3963); empty publishes nothing.
+INSIGHTS_PUBLISH=${INSIGHTS_PUBLISH-8097}
 
 log() { printf '\n== %s\n' "$*"; }
 
@@ -60,6 +63,8 @@ fi
 log "starting $NAME from $IMAGE:$TAG"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 # --shm-size: chromium (suno-api) falls over on Docker's 64 MB default.
+publish=""
+[ -n "$INSIGHTS_PUBLISH" ] && publish="-p $INSIGHTS_PUBLISH:8097"
 # shellcheck disable=SC2086
 docker run -d \
   --name "$NAME" \
@@ -68,6 +73,7 @@ docker run -d \
   --shm-size 1g \
   -v "$APPDATA/config:/config" \
   -v "$APPDATA/logs:/var/sexton-logs" \
+  $publish \
   $EXTRA_ARGS \
   "$IMAGE:$TAG" >/dev/null
 
@@ -85,3 +91,4 @@ if [ "$ok" != 1 ]; then
 fi
 docker exec "$NAME" openclaw channels status 2>/dev/null | grep -i teamspeak || true
 log "up: $NAME ($IMAGE:$TAG)"
+[ -n "$INSIGHTS_PUBLISH" ] && echo "insights: http://<host>:$INSIGHTS_PUBLISH  (login: $APPDATA/config/insights/auth.txt)"

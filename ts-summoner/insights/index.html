@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeamSpeak insights</title>
+<!-- PHA-3963. No build step, no CDN: the page, its charts and its data all come
+     from insights-web.mjs inside the bot container. -->
+<style>
+.viz-root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e;
+  --muted: #898781; --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6; --wash: rgba(42,120,214,0.10); --heat-0: #f0efec;
+  --good: #006300;
+  --seq: #cde2fb,#b7d3f6,#9ec5f4,#86b6ef,#6da7ec,#5598e7,#3987e5,#2a78d6,#256abf,#1c5cab,#184f95,#104281,#0d366b;
+}
+@media (prefers-color-scheme: dark) {
+  .viz-root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7;
+    --muted: #898781; --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --wash: rgba(57,135,229,0.12); --heat-0: #262624;
+    --good: #0ca30c;
+    --seq: #104281,#184f95,#1c5cab,#256abf,#2a78d6,#3987e5,#5598e7,#6da7ec,#86b6ef,#9ec5f4,#b7d3f6,#cde2fb;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.viz-root { background: var(--page); color: var(--text-primary); min-height: 100vh; padding: 20px clamp(12px, 3vw, 32px) 48px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h2 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
+.sub { color: var(--text-secondary); font-size: 13px; margin: 0 0 12px; }
+.bar-top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 16px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface-1); }
+.seg button { border: 0; background: none; color: var(--text-secondary); padding: 6px 12px; font: inherit; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--wash); color: var(--text-primary); font-weight: 600; }
+.seg button:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--series-1); outline-offset: 1px; }
+nav.tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--grid); }
+nav.tabs button { border: 0; background: none; color: var(--text-secondary); font: inherit; padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; }
+nav.tabs button[aria-selected="true"] { color: var(--text-primary); border-bottom-color: var(--series-1); font-weight: 600; }
+.online { color: var(--text-secondary); font-size: 13px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; vertical-align: 1px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile, .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.tile .label { color: var(--text-secondary); font-size: 13px; }
+.tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.tile .note { color: var(--muted); font-size: 12px; }
+.hero .value { font-size: 48px; line-height: 1.1; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.card { margin-bottom: 16px; overflow-x: auto; }
+.grid2 .card { margin-bottom: 0; }
+.card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+svg text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+svg .val { fill: var(--text-secondary); }
+svg .name { fill: var(--text-primary); font-size: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; color: var(--text-secondary); font-weight: 600; border-bottom: 1px solid var(--axis); padding: 6px 8px; white-space: nowrap; }
+td { border-bottom: 1px solid var(--grid); padding: 6px 8px; vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.muted { color: var(--muted); }
+details.tbl { margin-top: 10px; }
+details.tbl summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; }
+#tip { position: fixed; pointer-events: none; background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.18); display: none; z-index: 10; max-width: 320px; }
+#tip b { font-weight: 600; }
+.legend-scale { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.legend-scale .ramp { width: 120px; height: 8px; border-radius: 4px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 12px; }
+.filters label { color: var(--text-secondary); font-size: 13px; }
+input[type=search], select { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font: inherit; }
+.log-row { display: grid; grid-template-columns: 140px 64px 140px 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--grid); font-size: 13px; }
+.log-row .when { color: var(--muted); font-variant-numeric: tabular-nums; }
+.log-row .kind { color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+.log-row .who { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-row .what { white-space: pre-wrap; word-break: break-word; }
+.log-row .reply { color: var(--text-secondary); margin-top: 2px; }
+.more { margin-top: 12px; }
+button.plain { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer; }
+.empty { color: var(--muted); padding: 24px 0; text-align: center; }
+[hidden] { display: none !important; }
+@media (max-width: 640px) { .log-row { grid-template-columns: 1fr; gap: 2px; } .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <div class="bar-top">
+    <h1>TeamSpeak insights</h1>
+    <div class="seg" id="range" role="group" aria-label="Time range">
+      <button data-days="1">24h</button><button data-days="7">7 days</button><button data-days="30" aria-pressed="true">30 days</button><button data-days="90">90 days</button><button data-days="all">All</button>
+    </div>
+    <div class="online" id="online"></div>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button role="tab" data-tab="people" aria-selected="false">People</button>
+    <button role="tab" data-tab="bots" aria-selected="false">Bots</button>
+    <button role="tab" data-tab="log" aria-selected="false">Log</button>
+  </nav>
+
+  <section id="tab-overview">
+    <div class="tiles" id="tiles"></div>
+    <div class="card">
+      <div class="card-head">
+        <div><h2>When the server is busy</h2><p class="sub" id="heat-sub">Minutes people spent in voice, by weekday and hour (server time).</p></div>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <div class="seg" id="heat-mode" role="group" aria-label="Heatmap measure"><button data-m="voice" aria-pressed="true">Voice</button><button data-m="chat">Chat</button></div>
+          <div class="legend-scale" id="heat-legend"></div>
+        </div>
+      </div>
+      <div id="heat"></div>
+      <details class="tbl"><summary>Show as table</summary><div id="heat-table"></div></details>
+    </div>
+    <div class="grid2">
+      <div class="card"><h2>Hours in voice per day</h2><p class="sub">All people combined.</p><div id="days-voice"></div></div>
+      <div class="card"><h2>Chat messages per day</h2><p class="sub">Channel and server chat, bots excluded.</p><div id="days-chat"></div></div>
+    </div>
+  </section>
+
+  <section id="tab-people" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div><h2 id="lb-title">Who spends the most time in voice</h2><p class="sub" id="lb-sub"></p></div>
+        <div class="seg" id="lb-metric" role="group" aria-label="Leaderboard measure">
+          <button data-m="voiceS" aria-pressed="true">Time in voice</button><button data-m="talkS">Talking</button><button data-m="chat">Chat</button><button data-m="heard">Transcribed</button><button data-m="botTurns">Talks to bots</button>
+        </div>
+      </div>
+      <div id="leaderboard"></div>
+    </div>
+    <div class="card"><h2>Everyone</h2><p class="sub">Talking is sampled every poll, so it is an estimate. Transcribed = speech a bot heard and wrote down (only while a bot is in the channel).</p><div id="people-table"></div></div>
+  </section>
+
+  <section id="tab-bots" hidden>
+    <div class="card"><h2>Bots</h2><p class="sub">Turns people started with each bot (voice, chat, private message).</p><div id="bots-table"></div></div>
+    <div class="grid2">
+      <div class="card"><h2>What people ask the bots for</h2><p class="sub" id="asks-sub"></p><div id="asks"></div><details class="tbl"><summary>Show as table</summary><div id="asks-table"></div></details></div>
+      <div class="card"><h2>What the bots start, and who answers</h2><p class="sub" id="events-sub"></p><div id="events"></div></div>
+    </div>
+  </section>
+
+  <section id="tab-log" hidden>
+    <div class="card">
+      <div class="filters" id="log-filters">
+        <label><input type="checkbox" value="chat" checked> Chat</label>
+        <label><input type="checkbox" value="heard" checked> Speech</label>
+        <label><input type="checkbox" value="turn" checked> Bot turns</label>
+        <label><input type="checkbox" value="voice"> Voice sessions</label>
+        <label><input type="checkbox" value="join"> Connects</label>
+        <label><input type="checkbox" value="bot"> Bot events</label>
+        <input type="search" id="log-nick" placeholder="Person" aria-label="Filter by person">
+        <input type="search" id="log-q" placeholder="Search text" aria-label="Search text">
+      </div>
+      <div id="log"></div>
+      <div class="more"><button class="plain" id="log-more" hidden>Load older</button></div>
+    </div>
+  </section>
+  <div id="tip" role="tooltip"></div>
+</div>
+<script>
+'use strict';
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// data-tip is HTML that goes through an attribute first: escape the whole thing once more.
+const tipAttr = (html) => esc(html);
+const css = (v) => getComputedStyle($('.viz-root')).getPropertyValue(v).trim();
+const nf = new Intl.NumberFormat();
+const compact = (n) => (n >= 10000 ? new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : nf.format(Math.round(n)));
+const dur = (s) => { s = Math.round(s); if (s < 60) return `${s}s`; const m = Math.round(s / 60); if (m < 60) return `${m}m`; const h = Math.floor(m / 60); return h < 48 ? `${h}h ${m % 60}m` : `${nf.format(Math.round(h))}h`; };
+const hourLabel = (h) => (h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`);
+const when = (ts) => new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+let days = '30', data = {};
+
+// ---- tooltip
+const tip = $('#tip');
+function showTip(html, ev) { tip.innerHTML = html; tip.style.display = 'block'; moveTip(ev); }
+function moveTip(ev) {
+  const r = tip.getBoundingClientRect();
+  let x = ev.clientX + 14, y = ev.clientY + 14;
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - 14;
+  if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - 14;
+  tip.style.left = `${x}px`; tip.style.top = `${y}px`;
+}
+const hideTip = () => { tip.style.display = 'none'; };
+function hover(el) {
+  el.addEventListener('mousemove', (ev) => { const t = ev.target.closest('[data-tip]'); if (t) showTip(t.dataset.tip, ev); else hideTip(); });
+  el.addEventListener('mouseleave', hideTip);
+}
+
+// ---- charts
+function heatmap(el, m) {
+  const g = data.overview.heat[m];
+  const ramp = css('--seq').split(',').map((s) => s.trim());
+  const max = Math.max(...g.flat());
+  const cw = 26, ch = 22, gap = 2, left = 36, topPad = 18;
+  const w = left + 24 * (cw + gap), h = topPad + 7 * (ch + gap);
+  const unit = m === 'voice' ? (v) => `${dur(v * 60)} in voice` : (v) => `${nf.format(v)} message${v === 1 ? '' : 's'}`;
+  let s = `<svg width="${w}" height="${h}" role="img" aria-label="Activity by weekday and hour">`;
+  for (let hr = 0; hr < 24; hr += 3) s += `<text x="${left + hr * (cw + gap) + cw / 2}" y="12" text-anchor="middle">${hourLabel(hr)}</text>`;
+  for (let d = 0; d < 7; d++) {
+    s += `<text x="${left - 6}" y="${topPad + d * (ch + gap) + ch / 2 + 4}" text-anchor="end">${WD[d]}</text>`;
+    for (let hr = 0; hr < 24; hr++) {
+      const v = g[d][hr];
+      const fill = v <= 0 || !max ? css('--heat-0') : ramp[Math.min(ramp.length - 1, Math.floor(Math.sqrt(v / max) * (ramp.length - 1) + 0.5))];
+      s += `<rect x="${left + hr * (cw + gap)}" y="${topPad + d * (ch + gap)}" width="${cw}" height="${ch}" rx="3" fill="${fill}"
+        data-tip="${tipAttr(`<b>${WD[d]} ${hourLabel(hr)}–${hourLabel((hr + 1) % 24)}</b><br>${esc(unit(v))}`)}"></rect>`;
+    }
+  }
+  el.innerHTML = s + '</svg>';
+  $('#heat-legend').innerHTML = `less <span class="ramp" style="background:linear-gradient(90deg,${css('--heat-0')},${ramp.join(',')})"></span> more`;
+  $('#heat-sub').textContent = m === 'voice' ? 'Minutes people spent in voice, by weekday and hour (server time).' : 'Chat messages, by weekday and hour (server time).';
+  let t = '<table><tr><th></th>' + Array.from({ length: 24 }, (_, i) => `<th class="num">${hourLabel(i)}</th>`).join('') + '</tr>';
+  for (let d = 0; d < 7; d++) t += `<tr><th>${WD[d]}</th>${g[d].map((v) => `<td class="num">${v ? Math.round(v) : ''}</td>`).join('')}</tr>`;
+  $('#heat-table').innerHTML = t + '</table>';
+}
+
+function niceMax(v) { if (v <= 0) return 1; const p = 10 ** Math.floor(Math.log10(v)); return [1, 2, 2.5, 5, 10].map((k) => k * p).find((k) => k >= v); }
+
+function columns(el, rows, key, fmt, { line = false } = {}) {
+  if (!rows.length) { el.innerHTML = '<div class="empty">No data in this range yet.</div>'; return; }
+  const W = Math.max(320, el.clientWidth || 480), H = 180, l = 40, r = 12, t = 10, b = 24;
+  const max = niceMax(Math.max(...rows.map((x) => x[key])));
+  const iw = W - l - r, ih = H - t - b, step = iw / rows.length;
+  const y = (v) => t + ih - (v / max) * ih;
+  let s = `<svg width="${W}" height="${H}" role="img">`;
+  for (let i = 0; i <= 4; i++) { const v = (max / 4) * i; s += `<line x1="${l}" x2="${W - r}" y1="${y(v)}" y2="${y(v)}" stroke="${i ? css('--grid') : css('--axis')}" stroke-width="1"/><text x="${l - 6}" y="${y(v) + 4}" text-anchor="end">${compact(v)}</text>`; }
+  const every = Math.ceil(rows.length / 8);
+  rows.forEach((d, i) => { if (i % every === 0) s += `<text x="${l + step * i + step / 2}" y="${H - 6}" text-anchor="middle">${d.date.slice(5)}</text>`; });
+  if (line) {
+    const pts = rows.map((d, i) => [l + step * i + step / 2, y(d[key])]);
+    s += `<path d="M${pts[0][0]},${y(0)} ${pts.map((p) => `L${p[0]},${p[1]}`).join(' ')} L${pts.at(-1)[0]},${y(0)}Z" fill="${css('--wash')}"/>`;
+    s += `<path d="M${pts.map((p) => p.join(',')).join(' L')}" fill="none" stroke="${css('--series-1')}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const last = pts.at(-1);
+    s += `<circle cx="${last[0]}" cy="${last[1]}" r="4" fill="${css('--series-1')}" stroke="${css('--surface-1')}" stroke-width="2"/>`;
+  } else {
+    const bw = Math.min(24, Math.max(2, step - 2));
+    rows.forEach((d, i) => {
+      const x = l + step * i + (step - bw) / 2, top = y(d[key]), hgt = y(0) - top;
+      if (hgt > 0) s += `<path d="M${x},${y(0)} V${top + Math.min(4, hgt)} q0,-${Math.min(4, hgt)} ${Math.min(4, bw / 2)},-${Math.min(4, hgt)} H${x + bw - Math.min(4, bw / 2)} q${Math.min(4, bw / 2)},0 ${Math.min(4, bw / 2)},${Math.min(4, hgt)} V${y(0)}Z" fill="${css('--series-1')}"/>`;
+    });
+  }
+  // hover bands: wider than the mark
+  rows.forEach((d, i) => { s += `<rect x="${l + step * i}" y="${t}" width="${step}" height="${ih}" fill="transparent" data-tip="${tipAttr(`<b>${esc(d.date)}</b><br>${esc(fmt(d[key]))} · ${d.people} ${d.people === 1 ? 'person' : 'people'}`)}"/>`; });
+  el.innerHTML = s + '</svg>';
+}
+
+function hbars(el, rows, fmt) {
+  if (!rows.length) { el.innerHTML = '<div class="empty">Nobody yet.</div>'; return; }
+  const W = Math.max(320, el.clientWidth || 520), row = 30, nameW = 150, valW = 80;
+  const max = Math.max(...rows.map((r) => r.v)) || 1;
+  const iw = W - nameW - valW;
+  let s = `<svg width="${W}" height="${rows.length * row + 4}" role="img">`;
+  rows.forEach((r, i) => {
+    const y = i * row + 4, bw = Math.max(r.v > 0 ? 4 : 0, (r.v / max) * iw), bh = 18;
+    s += `<text class="name" x="${nameW - 10}" y="${y + bh / 2 + 4}" text-anchor="end">${esc(r.name.length > 20 ? r.name.slice(0, 19) + '…' : r.name)}</text>`;
+    if (bw > 0) s += `<path d="M${nameW},${y} H${nameW + bw - 4} q4,0 4,4 V${y + bh - 4} q0,4 -4,4 H${nameW}Z" fill="${css('--series-1')}"/>`;
+    s += `<text class="val" x="${nameW + bw + 6}" y="${y + bh / 2 + 4}">${esc(fmt(r.v))}</text>`;
+    s += `<rect x="0" y="${y - 4}" width="${W}" height="${row}" fill="transparent" data-tip="${tipAttr(`<b>${esc(r.name)}</b><br>${esc(r.tip ?? fmt(r.v))}`)}"/>`;
+  });
+  el.innerHTML = s + '</svg>';
+}
+
+// ---- tabs
+async function api(path) {
+  const r = await fetch(path, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  return r.json();
+}
+
+function renderOverview() {
+  const o = data.overview, t = o.tiles;
+  const pk = t.peak ? `${t.peak.dow} ${hourLabel(t.peak.hour)}` : '—';
+  $('#tiles').innerHTML = [
+    ['hero', 'Hours in voice', compact(t.voiceHours), `≈ ${compact(t.talkHours)} h of actual talking`],
+    ['', 'People seen', nf.format(t.people), 'in voice or chat'],
+    ['', 'Chat messages', compact(t.chat), `${compact(t.heard)} spoken lines transcribed`],
+    ['', 'Bot turns', compact(t.botTurns), t.botTurns ? `${Math.round((100 * t.botReplies) / t.botTurns)}% answered · $${t.botCost.toFixed(2)}` : 'none yet'],
+    ['', 'Busiest hour', pk, 'voice + chat, server time'],
+  ].map(([c, l, v, n]) => `<div class="tile ${c}"><div class="label">${l}</div><div class="value">${esc(v)}</div><div class="note">${esc(n)}</div></div>`).join('');
+  $('#online').innerHTML = o.online.length ? `<span class="dot"></span>In voice now: ${o.online.map((p) => `${esc(p.nick)} <span class="muted">(${esc(p.channel ?? '')}, ${dur((Date.now() - p.start_ts) / 1000)})</span>`).join(', ')}` : 'Nobody in voice right now';
+  heatmap($('#heat'), $('#heat-mode [aria-pressed="true"]').dataset.m);
+  columns($('#days-voice'), o.days, 'voiceH', (v) => `${v.toFixed(1)} h in voice`, { line: true });
+  columns($('#days-chat'), o.days, 'chat', (v) => `${nf.format(v)} messages`);
+}
+
+const METRICS = {
+  voiceS: ['Who spends the most time in voice', dur, 'Connected to voice, any channel.'],
+  talkS: ['Who talks the most', dur, 'Estimated from the talking light, sampled every 10 s.'],
+  chat: ['Who posts the most', (v) => `${nf.format(v)} msgs`, 'Channel and server chat.'],
+  heard: ['Who the bots hear the most', (v) => `${nf.format(v)} lines`, 'Spoken lines a bot transcribed.'],
+  botTurns: ['Who talks to the bots the most', (v) => `${nf.format(v)} turns`, 'Turns started with any bot.'],
+};
+function renderPeople() {
+  const m = $('#lb-metric [aria-pressed="true"]').dataset.m, [title, fmt, sub] = METRICS[m];
+  $('#lb-title').textContent = title; $('#lb-sub').textContent = sub;
+  const rows = data.people.filter((p) => p[m] > 0).sort((a, b) => b[m] - a[m]).slice(0, 15).map((p) => ({ name: p.name, v: p[m] }));
+  hbars($('#leaderboard'), rows, fmt);
+  $('#people-table').innerHTML = data.people.length ? `<table><tr><th>Person</th><th class="num">In voice</th><th class="num">Talking</th><th class="num">Away</th><th class="num">Sessions</th><th class="num">Chat</th><th class="num">Transcribed</th><th class="num">Bot turns</th><th>Last seen</th></tr>${
+    data.people.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${dur(p.voiceS)}</td><td class="num">${dur(p.talkS)}</td><td class="num">${dur(p.awayS)}</td><td class="num">${p.sessions}</td><td class="num">${nf.format(p.chat)}</td><td class="num">${nf.format(p.heard)}</td><td class="num">${nf.format(p.botTurns)}</td><td class="muted">${p.lastSeen ? when(p.lastSeen) : ''}</td></tr>`).join('')}</table>` : '<div class="empty">Nobody yet.</div>';
+}
+
+const EVENT_NAMES = { entrance: 'Entrance line', exit: 'Exit line', scene: 'Scene', banter: 'Banter', summon: 'Summoned in', dismiss: 'Sent away', takeover: 'Hostile takeover', bender: 'Bender', guest: 'Guest visit' };
+function renderBots() {
+  const b = data.bots;
+  const lanes = (l) => ['voice', 'chat', 'dm'].filter((k) => l[k]).map((k) => `${k} ${l[k]}`).join(' · ');
+  const list = (xs) => xs.slice(0, 5).map((x) => `${esc(x.name)} <span class="muted">${x.count}</span>`).join(', ');
+  $('#bots-table').innerHTML = b.bots.length ? `<table><tr><th>Bot</th><th class="num">Turns</th><th class="num">Answered</th><th>Lanes</th><th>Asked most by</th><th>Tools used most</th><th class="num">Model cost</th></tr>${
+    b.bots.map((x) => `<tr><td>${esc(x.bot)}</td><td class="num">${nf.format(x.turns)}</td><td class="num">${Math.round((100 * x.replied) / x.turns)}%</td><td>${lanes(x.lanes)}</td><td>${list(x.askers)}</td><td>${list(x.tools) || '<span class="muted">none</span>'}</td><td class="num">$${x.cost.toFixed(2)}</td></tr>`).join('')}</table>` : '<div class="empty">No bot turns in this range yet.</div>';
+  $('#asks-sub').textContent = `Turns by the first tool the bot ran (or plain talk). Came back = the same person spoke to that bot again within ${b.followMin} min.`;
+  hbars($('#asks'), b.asks.slice(0, 12).map((a) => ({ name: a.kind, v: a.turns, tip: `${a.turns} turns · ${Math.round((100 * a.replied) / a.turns)}% answered · ${Math.round((100 * a.cameBack) / a.turns)}% came back` })), (v) => `${nf.format(v)}`);
+  $('#asks-table').innerHTML = `<table><tr><th>Ask</th><th class="num">Turns</th><th class="num">Answered</th><th class="num">Came back</th></tr>${b.asks.map((a) => `<tr><td>${esc(a.kind)}</td><td class="num">${a.turns}</td><td class="num">${Math.round((100 * a.replied) / a.turns)}%</td><td class="num">${Math.round((100 * a.cameBack) / a.turns)}%</td></tr>`).join('')}</table>`;
+  $('#events-sub').textContent = `Human chat + speech in the ${b.windowMin} min after each thing, against the ${b.windowMin} min before. Only counted while people were around to hear it.`;
+  $('#events').innerHTML = b.events.length ? `<table><tr><th>What</th><th class="num">Times</th><th class="num">Before</th><th class="num">After</th><th class="num">Got a response</th></tr>${
+    b.events.map((e) => `<tr><td>${esc(EVENT_NAMES[e.kind] ?? e.kind)}</td><td class="num">${e.n}</td><td class="num">${e.avgBefore.toFixed(1)}</td><td class="num">${e.avgAfter.toFixed(1)}</td><td class="num">${Math.round(e.answeredPct)}%</td></tr>`).join('')}</table>` : '<div class="empty">Nothing recorded in this range yet. Bot events are recorded from this release on.</div>';
+}
+
+// ---- log
+let logBefore = null;
+function logParams(before) {
+  const types = [...document.querySelectorAll('#log-filters input[type=checkbox]:checked')].map((c) => c.value).join(',');
+  const p = new URLSearchParams({ days, types, q: $('#log-q').value, nick: $('#log-nick').value, limit: '200' });
+  if (before) p.set('before', before);
+  return p;
+}
+const KIND = { chat: 'chat', heard: 'speech', turn: 'bot turn', join: '', voice: 'voice', bot: 'bot' };
+function logRow(r) {
+  let what = esc(r.text), who = esc(r.nick ?? ''), kind = KIND[r.t];
+  if (r.t === 'chat' && r.a === 'server') kind = 'server';
+  if (r.t === 'join') { kind = r.text === 'join' ? 'connect' : 'leave'; what = r.text === 'join' ? 'connected' : `left${r.a ? ` (${esc(r.a)})` : ''}`; }
+  if (r.t === 'voice') what = `in ${esc(r.text ?? '?')} for ${dur(r.a)}${r.b ? `, talking ≈ ${dur(r.b)}` : ''}`;
+  if (r.t === 'bot') what = `${esc(EVENT_NAMES[r.text] ?? r.text)}${r.a ? ` <span class="muted">${esc(r.a)}</span>` : ''}`;
+  if (r.t === 'turn') {
+    const b = JSON.parse(r.b || '{}');
+    who = `${who} → ${esc(r.a)}`;
+    kind = `${b.lane}`;
+    const tools = (b.tools || []).length ? ` <span class="muted">[${esc(b.tools.join(', '))}]</span>` : '';
+    what += `${tools}<div class="reply">${b.replied ? `↳ ${esc(b.reply ?? '')}` : '<span class="muted">↳ (no reply)</span>'}</div>`;
+  }
+  return `<div class="log-row"><div class="when">${when(r.ts)}</div><div class="kind">${esc(kind)}</div><div class="who" title="${who}">${who}</div><div class="what">${what}</div></div>`;
+}
+async function loadLog(more = false) {
+  const rows = await api(`api/log?${logParams(more ? logBefore : null)}`);
+  const html = rows.map(logRow).join('');
+  if (more) $('#log').insertAdjacentHTML('beforeend', html);
+  else $('#log').innerHTML = html || '<div class="empty">Nothing matches.</div>';
+  logBefore = rows.length ? rows.at(-1).ts : logBefore;
+  $('#log-more').hidden = rows.length < 200;
+}
+
+// ---- wiring
+let tab = 'overview';
+async function refresh() {
+  try {
+    if (tab === 'overview') { data.overview = await api(`api/overview?days=${days}`); renderOverview(); }
+    if (tab === 'people') { data.people = await api(`api/people?days=${days}`); renderPeople(); }
+    if (tab === 'bots') { data.bots = await api(`api/bots?days=${days}`); renderBots(); }
+    if (tab === 'log') await loadLog();
+    if (tab !== 'overview') { const o = await api('api/overview?days=1'); data.overview = o; $('#online').innerHTML = o.online.length ? `<span class="dot"></span>In voice now: ${o.online.map((p) => esc(p.nick)).join(', ')}` : 'Nobody in voice right now'; }
+  } catch (e) { console.error(e); }
+}
+function seg(id, fn) {
+  $(id).addEventListener('click', (ev) => {
+    const b = ev.target.closest('button'); if (!b) return;
+    for (const x of $(id).querySelectorAll('button')) x.setAttribute('aria-pressed', String(x === b));
+    fn(b);
+  });
+}
+seg('#range', (b) => { days = b.dataset.days; refresh(); });
+seg('#heat-mode', (b) => heatmap($('#heat'), b.dataset.m));
+seg('#lb-metric', () => renderPeople());
+document.querySelector('nav.tabs').addEventListener('click', (ev) => {
+  const b = ev.target.closest('button'); if (!b) return;
+  tab = b.dataset.tab;
+  for (const x of document.querySelectorAll('nav.tabs button')) x.setAttribute('aria-selected', String(x === b));
+  for (const s of document.querySelectorAll('section[id^="tab-"]')) s.hidden = s.id !== `tab-${tab}`;
+  refresh();
+});
+let deb;
+for (const el of document.querySelectorAll('#log-filters input')) el.addEventListener(el.type === 'checkbox' ? 'change' : 'input', () => { clearTimeout(deb); deb = setTimeout(() => loadLog(), 250); });
+$('#log-more').addEventListener('click', () => loadLog(true));
+for (const id of ['#heat', '#days-voice', '#days-chat', '#leaderboard', '#asks']) hover($(id));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', refresh);
+addEventListener('resize', () => { clearTimeout(deb); deb = setTimeout(refresh, 300); });
+setInterval(() => { if (tab !== 'log') refresh(); }, 60_000);
+refresh();
+</script>
+</body>
+</html>
