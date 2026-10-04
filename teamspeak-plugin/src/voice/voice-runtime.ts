@@ -203,6 +203,14 @@ export class TeamSpeakVoiceRuntime {
       events: {
         onConnected: () => {
           this.params.onConnectionChange?.(true);
+          // PHA-3791: a new bridge session means the core was (re)started:
+          // ts-summoner putting the bot on shift, a summon, or a restart. A
+          // `leave_voice` from an earlier shift must not carry over. With one
+          // long-lived gateway for every bot nothing else clears it, and a
+          // parked Sexton sat deaf to voice and chat through a whole shift.
+          if (this.parked) {
+            this.setParked(false, "bridge-connected");
+          }
           const channel = this.params.config.channel;
           if (channel) {
             this.bridge.join(channel);
