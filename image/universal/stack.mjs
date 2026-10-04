@@ -195,6 +195,7 @@ function writeSummonerConfig(bots) {
   cfg.calendarFile = `${dir}/live/calendar.json`;
   cfg.stateFile = `${dir}/state/state.json`;
   cfg.scenes = { ...cfg.scenes, file: `${dir}/live/scenes.json` };
+  cfg.insights = { ...cfg.insights, db: `${CONFIG}/insights/insights.db` }; // PHA-3963
   if (cfg.chatLog) cfg.chatLog = { ...cfg.chatLog, dir: `${LOGS}/${cfg.chatLog.whenOff}/${env.SEXTON_CHANNEL || 'General Shit'}` };
   cfg.bots = cfg.bots || {};
   const live = new Set(bots.map((b) => b.id));

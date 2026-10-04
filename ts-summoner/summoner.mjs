@@ -45,6 +45,7 @@ import {
   candidates as guestCandidates, guestConfig, guestIds, pickGuest, slotHolder, slotOpen, visitChance, visitLength,
 } from './guests.mjs';
 import { banterChance, banterConfig, banterKey, banterOpen, isStreaming, pickBanter } from './banter.mjs';
+import { Recorder } from './insights.mjs';
 
 const CONFIG_PATH = process.env.SUMMONER_CONFIG || '/app/config.json';
 const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
@@ -58,6 +59,12 @@ const bc = banterConfig(cfg.banter);
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const MIN = 60_000;
+
+// PHA-3963: everything said and everyone seen goes into the insights db; the
+// dashboard (insights-web.mjs) reads it. Never lets a db problem stop a shift.
+const rec = cfg.insights?.enabled === false ? null
+  : new Recorder(cfg.insights?.db ?? '/config/insights/insights.db', { botNicks: BOT_NICKS, log });
+const botIdOf = (bot) => Object.keys(cfg.bots).find((k) => cfg.bots[k] === bot) ?? null;
 
 // ------------------------------------------------- live-editable files --
 // calendar.json and scenes.json are re-read when their mtime changes, so an
@@ -245,6 +252,7 @@ function summon(id, why, stayMin = cfg.summonStayMin) {
   st.lastMention = now;
   st.override = { mode: 'on', until: now + stayMin * MIN, why };
   log(`${id}: SUMMON (${why}) for ${stayMin}m`);
+  rec?.botEvent(id, 'summon', why);
   reconcile().catch((e) => log('reconcile', e.message));
 }
 
@@ -267,6 +275,7 @@ function dismiss(id, why) {
   }
   st.exitReason = 'dismiss';
   log(`${id}: DISMISS (${why})`);
+  rec?.botEvent(id, 'dismiss', why);
   reconcile().catch((e) => log('reconcile', e.message));
 }
 
@@ -351,10 +360,12 @@ async function prepareGuest(id, bot) {
   log(`${id}: in the guest chair as '${r.nick}'${r.changed ? ' (gateway restarted)' : ''}`);
 }
 async function startCore(bot) {
+  rec?.botEvent(botIdOf(bot), 'core_start');
   await exec(bot, ['rm', '-f', offDutyFile(bot)]);
   return exec(bot, ['supervisorctl', 'start', program(bot)]);
 }
 async function stopCore(bot) {
+  rec?.botEvent(botIdOf(bot), 'core_stop');
   await exec(bot, ['touch', offDutyFile(bot)]);
   return exec(bot, ['supervisorctl', 'stop', program(bot)]);
 }
@@ -381,6 +392,7 @@ async function requestLine(bot, reason, { entrance = false, vars } = {}) {
   if (quiet && !entrance) return false;
   const body = JSON.stringify({ reason, at: Date.now(), ...(quiet ? { quiet } : {}), ...(vars ? { vars } : {}) });
   await exec(bot, ['sh', '-c', 'printf %s "$1" > "$2"', 'announce', body, announceFile(bot)]);
+  if (!quiet) rec?.botEvent(botIdOf(bot), entrance ? 'entrance' : 'exit', reason);
   return true;
 }
 
@@ -448,6 +460,7 @@ async function playScene(key, tag, vars, joining = []) {
   const pick = pickScene(scenes(), key, tag, Math.random, sceneMemory);
   if (!pick) return false;
   log(`scene ${pick.key} #${pick.index}`);
+  if (audience()) rec?.botEvent(null, key.startsWith('banter') ? 'banter' : 'scene', pick.key);
   const ids = Object.keys(cfg.bots);
   const waiting = new Set(joining);
   let muted = !audience();
@@ -545,6 +558,7 @@ function startTakeover(now, why) {
   v.override = { mode: 'on', until: events.takeover.active.until, why: 'hostile takeover' };
   v.lastAction = now;
   v.exitReason = null;
+  rec?.botEvent(t.villain, 'takeover', why);
   log(`EVENT takeover (${why}) until ${new Date(events.takeover.active.until).toISOString()}`);
   backstage([t.villain, t.target], 'takeover start', async () => {
     await joinQuietly(t.villain, 'summon');
@@ -608,6 +622,7 @@ function startBender(now, why) {
   events.bender.active = { bot: b.bot, from: now, until: now + b.durationHours * 60 * MIN, newsSaid: 0, why };
   events.bender.returning = null;
   saveEvents();
+  rec?.botEvent(b.bot, 'bender', why);
   log(`EVENT bender: ${b.bot} (${why}) until ${new Date(events.bender.active.until).toISOString()}`);
 }
 
@@ -672,6 +687,7 @@ function startVisit(id, now, why) {
   state[id].override = { mode: 'on', until, why: 'guest visit', visit: true };
   state[id].exitReason = null;
   log(`GUEST ${id} drops in (${why}) for ${len}m`);
+  rec?.botEvent(id, 'guest', why);
 }
 
 function guestsTick(now) {
@@ -1198,8 +1214,12 @@ class Query {
 
 const rows = (lines) => lines.join('|').split('|').filter(Boolean).map(parseProps);
 
+let polls = 0;
 async function pollRoom(q) {
-  const clients = rows(await q.cmd('clientlist -voice'));
+  // -uid/-away are for the insights db (PHA-3963); the rest only reads -voice.
+  const clients = rows(await q.cmd('clientlist -uid -away -voice'));
+  if (rec && polls++ % 30 === 0) rec.setChannels(rows(await q.cmd('channellist')));
+  rec?.poll(clients, cfg.pollSec);
   const humans = clients.filter((c) => c.client_type === '0' && !BOT_NICKS.has((c.client_nickname || '').toLowerCase()));
   const now = Date.now();
   room.humans = humans.length;
@@ -1235,8 +1255,11 @@ async function runQuery() {
   liveQuery = q;
   q.onNotify = (kind, p) => {
     if (kind === 'notifytextmessage') {
+      rec?.chat({ nick: p.invokername, uid: p.invokeruid, targetmode: p.targetmode, text: p.msg });
       logChat(p.invokername, p.msg || '', p.targetmode);
       onChat(p.invokername, p.msg || '');
+    } else {
+      rec?.notify(kind, p);
     }
   };
   await q.connect();
@@ -1253,6 +1276,7 @@ async function runQuery() {
   await pollRoom(q);
   await new Promise((resolve) => { q.onClose = resolve; });
   clearInterval(timer);
+  rec?.queryDown();
   if (liveQuery === q) liveQuery = null;
   log('query connection closed');
 }
@@ -1318,7 +1342,7 @@ http.createServer((req, res) => {
     const by = new URL(req.url, 'http://x').searchParams.get('by') || '';
     let body = '';
     req.on('data', (c) => { if (body.length < 4000) body += c; });
-    req.on('end', () => send(200, { summoned: onHeard(by, body) }));
+    req.on('end', () => { rec?.heard(by, body); send(200, { summoned: onHeard(by, body) }); });
     return;
   }
   send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /heard?by=<speaker> | POST /event/<takeover|bender|guest|banter>[?who=<guest>|<a>+<b>] | POST /event/end?kind=<takeover|bender|guest>' });
