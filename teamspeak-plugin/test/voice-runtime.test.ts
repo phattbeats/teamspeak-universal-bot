@@ -415,6 +415,19 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
       expect(harness.runtime.snapshot().speakerSessions).toBe(1);
     });
 
+    it("comes back from a leave when the bridge reconnects (new shift, PHA-3791)", () => {
+      vi.useFakeTimers();
+      harness.bridge.deliver({ type: "roster", roster: [rosterEntry(11, "brandon")] });
+      const leave = { type: "text_message", clientId: 11, nickname: "brandon", text: "!vc leave" };
+      harness.bridge.deliver(leave as never);
+      expect(harness.runtime.snapshot().parked).toBe(true);
+      harness.bridge.drop("core-stopped");
+      vi.runOnlyPendingTimers(); // the client's reconnect backoff
+      harness.bridge.accept();
+      expect(harness.runtime.snapshot().parked).toBe(false);
+      vi.useRealTimers();
+    });
+
     it("ignores ordinary chat", () => {
       harness.bridge.clearSent();
       harness.bridge.deliver({

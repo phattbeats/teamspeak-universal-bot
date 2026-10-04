@@ -69,6 +69,9 @@ class TeamSpeakVoiceRuntime {
       events: {
         onConnected: () => {
           this.params.onConnectionChange?.(true);
+          if (this.parked) {
+            this.setParked(false, "bridge-connected");
+          }
           const channel = this.params.config.channel;
           if (channel) {
             this.bridge.join(channel);
