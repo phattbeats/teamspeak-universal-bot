@@ -151,7 +151,9 @@ test('overview: totals, heatmap in local time, bots excluded', () => {
   assert.deepEqual(o.days.map((d) => d.date), ['2026-10-04']);
 });
 
-test('people: merged by unique id, sorted by voice time', () => {
+test('people: merged by unique id, sorted by voice time; hidden nicks are left out', () => {
+  assert.deepEqual(people(seeded(), { ...R, hide: (n) => n === 'ty' }).map((x) => x.name), ['kyle']);
+  assert.equal(overview(seeded(), { ...R, hide: (n) => n === 'ty' }).tiles.people, 1);
   const p = people(seeded(), R);
   assert.deepEqual(p.map((x) => [x.name, Math.round(x.voiceS / 60), x.chat, x.heard, x.botTurns]), [
     ['kyle', 60, 2, 0, 2],
@@ -160,7 +162,7 @@ test('people: merged by unique id, sorted by voice time', () => {
 });
 
 test('bots: asks by first tool, came-back rate, events against the window before', () => {
-  const b = bots(seeded(), { ...R, botNicks: new Set(['sexton']) });
+  const b = bots(seeded(), { ...R, hide: (n) => n.toLowerCase() === 'sexton' });
   assert.equal(b.bots[0].turns, 3);
   assert.equal(b.bots[0].replied, 2);
   const play = b.asks.find((a) => a.kind === 'play_music');

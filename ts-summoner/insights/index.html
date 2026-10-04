@@ -69,7 +69,7 @@ details.tbl summary { cursor: pointer; color: var(--text-secondary); font-size: 
 .filters { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 12px; }
 .filters label { color: var(--text-secondary); font-size: 13px; }
 input[type=search], select { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font: inherit; }
-.log-row { display: grid; grid-template-columns: 140px 64px 140px 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--grid); font-size: 13px; }
+.log-row { display: grid; grid-template-columns: 130px 64px 200px 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--grid); font-size: 13px; }
 .log-row .when { color: var(--muted); font-variant-numeric: tabular-nums; }
 .log-row .kind { color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
 .log-row .who { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -164,7 +164,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const tipAttr = (html) => esc(html);
 const css = (v) => getComputedStyle($('.viz-root')).getPropertyValue(v).trim();
 const nf = new Intl.NumberFormat();
-const compact = (n) => (n >= 10000 ? new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : nf.format(Math.round(n)));
+const compact = (n) => (n >= 10000 ? new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
+  : n > 0 && n < 10 ? new Intl.NumberFormat(undefined, { maximumFractionDigits: n < 1 ? 2 : 1 }).format(n) : nf.format(Math.round(n)));
 const dur = (s) => { s = Math.round(s); if (s < 60) return `${s}s`; const m = Math.round(s / 60); if (m < 60) return `${m}m`; const h = Math.floor(m / 60); return h < 48 ? `${h}h ${m % 60}m` : `${nf.format(Math.round(h))}h`; };
 const hourLabel = (h) => (h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`);
 const when = (ts) => new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -192,7 +193,8 @@ function heatmap(el, m) {
   const g = data.overview.heat[m];
   const ramp = css('--seq').split(',').map((s) => s.trim());
   const max = Math.max(...g.flat());
-  const cw = 26, ch = 22, gap = 2, left = 36, topPad = 18;
+  const gap = 2, left = 36, topPad = 18;
+  const cw = Math.max(16, Math.min(44, Math.floor(((el.clientWidth || 720) - left) / 24) - gap)), ch = 22;
   const w = left + 24 * (cw + gap), h = topPad + 7 * (ch + gap);
   const unit = m === 'voice' ? (v) => `${dur(v * 60)} in voice` : (v) => `${nf.format(v)} message${v === 1 ? '' : 's'}`;
   let s = `<svg width="${w}" height="${h}" role="img" aria-label="Activity by weekday and hour">`;
@@ -217,7 +219,7 @@ function heatmap(el, m) {
 function niceMax(v) { if (v <= 0) return 1; const p = 10 ** Math.floor(Math.log10(v)); return [1, 2, 2.5, 5, 10].map((k) => k * p).find((k) => k >= v); }
 
 function columns(el, rows, key, fmt, { line = false } = {}) {
-  if (!rows.length) { el.innerHTML = '<div class="empty">No data in this range yet.</div>'; return; }
+  if (!rows.some((x) => x[key] > 0)) { el.innerHTML = '<div class="empty">No data in this range yet.</div>'; return; }
   const W = Math.max(320, el.clientWidth || 480), H = 180, l = 40, r = 12, t = 10, b = 24;
   const max = niceMax(Math.max(...rows.map((x) => x[key])));
   const iw = W - l - r, ih = H - t - b, step = iw / rows.length;

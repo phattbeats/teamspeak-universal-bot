@@ -31,6 +31,11 @@ const LOGS = env.SEXTON_LOG_DIR || '/var/sexton-logs';
 const TZ = cfg.tz || 'America/New_York';
 const RETENTION_DAYS = ic.retentionDays ?? 365;
 const BOT_NICKS = new Set(Object.values(cfg.bots ?? {}).map((b) => String(b.nick).toLowerCase()));
+// Not people: our bots, Lexton's henchman, and the test logins runs have used.
+// `insights.hideNicks` (regexes) in the summoner config replaces this list.
+const HIDE = (ic.hideNicks ?? ['^PHA\\d', '^pha\\d', 'Probe$', 'Test(er)?$', '^Ledger\\d*$', '^Henchbot$', '^serveradmin'])
+  .map((r) => new RegExp(r, 'i'));
+const hide = (nick) => !nick || BOT_NICKS.has(String(nick).toLowerCase()) || HIDE.some((r) => r.test(nick));
 const PAGE = new URL('./insights/index.html', import.meta.url);
 
 const db = openDb(DB_PATH);
@@ -130,7 +135,7 @@ function range(qs) {
   const now = Date.now();
   const days = qs.get('days');
   const from = days === 'all' ? 0 : now - Number(days || 30) * 86_400_000;
-  return { from, to: now + 60_000, tz: TZ, now, botNicks: BOT_NICKS };
+  return { from, to: now + 60_000, tz: TZ, now, hide };
 }
 
 http.createServer((req, res) => {

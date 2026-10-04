@@ -27,6 +27,9 @@ export function localClock(tz) {
 
 const grid = () => Array.from({ length: 7 }, () => Array(24).fill(0));
 
+// `hide(nick)`: bots and test logins that aren't people (the log still shows them).
+const none = () => false;
+
 /** Voice sessions overlapping [from, to), clipped to it. */
 function sessions(db, from, to, bots = false) {
   return db.prepare(`SELECT start_ts, end_ts, dbid, uid, nick, channel, talk_s, away_s, open FROM voice
@@ -52,7 +55,7 @@ function identities(db) {
   return { key, label };
 }
 
-export function overview(db, { from, to, tz, now = Date.now() }) {
+export function overview(db, { from, to, tz, now = Date.now(), hide = none }) {
   const clock = localClock(tz);
   const id = identities(db);
   const heat = { voice: grid(), chat: grid() };
@@ -66,6 +69,7 @@ export function overview(db, { from, to, tz, now = Date.now() }) {
   const people = new Set();
   let voiceS = 0, talkS = 0;
   for (const s of sessions(db, from, to)) {
+    if (hide(s.nick)) continue;
     const who = id.key(s.nick, s.uid);
     people.add(who);
     voiceS += (s.b - s.a) / 1000;
@@ -79,7 +83,8 @@ export function overview(db, { from, to, tz, now = Date.now() }) {
       d.people.add(who);
     }
   }
-  const chats = db.prepare('SELECT ts, nick, uid FROM chat WHERE ts >= ? AND ts < ? AND is_bot = 0').all(from, to);
+  const chats = db.prepare('SELECT ts, nick, uid FROM chat WHERE ts >= ? AND ts < ? AND is_bot = 0').all(from, to)
+    .filter((m) => !hide(m.nick));
   for (const m of chats) {
     const c = clock(m.ts);
     heat.chat[c.dow][c.hour] += 1;
@@ -99,7 +104,7 @@ export function overview(db, { from, to, tz, now = Date.now() }) {
     if (v > 0 && (!peak || v > peak.v)) peak = { dow: WEEKDAYS[d], hour: h, v };
   }
   const online = db.prepare('SELECT nick, channel, start_ts FROM voice WHERE open = 1 AND is_bot = 0 AND end_ts > ? ORDER BY start_ts')
-    .all(now - 5 * 60_000);
+    .all(now - 5 * 60_000).filter((s) => !hide(s.nick));
   const span = db.prepare(`SELECT MIN(t) first FROM (SELECT MIN(start_ts) t FROM voice UNION ALL SELECT MIN(ts) FROM chat
     UNION ALL SELECT MIN(ts) FROM bot_turns)`).get();
   return {
@@ -114,10 +119,12 @@ export function overview(db, { from, to, tz, now = Date.now() }) {
   };
 }
 
-export function people(db, { from, to }) {
+export function people(db, { from, to, hide = none }) {
   const id = identities(db);
   const map = new Map();
+  const skip = { voiceS: 0, talkS: 0, awayS: 0, sessions: 0, chat: 0, heard: 0, botTurns: 0, lastSeen: 0 };
   const row = (nick, uid) => {
+    if (hide(nick)) return { ...skip };
     const k = id.key(nick, uid);
     let r = map.get(k);
     if (!r) map.set(k, (r = { name: id.label(k), voiceS: 0, talkS: 0, awayS: 0, sessions: 0, chat: 0, heard: 0, botTurns: 0, lastSeen: 0 }));
@@ -142,9 +149,11 @@ export function people(db, { from, to }) {
     r.heard += h.n;
     r.lastSeen = Math.max(r.lastSeen, h.t);
   }
-  for (const t of db.prepare(`SELECT nick, COUNT(*) n FROM bot_turns WHERE ts >= ? AND ts < ? AND nick IS NOT NULL
+  for (const t of db.prepare(`SELECT nick, COUNT(*) n, MAX(ts) t FROM bot_turns WHERE ts >= ? AND ts < ? AND nick IS NOT NULL
       AND lane IN ('voice','chat','dm') GROUP BY nick`).all(from, to)) {
-    row(t.nick, null).botTurns += t.n;
+    const r = row(t.nick, null);
+    r.botTurns += t.n;
+    r.lastSeen = Math.max(r.lastSeen, t.t);
   }
   return [...map.values()].sort((a, b) => b.voiceS - a.voiceS || b.chat - a.chat);
 }
@@ -160,11 +169,11 @@ const top = (counts, n = 8) => Object.entries(counts).sort((a, b) => b[1] - a[1]
  *    summons...) and how much human chat + speech followed in the next
  *    `windowMin`, against the same window before.
  */
-export function bots(db, { from, to, followMin = 5, windowMin = 10, botNicks = new Set() }) {
+export function bots(db, { from, to, followMin = 5, windowMin = 10, hide = none }) {
   const turns = db.prepare(`SELECT ts, bot, session, lane, nick, replied, tools, cost FROM bot_turns
     WHERE ts >= ? AND ts < ? ORDER BY ts`).all(from, to);
   const per = {}, kinds = {};
-  const human = turns.filter((t) => ['voice', 'chat', 'dm'].includes(t.lane) && t.nick && !botNicks.has(t.nick.toLowerCase()));
+  const human = turns.filter((t) => ['voice', 'chat', 'dm'].includes(t.lane) && t.nick && !hide(t.nick));
   for (const [i, t] of human.entries()) {
     const b = (per[t.bot] ??= { bot: t.bot, turns: 0, replied: 0, cost: 0, lanes: {}, askers: {}, tools: {} });
     b.turns += 1;
