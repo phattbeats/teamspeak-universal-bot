@@ -54,9 +54,23 @@ CREATE INDEX IF NOT EXISTS bot_turns_session ON bot_turns(bot, session, ts);
 export function openDb(path) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
-  db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;');
-  db.exec(SCHEMA);
-  return db;
+  db.exec('PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;');
+  // On a brand-new file the summoner and insights-web both initialise it at
+  // boot. SQLite answers some of those collisions with an instant "database is
+  // locked" that busy_timeout never waits out (the WAL switch, a read lock
+  // upgrading to write), so: schema under BEGIN IMMEDIATE, which does wait,
+  // and a short retry around the lot.
+  for (let i = 0; ; i++) {
+    try {
+      db.exec('PRAGMA journal_mode=WAL;');
+      db.exec(`BEGIN IMMEDIATE; ${SCHEMA} COMMIT;`);
+      return db;
+    } catch (e) {
+      if (db.isTransaction) db.exec('ROLLBACK');
+      if (i >= 50 || !/locked|busy/i.test(e.message)) { db.close(); throw e; }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
 }
 
 export const getMeta = (db, k, d = null) => db.prepare('SELECT v FROM meta WHERE k=?').get(k)?.v ?? d;
@@ -75,8 +89,19 @@ export class Recorder {
     this.nickByClid = new Map(); // for leftview, which carries no nick
     this.channels = new Map(); // cid -> name
     this.lastHeard = new Map(); // nick|text -> ts; several bots forward one utterance
+    this.path = path;
+    this.retryAt = 0;
+    this.attach();
+  }
+
+  /**
+   * Open the db. A failure turns recording off rather than taking the
+   * summoner down, and ready() tries again a minute later, so a transient
+   * lock at boot doesn't silence the recorder until the next restart.
+   */
+  attach() {
     try {
-      this.db = openDb(path);
+      this.db = openDb(this.path);
       // Sessions left open by a crash or restart end where they were last seen.
       this.db.prepare('UPDATE voice SET open=0 WHERE open=1').run();
       this.st = {
@@ -90,12 +115,19 @@ export class Recorder {
       };
     } catch (e) {
       this.db = null;
-      log('insights: recorder off:', e.message);
+      this.retryAt = this.now() + 60_000;
+      if (e.message !== this.lastError) this.log('insights: recorder off (retrying every minute):', e.message);
+      this.lastError = e.message;
     }
   }
 
+  ready() {
+    if (!this.db && this.now() >= this.retryAt) this.attach();
+    return !!this.db;
+  }
+
   safe(what, fn) {
-    if (!this.db) return;
+    if (!this.ready()) return;
     try { fn(); } catch (e) { this.log(`insights: ${what}:`, e.message); }
   }
 
@@ -119,7 +151,7 @@ export class Recorder {
    * Query clients (client_type 1) are not people.
    */
   poll(clients, pollSec) {
-    if (!this.db) return;
+    if (!this.ready()) return;
     const now = this.now();
     const seen = new Set();
     this.safe('poll', () => {
