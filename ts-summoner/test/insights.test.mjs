@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { applyTurnOps, openDb, parsePrompt, parseRoomLog, Recorder, turnOps } from '../insights.mjs';
 import { bots, localClock, logPage, overview, people } from '../insights-stats.mjs';
@@ -71,6 +74,24 @@ test('a recorder that cannot open its db stays out of the way', () => {
   r.chat({ nick: 'a', text: 'b' });
   r.poll([client('1', 'a', '1')], 10);
   r.botEvent('x', 'y');
+});
+
+test('a recorder that failed to open tries again a minute later', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'insights-'));
+  try {
+    writeFileSync(join(dir, 'blocker'), ''); // a file where the db's directory should be
+    let now = T0;
+    const r = new Recorder(join(dir, 'blocker', 'insights.db'), { log: quiet, now: () => now });
+    assert.equal(r.db, null);
+    rmSync(join(dir, 'blocker'));
+    r.chat({ nick: 'kyle', text: 'too soon' });
+    assert.equal(r.db, null, 'no retry inside the minute');
+    now += 60_000;
+    r.chat({ nick: 'kyle', text: 'back' });
+    assert.deepEqual(r.db.prepare('SELECT text FROM chat').all().map((x) => x.text), ['back']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('prompts: lane, nick and text come off the plugin prefix', () => {
