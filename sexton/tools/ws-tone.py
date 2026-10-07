@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Push tones into a running Sexton's audio bridge WebSocket (PHA-3342: this
+"""Push tones into a running Sexton's audio bridge WebSocket (#3342: this
 moved from a standalone ts-bridge container into the Sexton binary, same
 port) — the `bridge-test` send side, in stdlib Python, so the bridge can be
 exercised from outside the compose network (over an ssh -L tunnel) without a
@@ -12,7 +12,7 @@ Plays a continuous 220 Hz tone into the music lane (0x82) and 2 s bursts of
 `bridge-test` drives, and prints each transition with a timestamp.
 
 The two frequencies are overridable so a second bridge can be driven with a
-different tone at the same time: that is how PHA-3216 (c) checks that two
+different tone at the same time: that is how #3216 (c) checks that two
 simultaneous talkers do not cross-label. `voice_hz=0` sends music only.
 """
 

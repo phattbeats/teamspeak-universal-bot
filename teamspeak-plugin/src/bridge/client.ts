@@ -75,11 +75,11 @@ export type BridgeClientEvents = {
   onSpeakerStart?: (clientId: TeamSpeakClientId) => void;
   onSpeakerStop?: (clientId: TeamSpeakClientId) => void;
   onRoster?: (roster: RosterEntry[]) => void;
-  /** Answer to `listChannels()`, pushed back with no request correlation (PHA-3784). */
+  /** Answer to `listChannels()`, pushed back with no request correlation (#3784). */
   onChannelTree?: (channels: ChannelInfo[]) => void;
   onTextMessage?: (message: TextMessageHeader) => void;
   onState?: (state: BridgeStateHeader) => void;
-  /** Answer to any moderation command (PHA-3786). */
+  /** Answer to any moderation command (#3786). */
   onModerationResult?: (result: ModerationResult) => void;
   onConnected?: () => void;
   onDisconnected?: (reason: string) => void;
@@ -189,7 +189,7 @@ export class TeamSpeakBridgeClient {
     this.send(encodeFrame(TYPE_SEND_TEXT, { target, text }));
   }
 
-  // --- moderation (PHA-3786) -----------------------------------------------
+  // --- moderation (#3786) -----------------------------------------------
 
   kickClient(clientId: TeamSpeakClientId, fromServer: boolean, reason?: string): void {
     this.send(encodeFrame(TYPE_CLIENT_KICK, { clientId, fromServer, reason }));
@@ -239,7 +239,7 @@ export class TeamSpeakBridgeClient {
 
   /**
    * Ask the bridge for the full channel tree. Fire-and-forget: the answer
-   * arrives asynchronously on `events.onChannelTree` (PHA-3784) — there is no
+   * arrives asynchronously on `events.onChannelTree` (#3784) — there is no
    * per-request id, matching every other command on this connection.
    */
   listChannels(): void {
@@ -247,7 +247,7 @@ export class TeamSpeakBridgeClient {
   }
 
   /**
-   * Set the bot's own client description (PHA-3857). The PLNT overlay shows
+   * Set the bot's own client description (#3857). The PLNT overlay shows
    * a description starting with `♪` as the bot's now-playing line. No reply.
    */
   setDescription(description: string): void {

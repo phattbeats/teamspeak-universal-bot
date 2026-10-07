@@ -1,12 +1,12 @@
 /**
- * Streaming text -> speech -> room playback (PHA-3792).
+ * Streaming text -> speech -> room playback (#3792).
  *
  * Before this the stt-tts session waited for the WHOLE agent reply, split it
  * into sentences, and only then started the first T2A call. Now the reply
  * arrives in blocks while the model is still generating, and every block is
  * pushed here the moment it lands. The pipeline owns the part that must stay
  * ordered: each block is split into speakable chunks, chunks are synthesized
- * in push order with one call in flight ahead of playback (the PHA-3789
+ * in push order with one call in flight ahead of playback (the #3789
  * prefetch, unchanged), and the frames go on the room queue in that same
  * order. The first chunk's audio is on the wire while the model is still
  * writing the last sentence.

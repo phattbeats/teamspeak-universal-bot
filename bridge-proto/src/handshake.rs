@@ -24,7 +24,7 @@ use crate::events::{RosterEntry, StateSnapshot};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hello {
     /// Sexton's protocol version. Bump on breaking wire changes. Today:
-    /// `1` (PHA-3341 initial).
+    /// `1` (#3341 initial).
     pub version: u32,
     pub state: StateSnapshot,
     pub roster: Vec<RosterEntry>,
@@ -45,7 +45,7 @@ pub struct HelloAck {
     /// socket; the Sexton logs and reconnects after backoff.
     pub version: u32,
     /// Bridge-side WebSocket bind address, recorded by the Sexton for the
-    /// closing evidence table (PHA-2501) so the operator can see which
+    /// closing evidence table (#2501) so the operator can see which
     /// endpoint the Sexton's `depends_on` resolved.
     #[serde(rename = "wsBind")]
     pub ws_bind: String,

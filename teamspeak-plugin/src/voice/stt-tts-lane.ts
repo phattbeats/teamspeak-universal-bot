@@ -1,5 +1,5 @@
 /**
- * Assembles the stt-tts lane from account config (PHA-3228).
+ * Assembles the stt-tts lane from account config (#3228).
  *
  * `channel.ts` stays a registration seam: this is where the lane's parts are
  * chosen and refused. Refusal matters as much as construction here — the lane's
@@ -7,14 +7,14 @@
  * path, and the only place that can be enforced is at the point the transcriber
  * is built.
  *
- * Since PHA-3790 both transcriber slots come out of an `SttProviderRegistry`
+ * Since #3790 both transcriber slots come out of an `SttProviderRegistry`
  * (`stt-registry.ts`) by the name in config, so swapping either one is a config
  * edit and this file does not know which provider it got. What it still owns is
  * the shape of the refusal: an unbuildable *primary* stops the lane, an
  * unbuildable *secondary* only warns, because the primary alone is a complete
  * transcriber.
  *
- * Known v1 gap, stated rather than hidden: the realtime tools from PHA-3176
+ * Known v1 gap, stated rather than hidden: the realtime tools from #3176
  * (`play_music`, `what_did_i_miss`, `who_is_here`, `poke`) are registered on a
  * *provider session*, and this lane has none. Voice turns here reach the agent's
  * ordinary tool surface instead. `!vc` / `!sexton` chat commands are unaffected;
@@ -72,7 +72,7 @@ export type SttTtsLaneParams = {
   sessionKey: string;
   /**
    * `runtime.agent`, `runtime.tts` and `runtime.channel.reply` from the host
-   * PluginRuntime. `reply` is what streams the answer into TTS (PHA-3792);
+   * PluginRuntime. `reply` is what streams the answer into TTS (#3792);
    * without it the lane falls back to the whole-reply ingress path.
    */
   runtime: {
@@ -92,7 +92,7 @@ export type SttTtsLane = {
   transcriberId: string;
   speechProviderId: string;
   wakeNames: string[];
-  /** The lane's own TTS, for lines the runtime says on its own behalf (PHA-3554). */
+  /** The lane's own TTS, for lines the runtime says on its own behalf (#3554). */
   synthesizer: SpeechSynthesizer;
   createSpeakerSession: (
     client: RosterEntry,
@@ -147,7 +147,7 @@ export function createSttTtsLane(
   // TTS is checked once, here, rather than discovered on the first turn: an
   // unconfigured speech provider would otherwise fail every reply, forever, and
   // a stranger's install only learns that when someone talks to the bot
-  // (PHA-3806). Skipped when a test supplies its own synthesizer.
+  // (#3806). Skipped when a test supplies its own synthesizer.
   if (!params.deps?.createSynthesizer) {
     const isConfigured = params.deps?.isSpeechProviderConfigured ?? isHostSpeechProviderConfigured;
     if (!isConfigured(speech.provider, params.cfg)) {
@@ -180,7 +180,7 @@ export function createSttTtsLane(
     primaryTranscriber = built.provider;
   }
 
-  // The second opinion (PHA-3428 item 3). Absent unless configured, and a
+  // The second opinion (#3428 item 3). Absent unless configured, and a
   // failure to build it warns rather than refusing to start: the primary on its
   // own is a complete transcriber, so losing the upgrade must not lose the lane.
   const secondary = resolveTeamSpeakSecondaryTranscriptionConfig(params.config);
@@ -210,8 +210,8 @@ export function createSttTtsLane(
   }
   // Shared by every speaker session this account opens, so the in-flight cap
   // is per-bot: whisper.cpp's own decode slot is one process, shared the same
-  // way (PHA-3607).
-  // PHA-3921: 2 in flight + 2 queued, matching the shared pool's two workers.
+  // way (#3607).
+  // #3921: 2 in flight + 2 queued, matching the shared pool's two workers.
   // At 1/1 a busy room evicted ~3000 segments a day on sexton alone (speech
   // the bot never heard). Peak CPU is bounded by the pool (2 workers, each
   // serialised), not by this cap, and the pool's proxy shares one decode

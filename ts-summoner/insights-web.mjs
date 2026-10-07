@@ -1,4 +1,4 @@
-// PHA-3963: the TeamSpeak insights dashboard. Its own supervisor program, so a
+// #3963: the TeamSpeak insights dashboard. Its own supervisor program, so a
 // bad query here can't stall the summoner's shifts; the summoner records, this
 // reads (plus ingests the gateway's transcripts, which only it touches).
 //

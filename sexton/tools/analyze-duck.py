@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PHA-3216 (b)/(c) analysis: steady-state duck depth, ramp timing, cross-talk.
+"""#3216 (b)/(c) analysis: steady-state duck depth, ramp timing, cross-talk.
 
 The capture tool's built-in summary averages every frame it classified, which
 folds the attack/recovery ramps and the pre/post-tone silence into the two

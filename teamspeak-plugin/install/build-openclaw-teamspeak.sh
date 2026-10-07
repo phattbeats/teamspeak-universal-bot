@@ -14,8 +14,8 @@ OPENCLAW_REF=${OPENCLAW_REF:-fc1877d7f333a3546d8422956bbdb179f2cfc6cf}
 PLUGIN_REF=${PLUGIN_REF:-main}
 IMAGE=${IMAGE:-phattbeats/openclaw-sexton:teamspeak}
 MIN_FREE_GB=${MIN_FREE_GB:-25}
-# Set to "ffmpeg" (plus a pip install of yt-dlp) when the PHA-3176 music tools
-# go live; the plugin's other tools and all of PHA-3220 need neither binary.
+# Set to "ffmpeg" (plus a pip install of yt-dlp) when the #3176 music tools
+# go live; the plugin's other tools and all of #3220 need neither binary.
 IMAGE_APT_PACKAGES=${IMAGE_APT_PACKAGES:-}
 
 log() { printf '\n== %s\n' "$*"; }

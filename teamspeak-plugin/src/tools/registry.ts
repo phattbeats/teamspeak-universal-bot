@@ -1,5 +1,5 @@
 /**
- * The Sexton's realtime voice tools (PHA-3176).
+ * The Sexton's realtime voice tools (#3176).
  *
  * These are registered on the provider session as function tools and executed
  * here, in the plugin; the result goes back through `submitToolResult`, the
@@ -57,7 +57,7 @@ export const MOVE_TO_CHANNEL_TOOL = "move_to_channel";
 export const WHERE_IS_TOOL = "where_is";
 export const SEND_TEXT_TOOL = "send_text";
 
-// --- moderation (PHA-3786) --------------------------------------------------
+// --- moderation (#3786) --------------------------------------------------
 export const KICK_CLIENT_TOOL = "kick_client";
 export const BAN_CLIENT_TOOL = "ban_client";
 export const UNBAN_CLIENT_TOOL = "unban_client";
@@ -70,13 +70,13 @@ export const DELETE_CHANNEL_TOOL = "delete_channel";
 export const EDIT_SERVER_TOOL = "edit_server";
 export const ADD_TO_SERVER_GROUP_TOOL = "add_to_server_group";
 
-// --- villain (PHA-3820) -------------------------------------------------------
+// --- villain (#3820) -------------------------------------------------------
 export const SENTENCE_TOOL = "sentence";
 export const SILENCE_TOOL = "silence";
 export const SUMMON_TOOL = "summon";
 export const DOSSIER_TOOL = "dossier";
 
-// --- the other bots (PHA-3823) ------------------------------------------------
+// --- the other bots (#3823) ------------------------------------------------
 export const SUMMON_BOT_TOOL = "summon_bot";
 export const DISMISS_BOT_TOOL = "dismiss_bot";
 
@@ -95,7 +95,7 @@ const MODERATION_FLAG: Record<string, "kick" | "ban" | "edit"> = {
   [ADD_TO_SERVER_GROUP_TOOL]: "edit",
 };
 
-// --- music queue v2 (PHA-3785) ---------------------------------------------
+// --- music queue v2 (#3785) ---------------------------------------------
 export const NOW_PLAYING_TOOL = "now_playing";
 export const SHOW_QUEUE_TOOL = "show_queue";
 export const SKIP_TOOL = "skip";
@@ -133,17 +133,17 @@ export type TeamSpeakToolDeps = {
   /** The channel the bridge is in; `what_did_i_miss` reads that channel's log. */
   channelName: () => string;
   poke: (clientId: TeamSpeakClientId, text: string) => void;
-  /** Send a text message to the channel, the server, or one client. Also used for the moderation audit line (PHA-3786). */
+  /** Send a text message to the channel, the server, or one client. Also used for the moderation audit line (#3786). */
   sendText: (target: "channel" | "server" | TeamSpeakClientId, text: string) => void;
   /**
-   * Park/unpark the Sexton (PHA-3428, Brandon: "he can leave and join at will …
+   * Park/unpark the Sexton (#3428, Brandon: "he can leave and join at will …
    * not everyone wants him sitting in all the time"). Parked means deaf and
    * mute: no listening, no speaking, no music. `!vc join`, `!vc leave` and the
    * two tools are the only things that still answer.
    */
   setParked: (parked: boolean, reason: string) => void;
   isParked: () => boolean;
-  // --- moderation (PHA-3786) ------------------------------------------------
+  // --- moderation (#3786) ------------------------------------------------
   kickClient: (clientId: TeamSpeakClientId, fromServer: boolean, reason?: string) => void;
   banClient: (clientId: TeamSpeakClientId, durationSecs?: number, reason?: string) => void;
   banDel: (banId: number) => void;
@@ -156,18 +156,18 @@ export type TeamSpeakToolDeps = {
   editServer: (name?: string, welcomeMessage?: string) => void;
   addToServerGroup: (serverGroupId: number, clientId: TeamSpeakClientId) => void;
   /**
-   * The full channel tree — every channel with who is in it (PHA-3784).
+   * The full channel tree — every channel with who is in it (#3784).
    * Round-trips through the bridge (`ListChannels` / `ChannelTree`), so it is
    * async and can come back empty if the bridge does not answer in time.
    */
   listChannels: () => Promise<ChannelInfo[]>;
   /** Move the bot itself into a channel by name or numeric id. */
   moveToChannel: (channel: string) => void;
-  /** The house band (PHA-3554). Undefined on an account that has not opted in. */
+  /** The house band (#3554). Undefined on an account that has not opted in. */
   band?: BandController | undefined;
-  /** Lexton's villain tools (PHA-3820). Undefined unless `tools.villain.enabled`. */
+  /** Lexton's villain tools (#3820). Undefined unless `tools.villain.enabled`. */
   villain?: VillainController | undefined;
-  /** `dossier`'s transcript source (PHA-3820). */
+  /** `dossier`'s transcript source (#3820). */
   readHistory?: ((nickname: string, limit: number) => Promise<DossierHistory>) | undefined;
   logDir: string;
   readLog?: ReadChannelLog | undefined;
@@ -178,7 +178,7 @@ export type TeamSpeakToolDeps = {
 type ToolResult = Record<string, unknown> & { ok: boolean };
 
 /**
- * Which moderation tool groups are actually usable (PHA-3786). Fails closed:
+ * Which moderation tool groups are actually usable (#3786). Fails closed:
  * an empty/absent `allowGroups` disables every group regardless of the
  * per-action flags, since there would be nobody it is safe to run them for.
  */
@@ -951,7 +951,7 @@ async function dispatch(
   }
 }
 
-// --- the house band (PHA-3554) -------------------------------------------------
+// --- the house band (#3554) -------------------------------------------------
 
 function composeSong(
   deps: TeamSpeakToolDeps,
@@ -1092,7 +1092,7 @@ function setVolume(deps: TeamSpeakToolDeps, args: Record<string, unknown>): Tool
   return { ok: true, volume: music.setVolume(normalized) };
 }
 
-// --- music queue v2 (PHA-3785) ---------------------------------------------
+// --- music queue v2 (#3785) ---------------------------------------------
 
 function nowPlaying(deps: TeamSpeakToolDeps): ToolResult {
   const music = deps.music;
@@ -1412,14 +1412,14 @@ function joinVoice(deps: TeamSpeakToolDeps, context: TeamSpeakToolContext): Tool
   return { ok: true, parked: false, wasParked, channel: deps.channelName() };
 }
 
-// --- moderation (PHA-3786) --------------------------------------------------
+// --- moderation (#3786) --------------------------------------------------
 
 /**
- * Is the invoking client in one of `allowGroups` (PHA-3786)? Case-insensitive
+ * Is the invoking client in one of `allowGroups` (#3786)? Case-insensitive
  * name match against `RosterEntry.serverGroups`, the Sexton's own report of
  * TeamSpeak server-group membership. Fails closed: no roster entry (caller
  * left the channel between the tool call and now, or an older bridge that
- * hasn't been rebuilt for PHA-3786 yet) or no configured `allowGroups` means
+ * hasn't been rebuilt for #3786 yet) or no configured `allowGroups` means
  * not authorized. This check runs again at dispatch time even though
  * `moderationOptions` already gates tool *registration* on `allowGroups`
  * being non-empty — registration only proves *some* group is configured, not
@@ -1440,7 +1440,7 @@ function isAuthorizedForModeration(deps: TeamSpeakToolDeps, context: TeamSpeakTo
 
 const NOT_AUTHORIZED: ToolResult = { ok: false, error: "You don't have permission to do that." };
 
-/** Audit line for a moderation action, sent to the channel so the external logger bot persists it (PHA-3786). */
+/** Audit line for a moderation action, sent to the channel so the external logger bot persists it (#3786). */
 function auditModeration(deps: TeamSpeakToolDeps, context: TeamSpeakToolContext, line: string): void {
   deps.sendText("channel", `[moderation] ${context.nickname}: ${line}`);
 }
@@ -1585,7 +1585,7 @@ function muteClientTool(
   return { ok: true, nickname: target.nickname, muted };
 }
 
-// --- channel and presence (PHA-3784) --------------------------------------
+// --- channel and presence (#3784) --------------------------------------
 
 async function listChannelsTool(deps: TeamSpeakToolDeps): Promise<ToolResult> {
   const tree = await deps.listChannels();
@@ -1674,7 +1674,7 @@ async function whereIs(
   };
 }
 
-// --- villain (PHA-3820) -------------------------------------------------------
+// --- villain (#3820) -------------------------------------------------------
 
 async function villainTool(
   deps: TeamSpeakToolDeps,

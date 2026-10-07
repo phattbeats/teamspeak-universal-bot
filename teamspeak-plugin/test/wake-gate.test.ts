@@ -1,5 +1,5 @@
 /**
- * Acceptance: "wake-name gating with 1 vs 2 humans" (PHA-3175).
+ * Acceptance: "wake-name gating with 1 vs 2 humans" (#3175).
  *
  * The policy function under test is the SDK's own
  * `isRealtimeVoiceWakeNameRequired`, copied verbatim into the standalone stub,
@@ -70,7 +70,7 @@ describe("WakeGate", () => {
   });
 });
 
-describe("follow-up window default (PHA-3783)", () => {
+describe("follow-up window default (#3783)", () => {
   it("leaves the conversation open for well over ten seconds of dead air after the bot finishes speaking", async () => {
     const { DEFAULT_FOLLOW_UP_SILENCE_MS } = await import("../src/voice/stt-tts-speaker-session.js");
     // Brandon, 2026-09-24: 8-10 s was too short; people answered the bot's

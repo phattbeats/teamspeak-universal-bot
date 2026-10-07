@@ -1,11 +1,11 @@
 #!/bin/sh
-# PHA-3428: env -> argv for the Sexton binary.
+# #3428: env -> argv for the Sexton binary.
 #
 # The bot's configuration is clap flags, and supervisord programs are a fixed
 # command line. The issue asks for "config via env + one mounted config dir", so
 # this wrapper is the seam: env vars in, `exec sexton` with the right flags out.
 # Deliberately a wrapper and not a change to the binary's arg parsing — the flags
-# are what PHA-3173/3215's deploy, verify.sh, and every transcript in the epic
+# are what #3173/3215's deploy, verify.sh, and every transcript in the epic
 # are written against, and they stay the interface.
 #
 # `exec` matters: supervisord signals this PID, and without exec the TERM would
@@ -24,14 +24,14 @@ set -eu
 : "${SEXTON_DUCK_GAIN:=0.25}"
 : "${SEXTON_IDENTITY:=}"
 : "${SEXTON_IDENTITY_FILE:=/config/sexton-id.txt}"
-# PHA-3573: suppress the catch-up recap for a second persona sharing the
+# #3573: suppress the catch-up recap for a second persona sharing the
 # Sexton's channel (image/deploy-bexton.sh sets this to 1) — the welcome PM
 # still fires. The binary also reads this env var directly as a fallback, but
 # mapping it to a flag here keeps it visible in the logged command line below,
 # same as every other knob this wrapper owns.
 : "${SEXTON_NO_CATCHUP:=0}"
 
-# PHA-3842 G1: in the shared `guest` container the face changes per visit.
+# #3842 G1: in the shared `guest` container the face changes per visit.
 # guest-switch.mjs writes the visiting persona's nick and avatar here; it wins
 # over the container's env. Absent in every other container.
 : "${SEXTON_GUEST_ENV:=/config/.guest-env}"

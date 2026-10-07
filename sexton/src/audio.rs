@@ -1,13 +1,13 @@
 //! The audio/voice lane: per-speaker Opus decode in, mixed Opus encode out,
 //! and the roster/state events the Sexton's WS bridge clients subscribe to.
 //!
-//! **History.** This is PHA-3342's port of what used to be
-//! `ts-bridge/src/ts_client.rs` — the file that, before PHA-3341, owned a
+//! **History.** This is #3342's port of what used to be
+//! `ts-bridge/src/ts_client.rs` — the file that, before #3341, owned a
 //! *second* `tsclientlib::Connection` under the `Sexton-Bridge` identity so
 //! the audio sidecar could speak TeamSpeak independently of the text
-//! Sexton. PHA-3341 collapsed that into one `Connection` fronted by a
+//! Sexton. #3341 collapsed that into one `Connection` fronted by a
 //! Unix-socket IPC (`bridge-proto`) between the Sexton and a still-separate
-//! `ts-bridge` container. PHA-3342 finishes the job Brandon asked for —
+//! `ts-bridge` container. #3342 finishes the job Brandon asked for —
 //! "everything running off of one docker container / one bot account" —
 //! by folding the audio sidecar process itself into this binary: the logic
 //! below now runs against the *same* `Connection` the text lane
@@ -16,7 +16,7 @@
 //! about the receive/send algorithm changed — only whose connection it
 //! runs on.
 //!
-//! Carries the TS6 patches noted in the PHA-3099 epic findings, same as
+//! Carries the TS6 patches noted in the #3099 epic findings, same as
 //! the text lane: tsclientlib's own connect handshake does not request the
 //! channel list or subscribe to all channels against TS6 the way it did
 //! against TS3 (finding #6) — `main.rs`'s `run_once` already sends both
@@ -120,7 +120,7 @@ impl AudioState {
     /// here — tsclientlib's jitter buffer measures time by how many
     /// samples it has handed out, so it has to be pulled on a steady
     /// clock. Draining once per arriving packet backed the queue up to
-    /// `QueueFull` and produced digital silence in PHA-3216.
+    /// `QueueFull` and produced digital silence in #3216.
     pub async fn on_audio_packet(
         &mut self,
         mixer: &Arc<TokioMutex<Mixer>>,
@@ -270,7 +270,7 @@ impl AudioState {
         }
 
         // Stop transmitting when we have nothing to say, instead of
-        // streaming Opus-encoded silence forever (PHA-3216). The hangover
+        // streaming Opus-encoded silence forever (#3216). The hangover
         // keeps the stream open across short gaps — without it, pauses
         // between words in a TTS utterance (or a quiet passage in music)
         // would each close and reopen the stream, spamming every listener
@@ -323,7 +323,7 @@ impl AudioState {
     /// Cleanup owed on every disconnect (temporary or final): nobody can be
     /// mid-sentence across a disconnect and their real `SpeakerStop` is
     /// never coming, and the mixer's duck flag must not latch on forever
-    /// (PHA-3216 / PHA-3174 standing requirement — the mixer outlives the
+    /// (#3216 / #3174 standing requirement — the mixer outlives the
     /// connection attempt).
     pub async fn on_disconnect(&mut self, mixer: &Arc<TokioMutex<Mixer>>, event_tx: &broadcast::Sender<BridgeEvent>) {
         for cid in self.known_talkers.drain() {
@@ -364,7 +364,7 @@ fn build_roster(state: &tsclientlib::data::Connection, channel: ChannelId) -> Ve
         .collect()
 }
 
-/// Server group names for one client (PHA-3786). Carried on the wire so the
+/// Server group names for one client (#3786). Carried on the wire so the
 /// TS plugin, which owns `tools.moderation.allowGroups`, can gate
 /// moderation tools without a second round trip.
 fn resolve_server_group_names(
@@ -379,7 +379,7 @@ fn resolve_server_group_names(
         .collect()
 }
 
-/// Every channel on the server with who currently occupies it (PHA-3784).
+/// Every channel on the server with who currently occupies it (#3784).
 /// `build_roster` above only ever looked at the Sexton's own channel because
 /// nothing needed more; `list_channels`/`where_is`/`move_to_channel(follow=
 /// ...)` do.

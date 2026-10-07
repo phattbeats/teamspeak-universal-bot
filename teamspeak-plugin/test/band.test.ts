@@ -1,5 +1,5 @@
 /**
- * The band leader's job (PHA-3554), with the generator, the music lane and the
+ * The band leader's job (#3554), with the generator, the music lane and the
  * mouth all faked. What is asserted is the sequence the room hears: the tool
  * returns at once; the song is generated off the turn; the announcement is
  * spoken; the downbeat is delayed by exactly the announcement plus the gap;
@@ -290,7 +290,7 @@ describe("BandLeader.compose", () => {
     const status = h.band.status();
     expect(status.status).toBe("failed");
     expect(status.error).toContain("2153");
-    // PHA-3601: band_status (and the silent event built from it) must still
+    // #3601: band_status (and the silent event built from it) must still
     // name which song failed — there is no job left to read the title from.
     expect(status.title).toBe("Anything");
     expect(h.settled.map((s) => s.status)).toEqual(["failed"]);
@@ -363,7 +363,7 @@ describe("BandLeader.compose", () => {
   });
 });
 
-describe("BandLeader.lyrics (PHA-3601)", () => {
+describe("BandLeader.lyrics (#3601)", () => {
   it("gives back the last song's lyrics, and refuses before anything has played", async () => {
     const h = harness();
     expect(h.band.lyrics()).toEqual({
@@ -405,7 +405,7 @@ describe("BandLeader.lyrics (PHA-3601)", () => {
   });
 });
 
-describe("BandLeader.replay (PHA-3601)", () => {
+describe("BandLeader.replay (#3601)", () => {
   it("plays the last song again without calling the generator", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "band-replay-"));
     const audioPath = path.join(dir, "kais-truck.mp3");

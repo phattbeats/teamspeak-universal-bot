@@ -1,5 +1,5 @@
 /**
- * Primary/secondary transcription routing (PHA-3428 item 3).
+ * Primary/secondary transcription routing (#3428 item 3).
  *
  * whisper.cpp stays primary on every turn. MiniMax `asr-1.0` is reached only on
  * escalation, so an ordinary turn costs exactly what it costs today and the
@@ -7,7 +7,7 @@
  *
  * ## Why "low whisper confidence" is not the trigger the issue asked for
  *
- * PHA-3428 names low whisper confidence as an escalation condition. whisper.cpp
+ * #3428 names low whisper confidence as an escalation condition. whisper.cpp
  * will supply one — `avg_logprob` / `no_speech_prob` — but only under
  * `response_format=verbose_json`, and that format is not free. Measured on the
  * live container against one 3.29s clip, alternating formats:
@@ -48,7 +48,7 @@
  * not punished for the silence.
  *
  * If the trade is ever worth re-opening, the seam is `shouldEscalate`, and the
- * cost to re-measure is the table above. Since PHA-3790 the primary *can* hand
+ * cost to re-measure is the table above. Since #3790 the primary *can* hand
  * the router a `confidence` — `transcription.confidence: true` turns it on, at
  * the price in the table — so the condition can now be written without new
  * plumbing. It still is not, because the price has not changed.
@@ -56,7 +56,7 @@
  * ## A composite is a provider too
  *
  * This class implements the same `SttProvider` contract as the two providers it
- * sits between (PHA-3790), which is why nothing downstream has to know whether
+ * sits between (#3790), which is why nothing downstream has to know whether
  * routing is on. `ms` is the router's own total — primary plus any escalation —
  * because that is what the turn actually waited for.
  */

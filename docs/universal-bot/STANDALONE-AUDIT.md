@@ -1,12 +1,12 @@
-# Standalone plugin audit (PHA-3806)
+# Standalone plugin audit (#3806)
 
-Brandon (PHA-3783, 2026-09-26): "now that we are making an openclaw plugin, i also
+Brandon (#3783, 2026-09-26): "now that we are making an openclaw plugin, i also
 want to make sure this is fully standalone as well."
 
-Audited `origin/main` at `da2e712` (PHA-3790 merged). Scope: `teamspeak-plugin/`
+Audited `origin/main` at `da2e712` (#3790 merged). Scope: `teamspeak-plugin/`
 (the repo moved `extensions/teamspeak/` here before this pass — see README's
 history note), `sexton/` (the `plnt-ts-bridge` image), `openclaw.plugin.json` +
-`package.json`, and the moderation/music/TTS defaults PHA-3798 said would fail
+`package.json`, and the moderation/music/TTS defaults #3798 said would fail
 closed for a foreign server.
 
 Method: `grep -rniE` across `teamspeak-plugin/src`, `sexton/`, and the manifests
@@ -14,7 +14,7 @@ for `whisper`, `10.0.0.100`, `teamspeak6-server`, `phatt.vip`, `/root/.openclaw`
 `sexton`/`bexton`, MiniMax model ids, `phattvip`, plus a manual read of
 `src/config.ts` (every `DEFAULT_*` constant), `openclaw.plugin.json`,
 `package.json`, `sexton/Dockerfile`, and the existing `docs/universal-bot/
-BYO-OPENCLAW.md` (PHA-3798 already wrote most of the security-defaults story;
+BYO-OPENCLAW.md` (#3798 already wrote most of the security-defaults story;
 this pass verifies it in code, not just docs, per the issue's own instruction).
 
 ## 1. `teamspeak-plugin/` hardcoded-assumption grep
@@ -44,7 +44,7 @@ nickname, identity file) are exactly what `BYO-OPENCLAW.md` §1 documents.
   RAID-specific defaults baked into the manifest.
 - `package.json`'s `openclaw.extensions: ["./index.ts"]` pointing at a `.ts`
   source file, not `dist/index.js`, looked like a bug at first read (this is
-  exactly the "missing dist/ wall" PHA-3798 said it fixed). It is not: per
+  exactly the "missing dist/ wall" #3798 said it fixed). It is not: per
   `scripts/build.mjs`'s own header comment, OpenClaw's installer infers the
   compiled counterpart next to the declared `.ts` entry automatically for
   every non-`--link` install kind (`package-entry-resolution.ts` /
@@ -56,9 +56,9 @@ nickname, identity file) are exactly what `BYO-OPENCLAW.md` §1 documents.
   against six *already-tracked* files (`config.js`, `minimax-asr.js`,
   `stt-routing.js`, `stt-tts-lane.js`, `stt-tts-speaker-session.js`,
   `whisper-local.js`) and two entirely **missing** files
-  (`stt-provider.js`, `stt-registry.js` — PHA-3790's provider-registry
+  (`stt-provider.js`, `stt-registry.js` — #3790's provider-registry
   refactor never got rebuilt into `dist/`). That means every `npm:`/
-  `npm-pack:`/`git:` install today would ship pre-PHA-3790 STT behavior
+  `npm-pack:`/`git:` install today would ship pre-#3790 STT behavior
   silently, contradicting the "CI-checked not to drift" claim in
   `BYO-OPENCLAW.md`. Root cause: the CI step meant to catch this
   (`.github/workflows/sexton.yml`, "Build and check dist/ is committed") ran
@@ -89,7 +89,7 @@ pass:
 - **Music: was NOT failing closed — fixed this pass.**
   `isTeamSpeakMusicEnabled` returned `true` unless `tools.music.enabled` was
   explicitly `false` — i.e. unset defaulted to *on*, the opposite of what
-  PHA-3798's own DoD and `BYO-OPENCLAW.md`'s "Security defaults" section say
+  #3798's own DoD and `BYO-OPENCLAW.md`'s "Security defaults" section say
   should happen. Changed the check to require `tools.music.enabled === true`.
   Verified safe for our own deployment: `image/gateway/openclaw.seed.json`
   sets `tools.music.enabled: true` explicitly, so Sexton/Bexton are
@@ -115,7 +115,7 @@ pass:
   `BYO-OPENCLAW.md`'s "Security defaults" section: set `commandAllowFrom: []`
   explicitly). Filed as a decision item, see "Open decisions" below.
 
-## 5. TTS hardwired to MiniMax (cross-ref PHA-3790)
+## 5. TTS hardwired to MiniMax (cross-ref #3790)
 
 `DEFAULT_SPEECH_PROVIDER = "minimax"` (`src/config.ts`). The synthesis call
 itself already fails loudly per-turn when unconfigured — `speech.ts`'s
@@ -138,7 +138,7 @@ the gateway can actually use it. Regression test in
 2. `teamspeak-plugin/test/voice-runtime.test.ts` — two band-feature fixtures
    now set `music: { enabled: true }` explicitly.
 3. `teamspeak-plugin/dist/**` — rebuilt against current `src/` (was stale
-   since before PHA-3790; two files were missing entirely).
+   since before #3790; two files were missing entirely).
 4. `.github/workflows/sexton.yml` — the "Build and check dist/ is committed"
    step now stages before diffing (`git add -A -- dist`), so a PR that adds a
    new `src/*.ts` file without its `dist/*.js` counterpart fails CI instead of
@@ -164,7 +164,7 @@ the gateway can actually use it. Regression test in
   Sexton/Bexton's live containers), install `@openclaw/teamspeak` via
   `npm-pack:`, and join a real TS6 server end to end. This is the "one green
   install from a clean gateway" half of the DoD and is a distinct infra task
-  from this audit — tracked separately so PHA-3806 isn't blocked on infra
+  from this audit — tracked separately so #3806 isn't blocked on infra
   turnaround.
 - **`DEFAULT_SEXTON_LOG_DIR`** (finding 1): needs someone to check what path
   is actually mounted/writable inside the live Sexton/Bexton container before
@@ -175,15 +175,15 @@ the gateway can actually use it. Regression test in
   because guessing wrong risks Sexton/Bexton's live chat-memory storage, a
   live production concern this audit should not touch without verification.
 
-## Coordination note (PHA-3791)
+## Coordination note (#3791)
 
-PHA-3791 (universal persona-pack consolidation) is **blocked**, not
+#3791 (universal persona-pack consolidation) is **blocked**, not
 in-progress, as of this pass — its own issue says it's waiting on the
 tool-group work landing first. No overlapping file changes were made here
 beyond `src/config.ts`, its own test, `dist/`, one CI workflow step, and two
-docs files, so there's nothing to reconcile with PHA-3791 when it resumes.
-PHA-3807 (dead-code review) is in progress concurrently against the same
-repo; this pass did not touch any of the files PHA-3807's description lists
+docs files, so there's nothing to reconcile with #3791 when it resumes.
+#3807 (dead-code review) is in progress concurrently against the same
+repo; this pass did not touch any of the files #3807's description lists
 as deletion candidates (`sexton/` crate internals beyond the Dockerfile ENV
 lines already read-only here, `realtime-speaker-session.ts`,
 `ts-bridge/tools/*.py`, vendor stubs).

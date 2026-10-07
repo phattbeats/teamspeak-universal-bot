@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PHA-3428: build the one-container Sexton image. Run this ON PHATT-RAID.
+# #3428: build the one-container Sexton image. Run this ON PHATT-RAID.
 #
 # The dev sandbox has no C toolchain, so it cannot compile tsclientlib — the
 # box is the build host, as it has been for this whole epic. Unraid has docker
@@ -22,9 +22,9 @@ ALSO_LATEST=${ALSO_LATEST:-0}
 WITH_POT=${WITH_POT:-1}
 YTDLP_VERSION=${YTDLP_VERSION:-2026.08.19}
 WHISPER_MODEL=${WHISPER_MODEL:-ggml-base.en.bin}
-# PHA-3428 option (a): the gateway that now runs INSIDE this image. Pin it to
+# #3428 option (a): the gateway that now runs INSIDE this image. Pin it to
 # the same version the main gateway is on — two gateways drifting apart is the
-# upgrade hazard PHA-3326 named, and pinning is the cheapest guard against it.
+# upgrade hazard #3326 named, and pinning is the cheapest guard against it.
 #   docker exec OpenClaw openclaw --version
 OPENCLAW_VERSION=${OPENCLAW_VERSION:-2026.9.3}
 # The weights are ~148 MB, the Rust build tree is large, the whisper.cpp source
@@ -43,8 +43,8 @@ if [ "${free_gb:-0}" -lt "$MIN_FREE_GB" ]; then
   exit 1
 fi
 [ -f "$REPO_ROOT/image/Dockerfile" ] || { echo "no image/Dockerfile under $REPO_ROOT" >&2; exit 1; }
-# PHA-3580: the plugin used to be staged here from a separate private repo
-# (openclaw-teamspeak-plugin, split out by PHA-3220) via
+# #3580: the plugin used to be staged here from a separate private repo
+# (openclaw-teamspeak-plugin, split out by #3220) via
 # install/stage-teamspeak-link.sh. It now lives in this repo at
 # teamspeak-plugin/, so the Dockerfile COPYs it straight from the build
 # context (.dockerignore strips the test-only scaffolding) — there is nothing
@@ -73,7 +73,7 @@ docker build \
   "$REPO_ROOT"
 
 # Not the build exit code. A green build of the wrong tag has fooled us before
-# (PHA-3220), and here there are four independent payloads that can each go
+# (#3220), and here there are four independent payloads that can each go
 # missing without the build noticing — the model download in particular is a
 # separate stage whose failure mode is an empty file, not an error.
 log "verify the payloads actually landed in the image"
@@ -87,7 +87,7 @@ docker run --rm --entrypoint sh "${IMAGE}:${TAG}" -c '
   check "bridge-test"         "test -x /usr/local/bin/bridge-test"
   check "whisper-server"      "/opt/whisper/bin/whisper-server --help"
   check "whisper weights"     "test -s /opt/whisper/models/ggml-base.en.bin"
-  # PHA-3554: --help is not proof. The upstream :main image of 2026-09-17
+  # #3554: --help is not proof. The upstream :main image of 2026-09-17
   # passed --help and then died with SIGILL at the first inference on this
   # CPU. One second of silence through whisper-cli is the smallest thing that
   # actually executes the ggml kernels.
@@ -97,7 +97,7 @@ docker run --rm --entrypoint sh "${IMAGE}:${TAG}" -c '
   check "yt-dlp"              "yt-dlp --version"
   check "supervisord"         "supervisord --version"
   check "runner scripts"      "test -x /usr/local/bin/run-sexton -a -x /usr/local/bin/run-whisper-pool -a -x /usr/local/bin/run-pot -a -x /usr/local/bin/run-gateway -a -x /usr/local/bin/run-universal"
-  # --- PHA-3791: the sidecars that moved in ---
+  # --- #3791: the sidecars that moved in ---
   check "VAD model"           "test -s /opt/whisper/models/ggml-silero-v5.1.2.bin"
   check "coalescing proxy"    "node --check /opt/whisper/coalescing-proxy.mjs"
   check "ts-summoner"         "node --check /opt/ts-summoner/summoner.mjs"
@@ -107,7 +107,7 @@ docker run --rm --entrypoint sh "${IMAGE}:${TAG}" -c '
   check "persona packs"       "test -s /opt/personas/sexton/voice.json -a -s /opt/personas/HUMAN.md"
   check "stack generator"     "UNIVERSAL_CONFIG_DIR=/tmp/c UNIVERSAL_RUN_DIR=/tmp/r node /opt/universal/stack.mjs supervisor"
   check "supervisor conf"     "supervisord -c /etc/supervisor/universal.conf --help"
-  # --- PHA-3428 option (a): the gateway and its plugin ---
+  # --- #3428 option (a): the gateway and its plugin ---
   # The gateway binary being present is not the interesting assertion — it
   # comes from the base image. The interesting one is the plugin: it is COPYd
   # out of a builder stage, it ships no dist/, and the npm install for its one

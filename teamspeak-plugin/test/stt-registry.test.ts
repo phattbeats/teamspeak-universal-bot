@@ -1,5 +1,5 @@
 /**
- * STT as a connector (PHA-3790, TOOL-CATALOG.md §4.7).
+ * STT as a connector (#3790, TOOL-CATALOG.md §4.7).
  *
  * The claim under test is the one the issue asked for: a persona swaps its
  * transcriber by editing config, with no code change — and the $0 / hot-mic
@@ -161,7 +161,7 @@ describe("the config side of the swap", () => {
     transcription: Record<string, unknown>,
   ): TeamSpeakAccountConfig => ({ voice: { streaming: { transcription } } }) as TeamSpeakAccountConfig;
 
-  it("defaults to whisper-local with the settings the lane ran before PHA-3790", () => {
+  it("defaults to whisper-local with the settings the lane ran before #3790", () => {
     const resolved = resolveTeamSpeakTranscriptionConfig({});
     expect(resolved.provider).toBe("whisper-local");
     expect(resolved.language).toBe("en");

@@ -1,18 +1,18 @@
 #!/bin/bash
-# PHA-3598: shared whisper.cpp pool for every bot (base.en). PHA-3791: a
+# #3598: shared whisper.cpp pool for every bot (base.en). #3791: a
 # supervisor program in the one container, no longer a container of its own.
 # whisper-server serialises requests behind one mutex and has no request-level
 # parallelism flag, so the pool is N processes on consecutive ports; each bot is
 # pointed at its own port. VAD (silero) trims non-speech before decode so room
 # tone / music no longer costs a full 30s-window pass ("[ [ [ [" hallucinations).
 #
-# PHA-3607: also starts the coalescing proxy (coalescing-proxy.mjs) one port
+# #3607: also starts the coalescing proxy (coalescing-proxy.mjs) one port
 # past the worker range. It fans out one decode to both bots when their
 # independent segmenters close on the same utterance within a short window,
 # instead of each bot decoding the same speech separately. Both bots should
 # point their transcriber URL at this port, not at a worker port directly;
 # set WHISPER_COALESCE_ENABLED=0 to go back to pinning each bot to its own
-# worker (the pre-PHA-3607 behavior) without editing this script.
+# worker (the pre-#3607 behavior) without editing this script.
 set -eu
 : "${WHISPER_MODEL_PATH:=/opt/whisper/models/ggml-base.en.bin}"
 : "${WHISPER_VAD_MODEL:=/opt/whisper/models/ggml-silero-v5.1.2.bin}"
@@ -50,7 +50,7 @@ if [ "$WHISPER_COALESCE_ENABLED" = "1" ]; then
   pids="$pids $!"
 fi
 trap 'kill $pids 2>/dev/null' TERM INT
-# If any worker (or the proxy) dies, exit non-zero so supervisord (PHA-3791:
+# If any worker (or the proxy) dies, exit non-zero so supervisord (#3791:
 # the pool is program `whisper` in the one container) relaunches the pool.
 wait -n
 exit 1

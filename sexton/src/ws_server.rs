@@ -2,14 +2,14 @@
 //! `bridge-test`, …) connect here — never expose this port outside the
 //! compose network.
 //!
-//! **PHA-3341** moved this file's events off an in-process `ts_client::run`
+//! **#3341** moved this file's events off an in-process `ts_client::run`
 //! and onto a Unix-socket IPC client (`bridge_client.rs`) dialing a
 //! separate `ts-bridge` container, because two processes each held their
 //! own `tsclientlib::Connection` under two different bot identities and
 //! Brandon flagged the double roster entry.
 //!
-//! **PHA-3342** removes the second process entirely — "one docker
-//! container / one bot account" (Brandon, PHA-3342) — so this server now
+//! **#3342** removes the second process entirely — "one docker
+//! container / one bot account" (Brandon, #3342) — so this server now
 //! runs inside the Sexton binary and gets its events straight from the
 //! Sexton's own connection event loop (`audio.rs`) over the same
 //! `broadcast`/`mpsc` channel shapes `bridge_client.rs` used to bridge
@@ -122,7 +122,7 @@ async fn handle_conn(
             }
         };
         // 1 Hz inbound telemetry, the counterpart to the send tick's: says
-        // whether audio is arriving from the client at all (PHA-3216).
+        // whether audio is arriving from the client at all (#3216).
         if matches!(frame.msg_type, TYPE_VOICE_AUDIO | TYPE_MUSIC_AUDIO) {
             audio_frames += 1;
             if audio_frames % 50 == 0 {
@@ -210,7 +210,7 @@ async fn dispatch(
                 }
             }
         }
-        // --- moderation (PHA-3786) ------------------------------------------
+        // --- moderation (#3786) ------------------------------------------
         TYPE_CLIENT_KICK => {
             if let Ok(h) = serde_json::from_value::<ClientKickHeader>(frame.header) {
                 let _ = cmd_tx.send(BridgeCommand::ClientKick {

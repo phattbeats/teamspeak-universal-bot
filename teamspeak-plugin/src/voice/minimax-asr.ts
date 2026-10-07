@@ -1,5 +1,5 @@
 /**
- * MiniMax `asr-1.0`, the hosted transcriber (PHA-3428 item 3, PHA-3790).
+ * MiniMax `asr-1.0`, the hosted transcriber (#3428 item 3, #3790).
  *
  * `whisper-local.ts` explains why the default transcriber is a local sidecar:
  * $0 marginal cost and a hot mic that never leaves the house, promised to the
@@ -24,7 +24,7 @@
  *     `SttResult.confidence` is therefore always absent from this provider, and
  *     `SttRequest.prompt` is ignored rather than rejected.
  *
- * `stream=true` is never sent: PHA-3428 records content filter 1027 firing on
+ * `stream=true` is never sent: #3428 records content filter 1027 firing on
  * ordinary chat in streaming mode, and a filtered stream is indistinguishable
  * from a dead one here.
  */
@@ -131,7 +131,7 @@ export class MiniMaxAsrTranscriber implements SttProvider {
         throw new Error(`minimax-asr HTTP ${response.status}: ${firstLine(body)}`);
       }
       // MiniMax can answer 200 with an error envelope, so an ok status is not
-      // proof of a transcript (PHA-3428: "errors can arrive as HTTP 200").
+      // proof of a transcript (#3428: "errors can arrive as HTTP 200").
       const parsed = readMiniMaxAsrBody(body);
       if (parsed.error) {
         this.noteFailure({ apiStatusCode: parsed.statusCode, body });

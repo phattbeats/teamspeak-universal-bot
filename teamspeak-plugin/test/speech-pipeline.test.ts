@@ -1,5 +1,5 @@
 /**
- * The streaming speech pipeline (PHA-3792): text pushed over time, spoken in
+ * The streaming speech pipeline (#3792): text pushed over time, spoken in
  * order, first audio before the last text has arrived.
  */
 import { describe, expect, it } from "vitest";

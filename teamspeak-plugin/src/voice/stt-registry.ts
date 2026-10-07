@@ -1,5 +1,5 @@
 /**
- * The built-in STT providers, registered by name (PHA-3790).
+ * The built-in STT providers, registered by name (#3790).
  *
  * This is the whole "no code change to swap" surface: a provider appears here
  * once and is thereafter selectable from any persona's config by name. The

@@ -1,5 +1,5 @@
 #!/bin/sh
-# PHA-3791: health of the one container. Unhealthy means the gateway is down,
+# #3791: health of the one container. Unhealthy means the gateway is down,
 # because that is the one thing every bot shares. A stopped core is normal (off
 # shift, ts-summoner's call) and is only reported, as are the shared services.
 set -u

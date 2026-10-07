@@ -1,4 +1,4 @@
-// PHA-3791: the one-container wiring, run against the repo's own persona packs.
+// #3791: the one-container wiring, run against the repo's own persona packs.
 //   node --test image/universal/
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';

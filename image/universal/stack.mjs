@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PHA-3791: every TeamSpeak bot in ONE container, under ONE OpenClaw gateway.
+// #3791: every TeamSpeak bot in ONE container, under ONE OpenClaw gateway.
 //
 // Brandon, 2026-10-02: "since openclaw can handle multiple agents, cant they
 // all be under one, expanding container?" This is the "expanding" part. A bot
@@ -46,7 +46,7 @@ const SUNO_URL = env.UNIVERSAL_SUNO_URL || 'http://127.0.0.1:3000';
 const POT_PORT = env.POT_PORT || 4416;
 const SEED = env.UNIVERSAL_SEED || '/opt/sexton-gateway/openclaw.seed.json';
 const SUMMONER_DEFAULTS = env.UNIVERSAL_SUMMONER_DEFAULTS || '/opt/ts-summoner';
-// Guests have no shifts of their own; they only visit (PHA-3842).
+// Guests have no shifts of their own; they only visit (#3842).
 const DEFAULT_BOTS = {
   sexton: {},
   bexton: {},
@@ -195,7 +195,7 @@ function writeSummonerConfig(bots) {
   cfg.calendarFile = `${dir}/live/calendar.json`;
   cfg.stateFile = `${dir}/state/state.json`;
   cfg.scenes = { ...cfg.scenes, file: `${dir}/live/scenes.json` };
-  cfg.insights = { ...cfg.insights, db: `${CONFIG}/insights/insights.db` }; // PHA-3963
+  cfg.insights = { ...cfg.insights, db: `${CONFIG}/insights/insights.db` }; // #3963
   if (cfg.chatLog) cfg.chatLog = { ...cfg.chatLog, dir: `${LOGS}/${cfg.chatLog.whenOff}/${env.SEXTON_CHANNEL || 'General Shit'}` };
   cfg.bots = cfg.bots || {};
   const live = new Set(bots.map((b) => b.id));
@@ -243,7 +243,7 @@ function gateway() {
       writeFileSync(`${ws}/mood/AGENTS.md`, '# How today is going\n\nNothing special about today. Just a regular shift.\n');
     }
     if (human) {
-      // PHA-3829: shared tone reaches the prompt only as an AGENTS.md-class
+      // #3829: shared tone reaches the prompt only as an AGENTS.md-class
       // file; synced every boot so a HUMAN.md fix ships without re-seeding.
       mkdirSync(`${ws}/shared-tone`, { recursive: true });
       cpSync(human, `${ws}/shared-tone/AGENTS.md`);
@@ -311,7 +311,7 @@ function gateway() {
     ...bots.map((b) => ({ agentId: b.id, match: { channel: 'teamspeak', accountId: b.id } })),
   ];
 
-  // PHA-3829/3840: the hook that injects shared tone and the day's mood.
+  // #3829/3840: the hook that injects shared tone and the day's mood.
   cfg.hooks ??= {};
   cfg.hooks.internal ??= {};
   cfg.hooks.internal.enabled = true;
@@ -319,7 +319,7 @@ function gateway() {
   const hook = (entries['bootstrap-extra-files'] ??= {});
   hook.enabled = true;
   hook.paths = [...new Set([...(hook.paths || []), 'shared-tone/AGENTS.md', 'mood/AGENTS.md'])];
-  // PHA-3792: sentence-sized blocks for the voice lane, only when unset.
+  // #3792: sentence-sized blocks for the voice lane, only when unset.
   cfg.agents.defaults ??= {};
   cfg.agents.defaults.blockStreamingChunk ??= { minChars: 24, maxChars: 400, breakPreference: 'sentence' };
   cfg.agents.defaults.blockStreamingCoalesce ??= { minChars: 24, maxChars: 400, idleMs: 0 };
@@ -349,7 +349,7 @@ function accountFromPack(b, seed, cfg) {
   a.tools ??= {};
   const t = b.tools;
   if (typeof t.music?.enabled === 'boolean') a.tools.music = { ...a.tools.music, enabled: t.music.enabled };
-  // Fail closed: moderation only where the pack grants it (PHA-3793).
+  // Fail closed: moderation only where the pack grants it (#3793).
   a.tools.moderation = t.moderation || { kick: false, ban: false, edit: false, allowGroups: [] };
   if (t.villain) a.tools.villain = { ...t.villain };
   if (t.band?.enabled) {

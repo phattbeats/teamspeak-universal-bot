@@ -1,7 +1,7 @@
 # teamspeak-universal-bot
 
 The Sexton: a bot that gives teamspeak.phatt.vip's channel chat memory, voice,
-and a handful of tools. Tracked as the PHA-3099 epic in Paperclip.
+and a handful of tools. Tracked as the #3099 epic in Paperclip.
 
 TeamSpeak does not persist channel text chat — anyone who joins a channel
 late sees nothing that was said before they arrived. The Sexton fixes that,
@@ -9,7 +9,7 @@ and is the platform the later voice/tool work builds on.
 
 ## Deploy
 
-Everything ships as **one container** (PHA-3791): every bot (Sexton, Bexton,
+Everything ships as **one container** (#3791): every bot (Sexton, Bexton,
 Lexton and the guest stars Rotten Johnny and Trixie) under one OpenClaw
 gateway, each with its own TeamSpeak identity, plus the whisper pool,
 suno-api, the POT provider and ts-summoner, all supervised in one place.
@@ -27,33 +27,33 @@ bridge port, a gateway account, an agent and a summoner entry. See
 
 ## Scope
 
-- **v1 — chat memory** (PHA-3173, PHA-3107): a catch-up PM on join and a full
-  markdown log on disk (PHA-3424 removed the earlier rolling last-N-messages
+- **v1 — chat memory** (#3173, #3107): a catch-up PM on join and a full
+  markdown log on disk (#3424 removed the earlier rolling last-N-messages
   channel description, since editing it on every message fired a
   channel-edit notification sound). Content-only — no joins/leaves/moves/
   mutes/system messages, just what people typed.
-- **Audio bridge** (PHA-3174, `plnt-ts-bridge`): sidecar exposing per-speaker
+- **Audio bridge** (#3174, `plnt-ts-bridge`): sidecar exposing per-speaker
   PCM out, mixed PCM in, and a music lane with ducking over a local
   WebSocket.
-- **Realtime voice channel plugin** (PHA-3175): OpenClaw channel plugin
+- **Realtime voice channel plugin** (#3175): OpenClaw channel plugin
   putting a realtime voice runtime in the channel, with Discord config
   parity. Lives at [`teamspeak-plugin/`](teamspeak-plugin/) in this repo.
-  Split out into its own repo at PHA-3220 so the plugin and the chat logger
-  could ship independently; PHA-3580 moved it back once PHA-3341/3342 folded
-  them onto one tsclientlib connection and PHA-3428 put them in one image —
+  Split out into its own repo at #3220 so the plugin and the chat logger
+  could ship independently; #3580 moved it back once #3341/3342 folded
+  them onto one tsclientlib connection and #3428 put them in one image —
   the repo, `phattbeats/openclaw-teamspeak-plugin`, is now archived.
-- **Voice tools v1** (PHA-3176): `play_music` (ducked lane), `stop`,
+- **Voice tools v1** (#3176): `play_music` (ducked lane), `stop`,
   `what_did_i_miss`, `who_is_here`, `poke`.
 
 Server prerequisites (30033/tcp forward, Sexton server group + permissions,
 Docker network placement) and standing decisions (realtime provider, monthly
 cost ceiling, the Sexton's voice, the "Sexton is listening" notice) are
-tracked separately as PHA-3172 and PHA-3177.
+tracked separately as #3172 and #3177.
 
 ## Implementation notes
 
 - Rust on [tsclientlib](https://github.com/ReSpeak/tsclientlib), proven
-  against the live server in PHA-3073 (reuses that voicespike build). Text
+  against the live server in #3073 (reuses that voicespike build). Text
   messages arrive as `StreamItem::MessageEvent` / `events::Event::Message`;
   channel descriptions are edited via
   `con.get_state()?.channels[id].edit().set_description(...)`; private
@@ -78,12 +78,12 @@ See [`docs/universal-bot/TOOL-CATALOG.md`](docs/universal-bot/TOOL-CATALOG.md)
 for the research + implementation notes on turning Sexton/Bexton into
 instances of a common tool platform: web search provider choice, the
 `tools.allow` wiring, per-persona skill curation, and the live-verify
-recipe (PHA-3783/PHA-3788).
+recipe (#3783/#3788).
 
 ## Status
 
-`ts-bridge/` (PHA-3174, audio sidecar) has a working Rust implementation —
+`ts-bridge/` (#3174, audio sidecar) has a working Rust implementation —
 see `ts-bridge/README.md` for how to run it and what's not yet verified
-against the live server. v1 chat memory (PHA-3173) and the rest of the epic
-are still planning/blocked. See the PHA-3099 epic and its children in
+against the live server. v1 chat memory (#3173) and the rest of the epic
+are still planning/blocked. See the #3099 epic and its children in
 Paperclip for current status and decisions.

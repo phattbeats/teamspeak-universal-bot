@@ -1,5 +1,5 @@
 /**
- * Entrance and exit lines (PHA-3824).
+ * Entrance and exit lines (#3824).
  *
  * ts-summoner owns when a bot's core starts and stops, but only the gateway
  * can speak. So the summoner drops a request file into the bot's container
@@ -18,7 +18,7 @@
  * pool is consumed silently: the summoner never waits on a bot that has
  * nothing to say.
  *
- * Daily mood (PHA-3840): a `shift_start` also rolls the bot's mood for the
+ * Daily mood (#3840): a `shift_start` also rolls the bot's mood for the
  * shift from a weighted table in the workspace (`moods.json`) and writes it to
  * `mood/AGENTS.md`, which the bootstrap-extra-files hook puts in every prompt.
  * The entrance line comes from the `mood:<name>` pool when there is one. A
@@ -26,7 +26,7 @@
  * summoner sends entrances even into an empty server, marked `quiet`, so the
  * mood still turns over when nobody's there to hear the line.
  *
- * PHA-3841 additions (all optional, so an older summoner still works):
+ * #3841 additions (all optional, so an older summoner still works):
  *   - `reason` may carry a tag, `shift_start:halloween` (a calendar night) or
  *     `shift_start:bender_return` (a rare event). Line order: the tagged pool,
  *     then the mood pool, then the plain `shift_start`. A themed night beats a

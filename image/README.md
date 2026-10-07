@@ -1,4 +1,4 @@
-# image/ — every TeamSpeak bot as one container (PHA-3791)
+# image/ — every TeamSpeak bot as one container (#3791)
 
 Brandon, 2026-10-02/03: "since openclaw can handle multiple agents, cant they
 all be under one, expanding container?" ... "combine everything into one".
@@ -20,7 +20,7 @@ image/gateway/                 the gateway's seed config and core patches
 | --- | --- | --- |
 | `core-<id>` | one Rust core per bot: its TeamSpeak identity, nick, avatar, bridge socket on `127.0.0.1:91xx` | the `sexton`/`bexton`/`lexton`/`guest` containers |
 | `gateway` | ONE OpenClaw gateway: agent + `channels.teamspeak.accounts.<id>` + binding per bot | one gateway per container |
-| `whisper` | 2 whisper.cpp workers + the coalescing proxy on :8082 (PHA-3921) | the `whisper` container |
+| `whisper` | 2 whisper.cpp workers + the coalescing proxy on :8082 (#3921) | the `whisper` container |
 | `pot` | bgutil POT provider for yt-dlp | per container |
 | `suno-api` | gcui-art/suno-api + `suno-api/phattbeats.patch`, chromium, on :3000 | the `suno-api` container |
 | `summoner` | ts-summoner: shifts, summons, scenes, guests; starts/stops `core-<id>` | the `ts-summoner` container |
@@ -46,7 +46,7 @@ adds it to `bots.json` with the next free port and seeds its workspace,
 agent, account and binding. The summoner keeps a bot it has no shifts for on
 duty around the clock; give it shifts in `config/summoner/config.json`. A new
 identity joins as an unprivileged client: add it to the Sexton server group
-(PHA-3793) if it needs moderation.
+(#3793) if it needs moderation.
 
 What is seeded once (then the operator's): the workspace, the agent entry,
 the account's voice/tool tuning. What follows `bots.json` every boot: the
@@ -62,7 +62,7 @@ and a guest visit no longer restarts anything.
 
 ---
 
-# History: the Sexton as one container (PHA-3428)
+# History: the Sexton as one container (#3428)
 
 
 Brandon's decision, 2026-09-12: the Sexton stack deploys as **one Docker
@@ -84,11 +84,11 @@ image/gateway/            the in-container OpenClaw gateway's seed config + note
 | piece | was | is now |
 | --- | --- | --- |
 | Sexton bot | `sexton` container | the `sexton` binary |
-| audio bridge (PHA-3174) | `ts-bridge` container | same binary — folded in by PHA-3342 |
-| whisper.cpp + `ggml-base.en.bin` (PHA-3228) | `whisper` container, model on a host mount | `/opt/whisper`, weights **baked into the image** — and since PHA-3598 run as the shared `whisper` pool container again (same image, `whisper/deploy.sh`), with the in-container copy left down (`WHISPER_ENABLED=0`) |
-| ffmpeg, yt-dlp (PHA-3176) | nowhere — never installed | `/usr/local/bin`, on PATH for the plugin |
+| audio bridge (#3174) | `ts-bridge` container | same binary — folded in by #3342 |
+| whisper.cpp + `ggml-base.en.bin` (#3228) | `whisper` container, model on a host mount | `/opt/whisper`, weights **baked into the image** — and since #3598 run as the shared `whisper` pool container again (same image, `whisper/deploy.sh`), with the in-container copy left down (`WHISPER_ENABLED=0`) |
+| ffmpeg, yt-dlp (#3176) | nowhere — never installed | `/usr/local/bin`, on PATH for the plugin |
 | bgutil POT provider | nowhere | `/opt/bgutil-pot`, served on `:4416` |
-| OpenClaw gateway + `teamspeak` plugin | the main `OpenClaw` container, plugin source in its own repo | the base image, plugin baked in from [`teamspeak-plugin/`](../teamspeak-plugin/) (PHA-3580) at `/opt/openclaw-teamspeak-plugin` |
+| OpenClaw gateway + `teamspeak` plugin | the main `OpenClaw` container, plugin source in its own repo | the base image, plugin baked in from [`teamspeak-plugin/`](../teamspeak-plugin/) (#3580) at `/opt/openclaw-teamspeak-plugin` |
 | supervisor | n/a (one process per container) | `supervisord` as PID 1 |
 
 Three containers become one, and the channel comes with it.
@@ -119,7 +119,7 @@ treat whisper being down as unhealthy, because a Docker-level restart would take
 the bot out of the channel and undo exactly the thing the supervisor is there to
 preserve.
 
-## Bexton and the house band (PHA-3554)
+## Bexton and the house band (#3554)
 
 Bexton leads The Velvet Vice Lounge Band. He is **the same image as a second
 container**: same binary, same bridge, same in-container gateway, and three
@@ -129,13 +129,13 @@ things different, all env:
 | --- | --- | --- |
 | `SEXTON_AGENT_ID` | (empty: the imported `sexton` agent) | `bexton` — `run-gateway.sh` seeds `/opt/sexton-persona/bexton/` (`personas/bexton/`) into the gateway workspace on first boot, adds the agent entry with the Sexton's model block, and binds the channel to it |
 | `SEXTON_WAKE_NAMES` | seed default (`Sexton`, `Henchman`) | `Bexton,band leader,maestro` |
-| `SEXTON_WAKE_ALIASES` | `section,sections,sex and,sexin,saxton,sex ton,sex done` (exact whisper hearings, PHA-3605) | (empty) |
+| `SEXTON_WAKE_ALIASES` | `section,sections,sex and,sexin,saxton,sex ton,sex done` (exact whisper hearings, #3605) | (empty) |
 | `SEXTON_EXCLUDE_WAKE_NAMES` | `Bexton,band leader,maestro` (never answer the other bot's name) | `Sexton,Henchman` |
 | `SEXTON_BAND_ENABLED` | `0` | `1` — writes `tools.band` into the channel block, reusing the TTS block's MiniMax key |
-| `SEXTON_WHISPER_URL` | `http://whisper:8082/inference` | `http://whisper:8082/inference` — both bots share the pool's coalescing proxy (PHA-3607), which fans one decode out to both when they segment the same utterance and otherwise round-robins across the two workers; first-boot only, the mounted `openclaw.json` wins afterwards |
+| `SEXTON_WHISPER_URL` | `http://whisper:8082/inference` | `http://whisper:8082/inference` — both bots share the pool's coalescing proxy (#3607), which fans one decode out to both when they segment the same utterance and otherwise round-robins across the two workers; first-boot only, the mounted `openclaw.json` wins afterwards |
 | `WHISPER_ENABLED` | `0` | `0` — the in-container whisper-server stays down while the pool is the transcriber |
 
-### The shared whisper pool (PHA-3598)
+### The shared whisper pool (#3598)
 
 Two bots in one channel each ran their own `whisper-server` and each decoded
 every speaker, including the other bot, so a busy room cost 2-3 cores per bot
@@ -148,7 +148,7 @@ silence/noise segment into a ~200 ms empty answer instead of a 4-12 s decode.
 Each bot was pointed at its own port. Health: the pool container runs with
 `--no-healthcheck` because the image's healthcheck is the bot's, not whisper's.
 
-**PHA-3607** found the next layer of the same waste: even with each bot on
+**#3607** found the next layer of the same waste: even with each bot on
 its own worker, the two bots still decoded the *same* speech separately —
 one worker each, but the same audio twice. `whisper/coalescing-proxy.mjs`
 sits in front of the pool (`:8082` by default) and both bots now point at it
@@ -216,7 +216,7 @@ with a preference for (a) "unless it doubles the gateway's config burden".
 argued for (b); Brandon overruled that on 2026-09-12:
 
 > **option (a)** — this container runs its own OpenClaw gateway instance with
-> the teamspeak plugin installed via the PHA-3326 managed install. Do not wire
+> the teamspeak plugin installed via the #3326 managed install. Do not wire
 > the bridge socket out to the main gateway.
 
 So the gateway is in here, started by `supervisord` as `[program:gateway]`, and
@@ -244,7 +244,7 @@ the plugin is `--link`-installed into it on every boot by
 ### What (a) costs — the escape hatch was not wrong, just overruled
 
 The (b) argument was that a second gateway needs its own config file, state
-dir, agent identity and model credentials, and that PHA-3326's finding — a core
+dir, agent identity and model credentials, and that #3326's finding — a core
 version bump does not update a managed channel plugin — means every OpenClaw
 upgrade now has to be performed and verified in two places. **All of that is
 still true.** What changed is who decides whether it is worth paying.
@@ -301,7 +301,7 @@ in-container gateway has the channel connected. The saved block is what makes
 the (b) rollback a copy-back rather than a retype.
 
 `config.ts`'s comment that the POT provider is "an image concern, not a plugin
-concern" was written when PHA-3306's custom-gateway-image plan was still alive.
+concern" was written when #3306's custom-gateway-image plan was still alive.
 That plan is dead; this is its replacement, and under (a) the provider and the
 plugin are finally in the same container.
 
@@ -325,17 +325,17 @@ if you actually want a second Control UI, and put auth on it if you do.
   `image/deploy.sh` / `image/unraid-sexton.xml`.
 - `whisper/deploy.sh`, `whisper/whisper-compose.yml` — the sidecar is gone.
   `whisper/verify.sh` still works if you point it at the `sexton` container.
-- The multi-container deploy steps in PHA-3220 and PHA-3306.
+- The multi-container deploy steps in #3220 and #3306.
 - The `teamspeak` channel on the main `OpenClaw` gateway, and the
   `/opt/sexton-tools` + `/etc/yt-dlp/plugins` path mappings it needed there.
   [`teamspeak-plugin/install/stage-teamspeak-link.sh`](../teamspeak-plugin/install/stage-teamspeak-link.sh)
-  (PHA-3580: moved here with the rest of the plugin, still named for its own
+  (#3580: moved here with the rest of the plugin, still named for its own
   now-private repo in its comments) still describes that install; it is now
   the *rollback* path, not the deploy path.
 
-## A note on whisper, since PHA-3458
+## A note on whisper, since #3458
 
-PHA-3458 makes MiniMax the primary STT provider with whisper.cpp as the
+#3458 makes MiniMax the primary STT provider with whisper.cpp as the
 fallback. That does **not** take whisper or `ggml-base.en.bin` out of this
 image: a fallback that has to be downloaded when the primary fails is not a
 fallback. The weights stay baked in and `[program:whisper]` stays supervised.

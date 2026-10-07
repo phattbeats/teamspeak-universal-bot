@@ -1,4 +1,4 @@
-// PHA-3839: schedule variety. Pure functions, no I/O, no clock.
+// #3839: schedule variety. Pure functions, no I/O, no clock.
 //
 //   S1 jitter   every shift starts and ends a random 0-45 min late, rolled
 //               once per shift. A start late enough gets a "sorry I'm late".

@@ -1,5 +1,5 @@
 /**
- * Reply text -> bridge PCM (PHA-3228).
+ * Reply text -> bridge PCM (#3228).
  *
  * The two things worth pinning: the TTS override the host runtime is handed
  * (pinning the model id is what keeps a MiniMax Coding Plan key working), and
@@ -87,7 +87,7 @@ describe("buildTtsOverride", () => {
     expect(override.providers.minimax).toEqual({ model: "speech-2.8-hd" });
   });
 
-  it("passes a per-bot pitch and speed through, and drops non-numbers (PHA-3842)", () => {
+  it("passes a per-bot pitch and speed through, and drops non-numbers (#3842)", () => {
     const tuned = resolveTeamSpeakSpeechConfig({
       voice: { streaming: { speech: { voiceId: "English_Debator", pitch: -3, speed: 0.9 } } },
     } as never);

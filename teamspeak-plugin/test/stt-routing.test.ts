@@ -1,5 +1,5 @@
 /**
- * Primary/secondary transcription routing (PHA-3428 item 3).
+ * Primary/secondary transcription routing (#3428 item 3).
  *
  * The load-bearing claim here is not "MiniMax works" — it is that turning the
  * secondary on cannot make the lane worse: an ordinary turn must not touch the
@@ -150,7 +150,7 @@ describe("routing to the secondary transcriber", () => {
   });
 
   it("rescues an empty transcript on a segment long enough to have held speech", async () => {
-    // The exact symptom PHA-3428 opened with: `empty transcript segmentMs=2120`.
+    // The exact symptom #3428 opened with: `empty transcript segmentMs=2120`.
     const h = harness({ whisper: "" });
     await expect(h.hear(2_120)).resolves.toMatchObject({
       text: "the second opinion",
@@ -176,7 +176,7 @@ describe("routing to the secondary transcriber", () => {
     expect(h.calls[0]?.url).toBe("https://api.minimax.io/v1/speech_to_text");
     expect(h.calls[0]?.body.get("model")).toBe("asr-1.0");
     expect(h.calls[0]?.body.get("response_format")).toBe("json");
-    // stream=true trips content filter 1027 on ordinary chat (PHA-3428).
+    // stream=true trips content filter 1027 on ordinary chat (#3428).
     expect(h.calls[0]?.body.get("stream")).toBeNull();
     expect(h.calls[0]?.body.get("file")).toBeTruthy();
   });
@@ -232,7 +232,7 @@ describe("the secondary failing never costs the turn", () => {
 
 describe("the secondary is off unless it is deliberately configured", () => {
   // The key-missing and unknown-name refusals moved to the registry and the
-  // provider factory with PHA-3790; they are covered in stt-registry.test.ts.
+  // provider factory with #3790; they are covered in stt-registry.test.ts.
   // What belongs to config, and only to config, is the opt-in itself.
   it("stays off when no block is present, even with MINIMAX_API_KEY in scope", () => {
     // The key IS exported on the live container for TTS. Sending channel audio

@@ -1,5 +1,5 @@
 /**
- * Per-speaker utterance segmentation for the stt-tts lane (PHA-3228).
+ * Per-speaker utterance segmentation for the stt-tts lane (#3228).
  *
  * The realtime lane needs none of this: the provider does its own endpointing
  * on a continuous stream. A batch transcriber needs a finished utterance, so

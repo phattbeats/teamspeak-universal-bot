@@ -1,9 +1,9 @@
-# image/gateway/ — the Sexton's own OpenClaw gateway (PHA-3428, option (a))
+# image/gateway/ — the Sexton's own OpenClaw gateway (#3428, option (a))
 
 Brandon, 2026-09-12:
 
 > **option (a)** — this container runs its own OpenClaw gateway instance with
-> the teamspeak plugin installed via the PHA-3326 managed install. Do not wire
+> the teamspeak plugin installed via the #3326 managed install. Do not wire
 > the bridge socket out to the main gateway.
 
 `openclaw.seed.json` is written to `/config/openclaw/openclaw.json` by
@@ -74,11 +74,11 @@ The main gateway's teamspeak block had `tools.music.enabled: false`, because
 that container has neither `ffmpeg` nor `yt-dlp` installed and the lane could
 not have worked. This image has both, pinned and build-verified, so the seed
 turns the lane on and points `ytdlpPath`/`ffmpegPath` at them. That is a real
-behaviour change at cutover, not a silent one — PHA-3176 is the lane's issue.
+behaviour change at cutover, not a silent one — #3176 is the lane's issue.
 
 ## After an OpenClaw core bump
 
-PHA-3326's finding stands and now applies in two places: a core version bump
+#3326's finding stands and now applies in two places: a core version bump
 does not update a managed channel plugin. `run-gateway.sh` re-runs the `--link`
 install every boot, which covers this container. The main gateway still needs
 its own `openclaw channels status` check after any bump.

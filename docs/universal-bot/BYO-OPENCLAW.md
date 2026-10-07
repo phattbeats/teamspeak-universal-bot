@@ -1,7 +1,7 @@
-# Bring your own OpenClaw (PHA-3798)
+# Bring your own OpenClaw (#3798)
 
 For someone who already runs an OpenClaw gateway and wants to attach it to a TeamSpeak
-server — not Sexton/Bexton's all-in-one deploy (`image/`, PHA-3428), which bakes in a
+server — not Sexton/Bexton's all-in-one deploy (`image/`, #3428), which bakes in a
 specific persona, whisper pool, and music stack for one operator's box.
 
 ## Architecture
@@ -28,7 +28,7 @@ Two pieces, both from this repo, both independent of Sexton/Bexton's own deploym
 verified independently (plugin typecheck/tests, plugin CI-verified build, bridge image
 CI-verified build and env wiring) but no one has taken a stock
 `ghcr.io/openclaw/openclaw` container plus this compose file plus this doc and joined a
-real TS6 server with it, which is the actual DoD (PHA-3798, PHA-3783). Treat the exact
+real TS6 server with it, which is the actual DoD (#3798, #3783). Treat the exact
 commands below as accurate to the code as of this writing and expect to find rough edges
 Tyler-testing them.
 
@@ -76,13 +76,13 @@ container name (`ts-bridge`) won't resolve — put them on one `docker network` 
 `@openclaw/teamspeak` into your gateway, roughly best-to-worst for a real stranger:
 
 - **`npm:@openclaw/teamspeak`** — not published to the npm registry yet. This is the
-  intended end state (PHA-3798 item 1's preferred fix) and needs someone with npm
+  intended end state (#3798 item 1's preferred fix) and needs someone with npm
   publish rights for the `@openclaw` scope (or a rename to an unscoped package name) to
   actually run `npm publish` from `teamspeak-plugin/` — a `[Brandon/host]` step, not
   something done in this pass. Once published, `openclaw plugins install
   npm:@openclaw/teamspeak` should work: this repo's `teamspeak-plugin/dist/` (committed,
   CI-checked not to drift from `src/`) satisfies the compiled-entry requirement that
-  blocked this before PHA-3798, and OpenClaw resolves the plugin's `openclaw/plugin-sdk/*`
+  blocked this before #3798, and OpenClaw resolves the plugin's `openclaw/plugin-sdk/*`
   imports against your gateway's own installed `openclaw` package automatically for any
   install kind that declares `openclaw` as a dependency — this package already does
   (`peerDependencies.openclaw`).
@@ -96,9 +96,9 @@ container name (`ts-bridge`) won't resolve — put them on one `docker network` 
   ```
   Copy that `.tgz` to wherever your gateway runs and
   `openclaw plugins install npm-pack:./openclaw-teamspeak-0.1.0.tgz`. **Not yet
-  confirmed against a real gateway** — see README's PHA-3798 section.
+  confirmed against a real gateway** — see README's #3798 section.
 - **`--link`** — the proven path (this is how Sexton/Bexton's own gateway loads it,
-  PHA-3326), but it means staging the plugin directory onto your box and does not need
+  #3326), but it means staging the plugin directory onto your box and does not need
   `dist/` at all. Same private-repo caveat as above: you need a checkout of this repo,
   which today means either being handed one or getting repo access — `plnt-sexton` is
   private. See `teamspeak-plugin/INSTALL-PHATT-RAID.md` for the exact staging recipe (it
@@ -118,7 +118,7 @@ Minimal `openclaw.json` channel config once the plugin is installed:
     "teamspeak": {
       "bridgeUrl": "ws://ts-bridge:9099",
       "channel": "General",
-      // PHA-3798 item 5 — see "Security defaults" below before changing any of these.
+      // #3798 item 5 — see "Security defaults" below before changing any of these.
       "commandAllowFrom": [],
       "voice": {
         "enabled": true,
@@ -145,7 +145,7 @@ Bind it to an agent the same way any other channel is bound (`agents.json` /
 ## 3. STT and TTS
 
 Both are your problem to pay for and configure — nothing here is free beyond your own
-compute. What already exists as of PHA-3798 (a clean provider *contract* is PHA-3790,
+compute. What already exists as of #3798 (a clean provider *contract* is #3790,
 in progress; this is what config knobs exist today):
 
 - **STT**: `src/voice/stt-routing.ts` runs a local `whisper.cpp` server as primary and
@@ -157,14 +157,14 @@ in progress; this is what config knobs exist today):
   plugin at it with `channels.teamspeak.voice.streaming.transcription.url` (or the
   `TEAMSPEAK_WHISPER_URL` env var; default `http://whisper:8080/inference` either way
   — `src/config.ts`, `resolveTeamSpeakTranscriptionConfig`). This field name has moved
-  before (it used to be a top-level flag) and PHA-3790's provider-contract work may move
+  before (it used to be a top-level flag) and #3790's provider-contract work may move
   it again — check `src/config.ts` if this doc drifts.
 - **TTS**: MiniMax T2A is the only wired provider today (`voiceId` config, own API key).
 
 If neither works for you, the agent tools and text-command lane still function —
 voice specifically won't.
 
-## 4. Security defaults for a stranger's server (PHA-3798 item 5)
+## 4. Security defaults for a stranger's server (#3798 item 5)
 
 None of these are enforced by the plugin — they are config you must set, and the example
 above already sets them. Getting them wrong on someone else's TeamSpeak server is the
@@ -185,7 +185,7 @@ actual risk this section exists to head off:
   own TeamSpeak identity also needs the underlying server permission (a real TS server
   group) — see TOOL-CATALOG.md's prerequisite note; granting the config `allowGroups`
   without that just gets you `ModerationResult { ok: false }`.
-- **Music now fails closed** (`tools.music.enabled` defaults `false`, PHA-3806) — it
+- **Music now fails closed** (`tools.music.enabled` defaults `false`, #3806) — it
   shells out to `yt-dlp`/`ffmpeg`, not arbitrary commands, but it's still unrequested
   external network activity on someone else's server. Sexton/Bexton's own deploy sets
   `tools.music.enabled: true` explicitly and is unaffected; a BYO install gets it off
@@ -202,7 +202,7 @@ actual risk this section exists to head off:
 
 If you want moderation tools live (not just configured — see above), the bot's TS
 identity needs an actual server group with kick/ban/move/edit permissions, same recipe
-as Sexton/Bexton (`docs/universal-bot/TOOL-CATALOG.md` §4.3, PHA-3793):
+as Sexton/Bexton (`docs/universal-bot/TOOL-CATALOG.md` §4.3, #3793):
 
 1. Create a TeamSpeak server group (or reuse an existing admin-ish one) carrying the
    permissions the moderation tools need: `b_client_kick_from_channel`,
@@ -226,7 +226,7 @@ at all (fails closed).
 - Publish `@openclaw/teamspeak` to the npm registry — `[Brandon/host]`, needs npm
   publish rights for the `@openclaw` scope (or an unscoped rename).
 - Live-verify `npm-pack:`/`git:` installs against a real, non-production gateway.
-- PHA-3790's STT provider contract will likely rename/move the config fields §3 points
+- #3790's STT provider contract will likely rename/move the config fields §3 points
   at — revisit this doc once that lands.
 - Decide whether `plnt-sexton` (private) is acceptable as the plugin's permanent home
   for a true self-service BYO story, or whether the plugin needs a public mirror

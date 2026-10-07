@@ -1,4 +1,4 @@
-//! Manual verification client for PHA-3174's acceptance test.
+//! Manual verification client for #3174's acceptance test.
 //!
 //! Connects to a running Sexton, plays a continuous 220 Hz tone into
 //! `music_audio` and 2 s bursts of a 440 Hz tone into `voice_audio` every
@@ -14,7 +14,7 @@
 //! TS6 server and a second client actually listening in-channel, which this
 //! sandbox has no network path to.
 //!
-//! PHA-3342: this used to dial a standalone `ts-bridge` container; the WS
+//! #3342: this used to dial a standalone `ts-bridge` container; the WS
 //! server it drives now lives inside the Sexton binary, same port, same
 //! wire format (`ts-bridge/PROTOCOL.md` moved to `sexton/PROTOCOL.md`
 //! unchanged). Nothing about this tool's own protocol handling needed to

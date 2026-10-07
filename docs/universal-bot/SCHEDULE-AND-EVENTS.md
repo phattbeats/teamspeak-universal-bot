@@ -7,12 +7,12 @@ goes sideways. If a bot is "missing", it's probably off duty, so start at
 
 | Piece | Where it lives | Issue |
 |---|---|---|
-| Shift schedule, chat/voice summons | `ts-summoner/summoner.mjs`, `ts-summoner/config.json` | PHA-3821, PHA-3823 |
-| Entrance/exit lines | `personas/<bot>/lines.json` → live `workspace/agents/<bot>/lines.json`; plugin `src/voice/announcer.ts` | PHA-3824 |
-| Daily mood | `personas/<bot>/moods.json`, announcer | PHA-3840 |
-| **Two-bot scenes** (S5) | `ts-summoner/live/scenes.json` | PHA-3841 |
-| **Special-nights calendar** (S6) | `ts-summoner/live/calendar.json`, `ts-summoner/schedule.mjs` | PHA-3841 |
-| **Rare events** (S7): hostile takeover, bender | `ts-summoner/summoner.mjs`, `ts-summoner/story.mjs`, `config.json → events` | PHA-3841 |
+| Shift schedule, chat/voice summons | `ts-summoner/summoner.mjs`, `ts-summoner/config.json` | #3821, #3823 |
+| Entrance/exit lines | `personas/<bot>/lines.json` → live `workspace/agents/<bot>/lines.json`; plugin `src/voice/announcer.ts` | #3824 |
+| Daily mood | `personas/<bot>/moods.json`, announcer | #3840 |
+| **Two-bot scenes** (S5) | `ts-summoner/live/scenes.json` | #3841 |
+| **Special-nights calendar** (S6) | `ts-summoner/live/calendar.json`, `ts-summoner/schedule.mjs` | #3841 |
+| **Rare events** (S7): hostile takeover, bender | `ts-summoner/summoner.mjs`, `ts-summoner/story.mjs`, `config.json → events` | #3841 |
 
 ---
 
@@ -53,7 +53,7 @@ requests: write, wait for the delete, then go to the next bot.
 How the announcer picks a line for `shift_start:halloween`:
 
 1. the tagged pool `shift_start:halloween`, if it has a usable line;
-2. otherwise the mood pool `mood:<today's mood>` (entrances only, PHA-3840);
+2. otherwise the mood pool `mood:<today's mood>` (entrances only, #3840);
 3. otherwise the plain pool `shift_start`.
 
 A themed night beats a mood. The mood still rolls from the base reason
@@ -80,7 +80,7 @@ Rules:
 - Each bot gets one start/stop per minute at most.
 - The table is the plan. The real clock moves with the variety rules below.
 
-### Variety (PHA-3839, `ts-summoner/variety.mjs`, `config.json → variety`)
+### Variety (#3839, `ts-summoner/variety.mjs`, `config.json → variety`)
 
 Every roll hashes the shift's key (`sexton@2026-10-02@08:00`) with `salt`, so
 a restart lands on the same answer. Change `salt` to re-deal everything.
@@ -99,7 +99,7 @@ a restart lands on the same answer. Change `salt` to re-deal everything.
 - `/status → events.callouts` lists decided call-outs (`{bot, cover}`);
   `/status → bots.<id>.shift` shows the jittered `start`/`end` and `lateMin`.
 - Turn a part off with `"enabled": false` in its block. With `room` off,
-  overtime is uncapped again (the pre-PHA-3839 behaviour).
+  overtime is uncapped again (the pre-#3839 behaviour).
 
 ---
 
@@ -376,7 +376,7 @@ mount, so after editing it run `docker restart ts-summoner`.
 
 ---
 
-## 5b. Guest stars (PHA-3842)
+## 5b. Guest stars (#3842)
 
 Rotten Johnny (the ghoul who owns the Vice) and Trixie (his waitress, the band's second singer) aren't regulars. They **drop in** on Bexton nights a few times a week, and they don't overstay: an arrive scene with Bexton, a few minutes listening for their name, then a leave scene.
 
@@ -408,11 +408,11 @@ A guest is an ordinary bot entry (`bots.johnny`, `bots.trixie`) with `container:
 
 **By hand:** `POST /event/guest` (random eligible guest) or `POST /event/guest?who=trixie`, and `POST /event/end?kind=guest`. `GET /status` shows `events.guests` (active visit, recent visit times).
 
-**Cost (PHA-3597).** Only one guest container exists, and its core is down between visits. It uses `http://whisper:8082/inference`. With PHA-3607's coalescing proxy deployed, that is the proxy and a guest mostly shares Bexton's decodes. On today's three plain workers, it is Lexton's worker, and Lexton is off for most of Bexton's evening, so no fourth worker is needed. The week is capped at 3-4 visits of 45 minutes or less.
+**Cost (#3597).** Only one guest container exists, and its core is down between visits. It uses `http://whisper:8082/inference`. With #3607's coalescing proxy deployed, that is the proxy and a guest mostly shares Bexton's decodes. On today's three plain workers, it is Lexton's worker, and Lexton is off for most of Bexton's evening, so no fourth worker is needed. The week is capped at 3-4 visits of 45 minutes or less.
 
 **Adding a guest:** make a `personas/<id>/` pack (`AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `lines.json`, `tools.json`, `voice.json` with `nick`, `avatar.png`) and add its `COPY` lines next to Johnny's in `image/Dockerfile`. Add a `bots.<id>` entry with `container: "guest"`, then rebuild the image and redeploy the guest container. Also add the new nick to the regulars' `excludeWakeNames` (exact nick match, so bots don't wake each other).
 
-## 5c. Bot banter (PHA-3859)
+## 5c. Bot banter (#3859)
 
 A couple of times a night, two regulars have a longer bit with each other: eight to twelve lines, in character, on some topic (the jukebox, Bexton's tab, the bald head, LexCorp's oxygen jingle). The pairs are Bexton+Sexton, Bexton+Lexton, and Lexton+Sexton. The scripts are in `live/scenes.json` under `banter:<a>+<b>`, with the ids sorted. They play like any other scene, so you can edit them live, and a `banter:<a>+<b>:<pool>` key wins on a calendar night.
 
@@ -435,7 +435,7 @@ tar cf - -C ts-summoner summoner.mjs schedule.mjs story.mjs variety.mjs config.j
   reconcile picks it up. (Single-file bind mounts keep the old inode after
   `sed -i` or an editor save, which is why it's a directory.)
 - `state/` holds `state.json` (event state). Don't delete it mid-event.
-- The scene and tag features need bots on an image with the PHA-3841
+- The scene and tag features need bots on an image with the #3841
   announcer (`phattbeats/sexton:pha-3841` or later). On an older image, scene
   lines are consumed silently: the swap still happens, just with no dialogue.
 

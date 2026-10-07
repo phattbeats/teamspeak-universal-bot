@@ -1,5 +1,5 @@
 /**
- * The realtime tools end-to-end over the mock bridge (PHA-3176).
+ * The realtime tools end-to-end over the mock bridge (#3176).
  *
  * A tool call enters where the provider would deliver it — the registration the
  * speaker sessions are given — and the assertions are on the frames that leave
@@ -324,7 +324,7 @@ describe("TeamSpeakVoiceRuntime realtime tools", () => {
     runtime.stop();
   });
 
-  describe("channel and presence tools over the bridge (PHA-3784)", () => {
+  describe("channel and presence tools over the bridge (#3784)", () => {
     /**
      * `listChannels()` round-trips through the bridge with no request id, so
      * every test here has to send `TYPE_LIST_CHANNELS`, then deliver the

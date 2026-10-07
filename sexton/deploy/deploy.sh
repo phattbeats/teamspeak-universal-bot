@@ -1,7 +1,7 @@
 #!/bin/bash
-# PHA-3173 / PHA-3215 production deploy for the Sexton on PHATT-RAID.
+# #3173 / #3215 production deploy for the Sexton on PHATT-RAID.
 #
-# SUPERSEDED by image/deploy.sh (PHA-3428): the whole stack is one container
+# SUPERSEDED by image/deploy.sh (#3428): the whole stack is one container
 # now. Do NOT run this alongside it — two bots on one identity is a UID
 # collision and the server drops one of them. Kept as the record of the
 # settings this deploy proved; image/deploy.sh carries them forward.
@@ -9,9 +9,9 @@
 # sexton-compose.yml. Keep the two in step.
 # Connect by container name on the TS6 server's own Docker network; do NOT use
 # network_mode host + teamspeak.phatt.vip (hairpins, gets flood-scored --
-# PHA-3099 finding #5).
+# #3099 finding #5).
 #
-# PHA-3342: "one docker container / one bot account" — this used to be the
+# #3342: "one docker container / one bot account" — this used to be the
 # text-only Sexton with a separate `ts-bridge` container (and its own
 # `deploy.sh`-equivalent) for audio. That container is gone; `--ws-bind` /
 # `--duck-gain` below are its former `WS_BIND`/`DUCK_GAIN` env vars, now
@@ -26,7 +26,7 @@ docker rm -f sexton >/dev/null 2>&1 || true
 mkdir -p /mnt/user/appdata/sexton/logs
 # The healthcheck reads PID 1's argv: the runtime image is debian-slim and has
 # no `pgrep`, so the old `pgrep -f` check exited 127 forever and the container
-# was permanently unhealthy (PHA-3217). `-a` because /proc/1/cmdline is
+# was permanently unhealthy (#3217). `-a` because /proc/1/cmdline is
 # NUL-separated.
 docker run -d --name sexton --network phattvip --restart unless-stopped \
   -e RUST_LOG=info \

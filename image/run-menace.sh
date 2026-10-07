@@ -1,5 +1,5 @@
 #!/bin/sh
-# PHA-3836: Lexton's menacing DMs (PHA-3818), formerly a hand-added,
+# #3836: Lexton's menacing DMs (#3818), formerly a hand-added,
 # container-layer-only supervisor stanza that every recreate wiped. Now baked
 # in and gated: idles unless SEXTON_MENACE=1 (an exit inside startsecs would be
 # a failed start to supervisord and loop, same as run-whisper). The script lives

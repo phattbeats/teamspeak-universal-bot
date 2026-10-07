@@ -1,5 +1,5 @@
 /**
- * The STT connector contract (PHA-3790, TOOL-CATALOG.md §4.7).
+ * The STT connector contract (#3790, TOOL-CATALOG.md §4.7).
  *
  * Before this file, `sttProvider` was a *label*: the config carried a provider
  * name, `LOCAL_TRANSCRIPTION_PROVIDERS` checked it against a hardcoded array,
@@ -41,7 +41,7 @@ import type { Buffer } from "node:buffer";
  * Where a provider's audio goes.
  *
  * `"local"` means the audio never leaves the Docker network — the whisper pool
- * container (PHA-3598/3607). `"hosted"` means a metered third party, which the
+ * container (#3598/3607). `"hosted"` means a metered third party, which the
  * primary slot refuses without an explicit opt-in.
  */
 export type SttProviderKind = "local" | "hosted";
@@ -66,14 +66,14 @@ export type SttRequest = {
    * per session on its own server, so sexton and bexton — two independent
    * bridge connections into the same channel — see the identical value for the
    * identical human. Sent as a header so the coalescing whisper front end
-   * (PHA-3607) can recognize that two nearly-simultaneous requests are the same
+   * (#3607) can recognize that two nearly-simultaneous requests are the same
    * utterance and decode it once instead of twice. Purely advisory.
    */
   clientId?: number | undefined;
   /**
    * Segment length. Optional because a plain transcriber has no use for it;
    * `RoutingTranscriber` reads it to decide whether a long segment, or an
-   * unexpected empty, is worth a second opinion (PHA-3428 item 3).
+   * unexpected empty, is worth a second opinion (#3428 item 3).
    */
   durationMs?: number | undefined;
   /**

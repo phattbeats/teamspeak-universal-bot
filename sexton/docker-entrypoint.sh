@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Env -> argv wrapper for the standalone plnt-ts-bridge image (PHA-3798).
+# Env -> argv wrapper for the standalone plnt-ts-bridge image (#3798).
 #
 # The `sexton` binary itself only takes CLI flags (see src/main.rs) — there
 # is no clap `env` wiring, on purpose, because the one place it used to run
@@ -43,7 +43,7 @@ fi
 # once at warn level, and keeps running as that identity for the life of
 # the process. Nothing captures that line automatically on purpose — the
 # only proven-safe pinning step (used internally for Sexton/Bexton too,
-# see PHA-3554) is a human copying the exact printed string into the file
+# see #3554) is a human copying the exact printed string into the file
 # before the *next* restart. Silently parsing tracing output and writing
 # whatever it found back to disk risks pinning a corrupt identity with no
 # one noticing, which is worse than the manual step it would replace.

@@ -1,5 +1,5 @@
 /**
- * One place to build a resolved STT provider slot for a test (PHA-3790).
+ * One place to build a resolved STT provider slot for a test (#3790).
  *
  * The slot config is deliberately one wide shape for every provider, so a test
  * that cares about two fields should not have to spell out the other ten.

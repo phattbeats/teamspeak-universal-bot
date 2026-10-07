@@ -23,9 +23,9 @@ export const TYPE_SPEAKER_STOP = 0x03;
 export const TYPE_ROSTER = 0x04;
 export const TYPE_TEXT_MESSAGE = 0x05;
 export const TYPE_STATE = 0x06;
-/** Answer to any moderation command below (PHA-3786). */
+/** Answer to any moderation command below (#3786). */
 export const TYPE_MODERATION_RESULT = 0x07;
-/** Answer to `TYPE_LIST_CHANNELS` (PHA-3784): the full channel tree with occupants. */
+/** Answer to `TYPE_LIST_CHANNELS` (#3784): the full channel tree with occupants. */
 export const TYPE_CHANNEL_TREE = 0x08;
 
 /** Frames we send to the bridge. */
@@ -39,7 +39,7 @@ export const TYPE_MUTE = 0x87;
 export const TYPE_POKE = 0x88;
 export const TYPE_SEND_TEXT = 0x89;
 
-/** Moderation commands (PHA-3786). See TOOL-CATALOG.md §4.3. */
+/** Moderation commands (#3786). See TOOL-CATALOG.md §4.3. */
 export const TYPE_CLIENT_KICK = 0x8a;
 export const TYPE_BAN_CLIENT = 0x8b;
 export const TYPE_BAN_DEL = 0x8c;
@@ -52,10 +52,10 @@ export const TYPE_CHANNEL_DELETE = 0x92;
 export const TYPE_SERVER_EDIT = 0x93;
 export const TYPE_SERVER_GROUP_ADD_CLIENT = 0x94;
 
-/** Ask for the current channel tree; the bridge answers with `TYPE_CHANNEL_TREE` (PHA-3784). */
+/** Ask for the current channel tree; the bridge answers with `TYPE_CHANNEL_TREE` (#3784). */
 export const TYPE_LIST_CHANNELS = 0x95;
 
-/** Set the bot's own client description; `""` clears it (PHA-3857: music now-playing). */
+/** Set the bot's own client description; `""` clears it (#3857: music now-playing). */
 export const TYPE_SET_DESCRIPTION = 0x96;
 
 const FRAME_PREFIX_BYTES = 5;
@@ -85,20 +85,20 @@ export type RosterEntry = {
   nickname: string;
   muted: boolean;
   away: boolean;
-  /** Server group names this client belongs to (PHA-3786). Optional so
+  /** Server group names this client belongs to (#3786). Optional so
    * existing literal `RosterEntry` construction (tests, mocks) keeps
    * compiling without every callsite needing an update. */
   serverGroups?: string[];
 };
 
-/** Answer to a moderation command (PHA-3786). */
+/** Answer to a moderation command (#3786). */
 export type ModerationResult = {
   action: string;
   ok: boolean;
   detail: string;
 };
 
-/** One channel and who is currently in it (PHA-3784, `TYPE_CHANNEL_TREE`). */
+/** One channel and who is currently in it (#3784, `TYPE_CHANNEL_TREE`). */
 export type ChannelInfo = {
   channelId: number;
   name: string;
@@ -233,7 +233,7 @@ export function readRoster(header: unknown): RosterEntry[] | undefined {
   return roster;
 }
 
-/** Decode a `TYPE_MODERATION_RESULT` frame header (PHA-3786). */
+/** Decode a `TYPE_MODERATION_RESULT` frame header (#3786). */
 export function readModerationResult(header: unknown): ModerationResult | undefined {
   if (!isRecord(header) || typeof header.action !== "string" || typeof header.ok !== "boolean") {
     return undefined;

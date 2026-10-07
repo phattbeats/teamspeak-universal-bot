@@ -1,5 +1,5 @@
 /**
- * The house band's sound, and the way it gets introduced (PHA-3554).
+ * The house band's sound, and the way it gets introduced (#3554).
  *
  * Bexton "composes": the agent writes the title and the lyrics, and this
  * module turns the room's request into the two prompts a music generator

@@ -1,5 +1,5 @@
 /**
- * One OpenClaw agent turn for a heard utterance (PHA-3228, streamed PHA-3792).
+ * One OpenClaw agent turn for a heard utterance (#3228, streamed #3792).
  *
  * Two entry points into the host, chosen by whether the caller can use a
  * reply before it is finished:
@@ -96,7 +96,7 @@ export type TeamSpeakAgentTurnParams = {
   /** Optional LLM override from `voice.model`. */
   model?: string | undefined;
   /**
-   * Thinking level forced on this turn (`voice.thinking`, PHA-3789). Voice
+   * Thinking level forced on this turn (`voice.thinking`, #3789). Voice
    * has no channel to show a thinking trace and the wait is dead air on the
    * line, so callers default this to "off" rather than leaving it to
    * whatever the agent's `thinkingDefault` resolves to for other channels.
@@ -152,7 +152,7 @@ const TEAMSPEAK_CLOCK = new Intl.DateTimeFormat("en-US", {
 });
 
 /**
- * "Mon 8:53 PM ET" for the front of each line (PHA-3829). OpenClaw's own
+ * "Mon 8:53 PM ET" for the front of each line (#3829). OpenClaw's own
  * per-turn metadata used to carry a UTC timestamp, but that block is patched
  * out for TeamSpeak turns (the bots took it for a paste), so the clock rides
  * in the line itself now, in the room's time zone.
@@ -318,7 +318,7 @@ export function createTeamSpeakAgentTurn(params: TeamSpeakAgentTurnParams) {
     hooks: TeamSpeakAgentTurnHooks = {},
   ): Promise<TeamSpeakAgentTurnResult> => {
     // The channel tools execute inside this call; the context is how they learn
-    // who is speaking and which account's runtime to act on (PHA-3428 item 4).
+    // who is speaking and which account's runtime to act on (#3428 item 4).
     // Per-turn rather than per-runtime because the lane gates one turn per
     // speaker, not one globally: two people can be mid-turn at once.
     return await runWithTeamSpeakTurnContext(

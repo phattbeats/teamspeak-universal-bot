@@ -9,7 +9,7 @@ class RoomPlaybackQueue {
   closed = false;
   /**
    * Another bot sharing the channel (Bexton, Lexton...) is talking right now
-   * (PHA-3829). The runtime sets it from that bot's speaker_start/stop; the
+   * (#3829). The runtime sets it from that bot's speaker_start/stop; the
    * sessions read it so a follow-up answer doesn't start on top of it.
    */
   otherBotSpeaking = false;

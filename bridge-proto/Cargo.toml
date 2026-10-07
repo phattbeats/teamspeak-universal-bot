@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "PHA-3341: protocol shared between the Sexton (tsclientlib owner) and ts-bridge (audio sidecar). Carries BridgeEvent, BridgeCommand, Snapshot, and the inbound WS frame codec — so the bridge can consume the connection without owning one."
+description = "#3341: protocol shared between the Sexton (tsclientlib owner) and ts-bridge (audio sidecar). Carries BridgeEvent, BridgeCommand, Snapshot, and the inbound WS frame codec — so the bridge can consume the connection without owning one."
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

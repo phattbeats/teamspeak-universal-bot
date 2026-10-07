@@ -13,13 +13,13 @@ export default defineBundledChannelEntry({
     exportName: "teamspeakPlugin",
   },
   // The stt-tts lane runs the agent turn and the TTS synthesis in-process, and
-  // both live on PluginRuntime (PHA-3228). Without this the lane has no host.
+  // both live on PluginRuntime (#3228). Without this the lane has no host.
   runtime: {
     specifier: "./runtime-setter-api.js",
     exportName: "setTeamSpeakRuntime",
   },
   /**
-   * The channel tools as agent tools (PHA-3428 item 4).
+   * The channel tools as agent tools (#3428 item 4).
    *
    * A channel plugin has no seam for this: `createChannelPluginBase` copies a
    * fixed set of keys and `registerTool` is not among them, so the six tools

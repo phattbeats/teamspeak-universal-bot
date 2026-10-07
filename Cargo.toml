@@ -1,7 +1,7 @@
 [workspace]
-# PHA-3341 gave the Sexton and ts-bridge a shared bridge-proto crate
+# #3341 gave the Sexton and ts-bridge a shared bridge-proto crate
 # (BridgeEvent, BridgeCommand, frame codec) so the two processes wouldn't
-# re-export types from each other. PHA-3342 finishes the container
+# re-export types from each other. #3342 finishes the container
 # consolidation Brandon asked for ("one docker container / one bot
 # account"): ts-bridge's audio sidecar — the mixer, the opus codec, the
 # public WebSocket server — moved into the Sexton binary itself, so the

@@ -1,5 +1,5 @@
 {
-  "_doc": "Two-bot scenes (PHA-3841). See docs/universal-bot/SCHEDULE-AND-EVENTS.md. Key = '<kind>:<who>' plus an optional ':<calendar pool>' tag; a tagged key wins on that night. Each scene is a list of steps: {\"<bot>\": \"line\"} makes that bot say the line, {\"do\": \"jail\"} / {\"do\": \"release\"} moves the Sexton. {who} is filled on birthdays. Edit live; it is re-read on every scene. PHA-3859: 'banter:<a>+<b>' (ids sorted) are the longer bot-on-bot bits, a couple a night; see banter.mjs.",
+  "_doc": "Two-bot scenes (#3841). See docs/universal-bot/SCHEDULE-AND-EVENTS.md. Key = '<kind>:<who>' plus an optional ':<calendar pool>' tag; a tagged key wins on that night. Each scene is a list of steps: {\"<bot>\": \"line\"} makes that bot say the line, {\"do\": \"jail\"} / {\"do\": \"release\"} moves the Sexton. {who} is filled on birthdays. Edit live; it is re-read on every scene. #3859: 'banter:<a>+<b>' (ids sorted) are the longer bot-on-bot bits, a couple a night; see banter.mjs.",
 
   "handoff:sexton>lexton": [
     [

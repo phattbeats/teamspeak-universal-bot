@@ -1,5 +1,5 @@
 #!/bin/sh
-# PHA-3554/3791: the self-hosted suno-api (gcui-art/suno-api + our patches,
+# #3554/3791: the self-hosted suno-api (gcui-art/suno-api + our patches,
 # image/suno-api/patches/) for Bexton's band, on loopback :3000. Its secrets
 # (SUNO_COOKIE, TWOCAPTCHA_KEY, proxy) live in /config/suno-api.env, mode 0600,
 # never in the image or on a docker command line. No file: idle, the band

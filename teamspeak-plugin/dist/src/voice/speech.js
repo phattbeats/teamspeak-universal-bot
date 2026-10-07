@@ -125,7 +125,7 @@ function buildTtsOverride(config) {
       [config.provider]: {
         model: config.model,
         ...config.voiceId ? { voiceId: config.voiceId } : {},
-        // PHA-3842: MiniMax reads pitch/speed from this same block and
+        // #3842: MiniMax reads pitch/speed from this same block and
         // range-checks them itself (an out-of-range value is a logged warning).
         ...config.pitch !== void 0 ? { pitch: config.pitch } : {},
         ...config.speed !== void 0 ? { speed: config.speed } : {}

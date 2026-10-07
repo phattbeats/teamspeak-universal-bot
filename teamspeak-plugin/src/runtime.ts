@@ -3,7 +3,7 @@
  *
  * The realtime lane never needed one: the SDK harness owns the agent consult
  * and the provider session, so the plugin only ever handed it config. The
- * stt-tts lane (PHA-3228) runs the agent turn and the synthesis itself, and
+ * stt-tts lane (#3228) runs the agent turn and the synthesis itself, and
  * both live on `PluginRuntime` — so the plugin takes the same runtime-setter
  * seam Discord uses (extensions/discord/src/runtime.ts), declared on the
  * bundled channel entry.

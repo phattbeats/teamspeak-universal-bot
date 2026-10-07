@@ -1,5 +1,5 @@
 /**
- * Acceptance: "speaker sessions open/close on roster" (PHA-3175).
+ * Acceptance: "speaker sessions open/close on roster" (#3175).
  */
 import { describe, expect, it, vi } from "vitest";
 import type { RosterEntry } from "../src/bridge/protocol.js";
@@ -159,7 +159,7 @@ describe("SpeakerSessionManager", () => {
     }
   });
 
-  it("withholds a session for a roster entry shouldOpenSession declines, but still tracks it as roster (PHA-3607)", () => {
+  it("withholds a session for a roster entry shouldOpenSession declines, but still tracks it as roster (#3607)", () => {
     const factory = createFactory();
     const onRosterEvent = vi.fn();
     const manager = new SpeakerSessionManager({

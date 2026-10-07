@@ -1,4 +1,5 @@
 {
+  "license": "PolyForm-Noncommercial-1.0.0",
   "name": "@openclaw/teamspeak",
   "version": "0.1.0",
   "description": "OpenClaw TeamSpeak channel plugin: realtime voice in a TeamSpeak channel over the plnt-ts-bridge sidecar.",

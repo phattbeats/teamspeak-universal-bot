@@ -1,5 +1,5 @@
 /**
- * The channel tools as agent tools (PHA-3428 item 4).
+ * The channel tools as agent tools (#3428 item 4).
  *
  * The realtime lane's half of these is covered by `voice-runtime-tools.test.ts`,
  * which enters at the registration the speaker sessions hold. This file enters
@@ -57,7 +57,7 @@ describe("teamspeak agent tools", () => {
   it("registers exactly the tools the manifest declares", () => {
     // The host refuses the whole registration when a registered name is not in
     // `contracts.tools`, so this list and openclaw.plugin.json must not drift.
-    // PHA-3820: moderation and villain tools are on this face too, so check
+    // #3820: moderation and villain tools are on this face too, so check
     // against the manifest rather than restating 40 names.
     const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8")) as {
       contracts: { tools: string[] };

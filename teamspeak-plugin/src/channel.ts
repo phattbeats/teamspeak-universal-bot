@@ -1,14 +1,14 @@
 /**
  * TeamSpeak channel plugin.
  *
- * Scope note: PHA-3175 is the *voice runtime*. This file is the registration
+ * Scope note: #3175 is the *voice runtime*. This file is the registration
  * seam that lets the gateway load it — account resolution, capabilities, and
  * the `gateway.startAccount` lifecycle hook that runs one voice runtime per
  * configured account. That hook is what makes the channel do anything: a
  * plugin without it loads and reports itself configured, and never connects.
  * The text-channel adapter surface (outbound send, monitor, directory,
  * threading) is deliberately not implemented: channel chat memory is the
- * Sexton logger's job (PHA-3099/PHA-3173), and the bridge already carries the
+ * Sexton logger's job (#3099/#3173), and the bridge already carries the
  * `text_message` frames this plugin needs for `!vc` / `!sexton` commands.
  */
 import { createChannelPluginBase, createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
@@ -100,7 +100,7 @@ export function startTeamSpeakVoiceRuntime(params: {
         ...(params.bootstrapContextInstructions
           ? { bootstrapContextInstructions: params.bootstrapContextInstructions }
           : {}),
-        // PHA-3176: play_music / stop_music / set_volume / what_did_i_miss /
+        // #3176: play_music / stop_music / set_volume / what_did_i_miss /
         // who_is_here / poke, executed by the runtime that owns the bridge.
         ...(tools ? { toolRegistration: tools } : {}),
         humanParticipantCount: () => runtime.humanParticipantCount(),
@@ -117,7 +117,7 @@ export function startTeamSpeakVoiceRuntime(params: {
 }
 
 /**
- * The stt-tts lane (PHA-3228).
+ * The stt-tts lane (#3228).
  *
  * Structurally the same runtime as the realtime lane — same bridge client, same
  * roster manager, same room queue, same chat commands — with a different
@@ -152,12 +152,12 @@ function startTeamSpeakSttTtsRuntime(params: {
     runtime: {
       agent: hostRuntime.agent,
       tts: hostRuntime.tts,
-      // The block-streaming reply path (PHA-3792). Optional-chained: a host
+      // The block-streaming reply path (#3792). Optional-chained: a host
       // older than the reply runtime still gets the ingress fallback.
       ...(hostRuntime.channel?.reply ? { reply: hostRuntime.channel.reply } : {}),
     },
     humanParticipantCount: () => runtime?.humanParticipantCount() ?? 0,
-    // PHA-3823: the summoner decides (names + insults + its own cooldown)
+    // #3823: the summoner decides (names + insults + its own cooldown)
     // whether a spoken jab at Lexton brings him crashing in.
     onHeard: (text, nickname) =>
       forwardHeard(account.config.tools?.summoner, text, nickname, (message) => logger.info(message)),
@@ -184,7 +184,7 @@ function startTeamSpeakSttTtsRuntime(params: {
     }),
     log: (message) => logger.info(message),
     createSpeakerSession: (client, playback) => lane.lane.createSpeakerSession(client, playback),
-    // The band leader's announcement goes through the lane's own TTS (PHA-3554).
+    // The band leader's announcement goes through the lane's own TTS (#3554).
     synthesize: (text) => lane.lane.synthesizer.synthesize(text),
   });
   runtimes.set(account.accountId, runtime);

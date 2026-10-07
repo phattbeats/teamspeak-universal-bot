@@ -1,5 +1,5 @@
 /**
- * Fuzzy wake matcher (PHA-3428) and the PHA-3605 guard rails.
+ * Fuzzy wake matcher (#3428) and the #3605 guard rails.
  *
  * The fixture is the accept/decline diff from replaying 24h of live sexton +
  * bexton `heard=` / `wakeHeardAs=` log lines (2026-09-18 to 2026-09-19)
@@ -91,7 +91,7 @@ describe("matchFuzzyWakeName", () => {
   });
 });
 
-describe("24h live replay (PHA-3605 fixture)", () => {
+describe("24h live replay (#3605 fixture)", () => {
   type Row = { bot: "sexton" | "bexton"; at: string; heard: string; before: string; after: string };
   const rows = JSON.parse(
     readFileSync(new URL("./fixtures/wake-heard-pha3605.json", import.meta.url), "utf8"),

@@ -1,10 +1,10 @@
 /**
- * The per-bot in-flight cap on whisper requests (PHA-3607).
+ * The per-bot in-flight cap on whisper requests (#3607).
  *
  * whisper.cpp's server has one decode slot; letting every concurrent speaker
  * submit independently just stacks each one behind a full timeout instead of
  * running in parallel. This is what used to livelock sexton/bexton under a
- * multi-speaker room (PHA-3597): the fix caps in-flight requests and evicts
+ * multi-speaker room (#3597): the fix caps in-flight requests and evicts
  * whichever segment was already waiting rather than letting a backlog grow.
  */
 import { describe, expect, it } from "vitest";

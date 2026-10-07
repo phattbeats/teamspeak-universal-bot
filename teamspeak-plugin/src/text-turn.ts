@@ -1,5 +1,5 @@
 /**
- * One OpenClaw agent turn for a chat message in the TeamSpeak room (PHA-3428).
+ * One OpenClaw agent turn for a chat message in the TeamSpeak room (#3428).
  *
  * The voice lane has `agent-turn.ts`; this is its text twin. Same seam
  * (`runCommandFromIngress`, no delivery), because the reply's destination is a
@@ -32,7 +32,7 @@ export function createTeamSpeakTextTurn(params: TeamSpeakTextTurnParams) {
   return async (message: TextMessageHeader): Promise<string | undefined> => {
     const startedAt = Date.now();
     // The channel tools execute inside this call; the context is how they learn
-    // who to poke and which account's runtime to act on (PHA-3428 item 4).
+    // who to poke and which account's runtime to act on (#3428 item 4).
     const result = await runWithTeamSpeakTurnContext(
       {
         accountId: params.accountId,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PHA-3174 acceptance: does a freshly connected client get its snapshot?
+"""#3174 acceptance: does a freshly connected client get its snapshot?
 
 PROTOCOL.md promises a `state` and a `roster` frame on connect. Both are
 broadcast only on change, so on a settled channel a client that only

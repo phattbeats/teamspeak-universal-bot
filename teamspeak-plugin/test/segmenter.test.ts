@@ -1,5 +1,5 @@
 /**
- * Segmentation: where one heard utterance ends (PHA-3228).
+ * Segmentation: where one heard utterance ends (#3228).
  *
  * The hangover is the interesting part. TeamSpeak's `speaker_stop` fires at
  * every pause a talk burst contains, so without a join window a sentence with a

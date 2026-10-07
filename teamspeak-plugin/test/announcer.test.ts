@@ -31,7 +31,7 @@ function setup(opts: { ready?: boolean; random?: () => number; now?: number } = 
   return { announcer, requestFile, spoken, slept, state, request };
 }
 
-describe("Announcer (PHA-3824)", () => {
+describe("Announcer (#3824)", () => {
   it("speaks a line from the reason's pool, waits it out, then removes the request", async () => {
     const t = setup();
     t.request("shift_end");
@@ -75,7 +75,7 @@ describe("Announcer (PHA-3824)", () => {
 
 });
 
-describe("daily mood (PHA-3840)", () => {
+describe("daily mood (#3840)", () => {
   function moodSetup(random: () => number, now = { t: 1_000_000 }) {
     const dir = mkdtempSync(join(tmpdir(), "mood-"));
     const requestFile = join(dir, ".announce");
@@ -157,7 +157,7 @@ describe("daily mood (PHA-3840)", () => {
   });
 });
 
-describe("Announcer tags, vars and scripted lines (PHA-3841)", () => {
+describe("Announcer tags, vars and scripted lines (#3841)", () => {
   function setup2(lines: Record<string, string[]>) {
     const dir = mkdtempSync(join(tmpdir(), "announce-"));
     const requestFile = join(dir, ".announce");
@@ -212,7 +212,7 @@ describe("Announcer tags, vars and scripted lines (PHA-3841)", () => {
   });
 });
 
-describe("tags and moods together (PHA-3840 + PHA-3841)", () => {
+describe("tags and moods together (#3840 + #3841)", () => {
   function setup3() {
     const dir = mkdtempSync(join(tmpdir(), "announce-"));
     const requestFile = join(dir, ".announce");

@@ -1,5 +1,5 @@
 /**
- * The band leader (PHA-3554).
+ * The band leader (#3554).
  *
  * `compose_song` is not a tool call that returns a song. A real generator
  * takes one to three minutes, and a voice turn that sits in a tool for that
@@ -12,7 +12,7 @@
  * One song at a time. A second `compose_song` while one is cooking is refused
  * with the state, so the agent can say so rather than queue a set list.
  *
- * PHA-3601: the room asked for two more things a jukebox has and a composer
+ * #3601: the room asked for two more things a jukebox has and a composer
  * alone does not — the words to what already played, and "that one again"
  * without a three-minute wait. Both read from `history`, a bounded log of
  * what actually finished playing (title, lyrics, who sang it), kept in the

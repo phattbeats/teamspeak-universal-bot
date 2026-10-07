@@ -1,4 +1,4 @@
-// PHA-3821: shift schedule + chat summoning for the TeamSpeak bots.
+// #3821: shift schedule + chat summoning for the TeamSpeak bots.
 //
 // The bots used to live in the server 24/7. This sidecar is the one thing that
 // does: an invisible ServerQuery login (not on anyone's roster) that
@@ -12,10 +12,10 @@
 // Voice can't summon anyone here -- ServerQuery gets no audio -- so a spoken
 // "hey bexton" only works through a bot that's already in the channel, via the
 // HTTP API below. Those bots also forward what they hear to POST /heard, so a
-// spoken jab at Lexton crashes him in under the same cooldown as chat (PHA-3823).
+// spoken jab at Lexton crashes him in under the same cooldown as chat (#3823).
 //
 //
-// PHA-3841 layered three things on top, all documented in
+// #3841 layered three things on top, all documented in
 // docs/universal-bot/SCHEDULE-AND-EVENTS.md:
 //   - a special-nights calendar (calendar.json) that bends shifts and picks
 //     themed entrance/exit pools (Friday lounge, Halloween, birthdays...),
@@ -23,11 +23,11 @@
 //   - rare events: Lexton's hostile takeover (Sexton to Bot Jail for an hour)
 //     and Bexton's two-day bender. Their state survives restarts (state dir).
 //
-// PHA-3839 (variety.mjs) loosened the clock: shifts start and end 0-45 min
+// #3839 (variety.mjs) loosened the clock: shifts start and end 0-45 min
 // late, about one in ten is a call-out (another bot covers, or nobody does),
 // and a bot stays while people are talking and leaves once the room goes quiet.
 //
-// PHA-3842 (guests.mjs) adds the guest-star slot: Rotten Johnny and Trixie
+// #3842 (guests.mjs) adds the guest-star slot: Rotten Johnny and Trixie
 // share one `guest` container, and on Bexton nights the dice occasionally
 // bring one of them in for a few minutes.
 //
@@ -51,7 +51,7 @@ const CONFIG_PATH = process.env.SUMMONER_CONFIG || '/app/config.json';
 const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
 const QUERY_PASS = readFileSync(cfg.query.passFile, 'utf8').trim();
 const BOT_NICKS = new Set(Object.values(cfg.bots).map((b) => b.nick.toLowerCase()));
-// PHA-3842: guests never cover a shift and never break news; they only visit.
+// #3842: guests never cover a shift and never break news; they only visit.
 const GUESTS = new Set(guestIds(cfg));
 const REGULARS = Object.keys(cfg.bots).filter((id) => !GUESTS.has(id));
 const gc = guestConfig(cfg.guests);
@@ -60,7 +60,7 @@ const bc = banterConfig(cfg.banter);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const MIN = 60_000;
 
-// PHA-3963: everything said and everyone seen goes into the insights db; the
+// #3963: everything said and everyone seen goes into the insights db; the
 // dashboard (insights-web.mjs) reads it. Never lets a db problem stop a shift.
 const rec = cfg.insights?.enabled === false ? null
   : new Recorder(cfg.insights?.db ?? '/config/insights/insights.db', { botNicks: BOT_NICKS, log });
@@ -93,7 +93,7 @@ const scenes = liveJson(cfg.scenes?.file ?? '/app/live/scenes.json', {});
 
 // ---------------------------------------------------------------- schedule --
 // The rules live in schedule.mjs. A shift's `days` are the days it STARTS on;
-// start > end crosses midnight; calendar entries bend both. PHA-3839 jitter
+// start > end crosses midnight; calendar entries bend both. #3839 jitter
 // moves every shift, so "on shift" everywhere below means the jittered one.
 
 const vc = varietyConfig(cfg.variety);
@@ -107,9 +107,9 @@ const nextFlip = (id, ts, want) => nextFlipBy((t) => onShift(id, t), ts, want);
 //   takeover: { lastAt, active: { startedAt, until, jailed, overthrown } | null }
 //   bender:   { lastAt, active: { bot, from, until, newsSaid } | null, returning: <bot>|null }
 //   forced:   { "<entryId>@<day>": true }  calendar-forced events already used
-//   callouts: { "<shift key>": { bot, cover, at, until } }  PHA-3839, decided once per shift
-//   guests:   { visits: [ts], active: { bot, from, until, why } | null }  PHA-3842
-//   banter:   { plays: [{ day, at, key, dropIn }] }  PHA-3859
+//   callouts: { "<shift key>": { bot, cover, at, until } }  #3839, decided once per shift
+//   guests:   { visits: [ts], active: { bot, from, until, why } | null }  #3842
+//   banter:   { plays: [{ day, at, key, dropIn }] }  #3859
 
 const STATE_FILE = cfg.stateFile ?? '/app/state/state.json';
 const events = (() => {
@@ -148,7 +148,7 @@ for (const [id, bot] of Object.entries(cfg.bots)) {
     working: false, // running while wanted; only a working bot says goodbye
     busy: false, // an exit line or a scene is playing; reconcile leaves this bot alone
     baseOn: null, // last tick's onShift(), to spot a shift start a bender swallowed
-    plannedOn: null, // PHA-3839: last tick's onShift(), to time the overtime cap
+    plannedOn: null, // #3839: last tick's onShift(), to time the overtime cap
     shiftEndedAt: null,
     onSince: Date.now(), // core last seen coming up; a fresh start gets the full quiet wait
     leftQuiet: null, // shift key this bot walked out of because the room went quiet
@@ -173,7 +173,7 @@ const benderOn = (id, now) => {
   return Boolean(b && b.bot === id && now >= b.from && now < b.until);
 };
 
-// PHA-3839 S3: nobody has said anything (voice or chat) for a while, counting
+// #3839 S3: nobody has said anything (voice or chat) for a while, counting
 // from when the bot came up or the shift began, whichever is later.
 function roomQuiet(id, now, since) {
   const lastActivity = Math.max(room.lastHumanTalk, room.lastChat, state[id].onSince, BOOT_AT, since ?? 0);
@@ -183,7 +183,7 @@ function roomQuiet(id, now, since) {
 function desired(id, now) {
   const st = state[id];
   const o = st.override;
-  // PHA-3842: one guest container, one guest. Whoever holds it finishes first.
+  // #3842: one guest container, one guest. Whoever holds it finishes first.
   if (GUESTS.has(id) && !st.running) {
     const holder = slotHolder(cfg, state, id);
     if (holder) return { on: false, why: `guest slot taken by ${holder}` };
@@ -204,8 +204,8 @@ function desired(id, now) {
   // Shift over: don't walk out mid-conversation. The query can see who is
   // talking (client_flag_talking), not what about, so any human voice counts.
   // Only for a bot we had on duty: a core that came back by itself (container
-  // restart, supervisord autostart) off shift gets stopped, not held (PHA-3831).
-  // PHA-3839 caps the overtime at an hour past the shift.
+  // restart, supervisord autostart) off shift gets stopped, not held (#3831).
+  // #3839 caps the overtime at an hour past the shift.
   const talking = now - room.lastHumanTalk < cfg.idleGraceMin * MIN;
   if (st.running && st.onDuty && overtimeOk(vc, { shiftEndedAt: st.shiftEndedAt, now, talking })) {
     return { on: true, why: 'shift over, waiting for the room to go quiet' };
@@ -214,7 +214,7 @@ function desired(id, now) {
 }
 
 // ------------------------------------------------------------- call-outs --
-// PHA-3839 S2. Decided once, the first tick a called-out shift is live, and
+// #3839 S2. Decided once, the first tick a called-out shift is live, and
 // kept in the state file so a restart doesn't hand the shift to someone else.
 // A cover is an 'on' override until the missed shift's end; nobody covering
 // means whoever is in the room says he didn't show.
@@ -247,7 +247,7 @@ function calloutTick(now) {
 
 function summon(id, why, stayMin = cfg.summonStayMin) {
   const now = Date.now(), st = state[id];
-  // PHA-3842: a guest called in by chat gets a visit's few minutes, not a shift.
+  // #3842: a guest called in by chat gets a visit's few minutes, not a shift.
   if (GUESTS.has(id)) stayMin = visitLength(gc, cfg.bots[id]);
   st.lastMention = now;
   st.override = { mode: 'on', until: now + stayMin * MIN, why };
@@ -299,7 +299,7 @@ function dockerApi(method, path, body, timeoutMs = 30_000) {
   });
 }
 
-// PHA-3791: in the one-container stack the summoner runs NEXT TO the bots,
+// #3791: in the one-container stack the summoner runs NEXT TO the bots,
 // under the same supervisord, so "exec in the bot's container" is just a local
 // process. `bot.program` names the bot's core program there (core-<id>) and
 // `bot.dir` its per-bot dir (announce file, off-duty marker). Without them
@@ -333,10 +333,10 @@ const offDutyFile = (bot) => `${bot.dir ?? '/config'}/.off-duty`;
 async function coreRunning(bot, id) {
   const out = await exec(bot, ['supervisorctl', 'status', program(bot)]);
   const up = /\b(RUNNING|STARTING|BACKOFF)\b/.test(out);
-  // PHA-3791: every guest has a core of his own in the one-container stack;
+  // #3791: every guest has a core of his own in the one-container stack;
   // only the shared-container layout has a chair to check.
   if (!up || !bot.guest || bot.program) return up;
-  // PHA-3842: the guest container's core is up as whoever is in the chair.
+  // #3842: the guest container's core is up as whoever is in the chair.
   // Nobody known in it (first boot, a hand restart): nobody would ever stop
   // it, so stop it here; the next visit switches someone in properly.
   const who = (await exec(bot, ['cat', '/config/.guest']).catch(() => '')).trim();
@@ -348,7 +348,7 @@ async function coreRunning(bot, id) {
   return who === id;
 }
 
-// PHA-3842: put guest `id` in the shared container's chair before his core
+// #3842: put guest `id` in the shared container's chair before his core
 // starts. Restarts that container's gateway when the persona changes (~30s).
 async function prepareGuest(id, bot) {
   if (!bot.guest || bot.program) return;
@@ -371,21 +371,21 @@ async function stopCore(bot) {
 }
 
 // ------------------------------------------------- entrance/exit lines --
-// PHA-3824. The bot's gateway plays a line from its own lines.json when this
+// #3824. The bot's gateway plays a line from its own lines.json when this
 // file appears, and deletes it once the line has finished. Entrances are
 // written before the core starts (the gateway holds it until it's in the
 // channel); exits are written first and the core is stopped once it's gone.
 // Nobody on the server, nobody to hear it: skip the TTS call. Entrances still
-// go out, marked quiet, because they also roll the shift's mood (PHA-3840).
+// go out, marked quiet, because they also roll the shift's mood (#3840).
 
 const ANNOUNCE_FILE = cfg.announce?.file ?? '/config/.announce';
-// PHA-3791: one announce file per bot when they share a container.
+// #3791: one announce file per bot when they share a container.
 const announceFile = (bot) => (bot.dir ? `${bot.dir}/.announce` : ANNOUNCE_FILE);
 
 const audience = () => cfg.announce?.enabled !== false && room.queryUp && room.humans > 0;
 
 // `entrance` requests go out even to an empty server, marked quiet: they also
-// roll the shift's mood (PHA-3840). `vars` fill {who} on a birthday (PHA-3841).
+// roll the shift's mood (#3840). `vars` fill {who} on a birthday (#3841).
 async function requestLine(bot, reason, { entrance = false, vars } = {}) {
   if (cfg.announce?.enabled === false) return false;
   const quiet = !audience();
@@ -427,7 +427,7 @@ async function stopWithLine(id, bot, reason, vars) {
 }
 
 // ------------------------------------------------------------- scenes --
-// PHA-3841 S5. A scene is a short script from scenes.json, played by handing
+// #3841 S5. A scene is a short script from scenes.json, played by handing
 // each bot its next line through the same announce file, one at a time: write
 // the line, wait for the bot to delete the file (= said it), next. The bots
 // never coordinate with each other; the summoner is the stage manager.
@@ -506,7 +506,7 @@ async function sceneAction(what) {
 /**
  * Starts a bot that's about to be in a scene. Its own entrance line would
  * talk over the script, so the request goes out marked quiet: it still rolls
- * the shift's mood (PHA-3840), says nothing, and its removal tells us he's
+ * the shift's mood (#3840), says nothing, and its removal tells us he's
  * in the channel and ready for his first line.
  */
 async function joinQuietly(id, reason) {
@@ -545,7 +545,7 @@ const varsFor = (id, now) => {
 };
 
 // ------------------------------------------------------------ rare events --
-// PHA-3841 S7. Both are rare by construction: a cooldown in days, then dice.
+// #3841 S7. Both are rare by construction: a cooldown in days, then dice.
 // The calendar can force either one on a date (`"events": ["takeover"]`), and
 // POST /event/<kind> fires one by hand.
 
@@ -670,7 +670,7 @@ function benderTick(now, forced) {
 }
 
 // ------------------------------------------------------------ guest stars --
-// PHA-3842 G1. A visit is an 'on' override marked `visit`, so everything else
+// #3842 G1. A visit is an 'on' override marked `visit`, so everything else
 // (entrance line, exit line, empty-server cutoff, dismissals) is the ordinary
 // summons machinery. Visit history is persisted for the weekly cap.
 
@@ -735,7 +735,7 @@ function eventsTick(now) {
 }
 
 // ------------------------------------------------------------------ banter --
-// PHA-3859. A couple of times a night two regulars have a longer bit with
+// #3859. A couple of times a night two regulars have a longer bit with
 // each other (scenes.json `banter:<a>+<b>`). Rules in banter.mjs. A bot
 // that drops in for it comes in quietly, does the bit, and leaves without an
 // exit line; the script's last word is his goodbye.
@@ -944,10 +944,10 @@ async function reconcile() {
       }
       if (now - st.lastAction < 60_000) continue; // one move per bot per minute
       if (d.on) {
-        // PHA-3839 tags: `shift_start:late`, `shift_start:covering` ({who}).
+        // #3839 tags: `shift_start:late`, `shift_start:covering` ({who}).
         // Back after walking out of a quiet room is a summon (keeps the mood).
         if (d.visit) {
-          // PHA-3842: a guest dropping in uses his shift_start pool, and an
+          // #3842: a guest dropping in uses his shift_start pool, and an
           // `arrive:<guest>@<host>` scene when scenes.json has one.
           moves.push({ id, dir: 'start', base: 'shift_start', why: d.why });
         } else if (d.cover && st.leftQuiet !== d.cover) {
@@ -958,7 +958,7 @@ async function reconcile() {
           moves.push({ id, dir: 'start', base: 'summon', why: d.why });
         }
       } else {
-        // A core that came back by itself off shift (PHA-3831) leaves quietly.
+        // A core that came back by itself off shift (#3831) leaves quietly.
         // Not `onDuty`: that flips the moment the decision does, and the
         // one-move-per-minute limit can put a reconcile in between.
         const base = st.working ? (st.exitReason ?? 'shift_end') : null;
@@ -1058,7 +1058,7 @@ function onChat(invokerName, rawMsg) {
   if (rawMsg.trim().startsWith('{')) return; // TS6 attachment JSON, not speech
   const text = words(rawMsg);
   const now = Date.now();
-  room.lastChat = now; // typing counts as the room being alive (PHA-3839 S3)
+  room.lastChat = now; // typing counts as the room being alive (#3839 S3)
   for (const id of namedBots(text)) {
     const bot = cfg.bots[id], st = state[id];
     const on = desired(id, now).on;
@@ -1096,7 +1096,7 @@ function trashTalk(id, text, who) {
   return true;
 }
 
-// PHA-3823: a transcript from a bot's STT. Voice only crashes in trash-talk
+// #3823: a transcript from a bot's STT. Voice only crashes in trash-talk
 // targets; a spoken "get Bexton in here" is the listening bot's summon_bot.
 function onHeard(who, raw) {
   if (!who || BOT_NICKS.has(who.toLowerCase())) return []; // bots hear each other
@@ -1113,7 +1113,7 @@ function resolveBot(name) {
 
 // -------------------------------------------------------- off-shift log --
 
-// PHA-3830: the room log is written by the logging bot's core, so nothing got
+// #3830: the room log is written by the logging bot's core, so nothing got
 // recorded while it was off shift and the next catch-up had nothing to say.
 // While that core is known stopped, append channel chat to the same file in
 // its own `HH:MM  nick: text` shape (UTC, like the core); it rehydrates the
@@ -1216,7 +1216,7 @@ const rows = (lines) => lines.join('|').split('|').filter(Boolean).map(parseProp
 
 let polls = 0;
 async function pollRoom(q) {
-  // -uid/-away are for the insights db (PHA-3963); the rest only reads -voice.
+  // -uid/-away are for the insights db (#3963); the rest only reads -voice.
   const clients = rows(await q.cmd('clientlist -uid -away -voice'));
   if (rec && polls++ % 30 === 0) rec.setChannels(rows(await q.cmd('channellist')));
   rec?.poll(clients, cfg.pollSec);
@@ -1330,7 +1330,7 @@ http.createServer((req, res) => {
     if (verb === 'summon') summon(bot, `summoned by ${by}`); else dismiss(bot, `dismissed by ${by}`);
     return send(200, { bot, ...before });
   }
-  // PHA-3841: fire or end a rare event by hand (testing, or Brandon's whim).
+  // #3841: fire or end a rare event by hand (testing, or Brandon's whim).
   // POST /event/takeover | /event/bender | /event/end?kind=takeover|bender
   if (req.method === 'POST' && verb === 'event') {
     const qs = new URL(req.url, 'http://x').searchParams;

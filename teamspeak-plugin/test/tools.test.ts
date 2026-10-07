@@ -329,7 +329,7 @@ describe("tool definitions", () => {
   });
 });
 
-describe("the house band (PHA-3554)", () => {
+describe("the house band (#3554)", () => {
   it("adds compose_song and band_status only when an account has a band", () => {
     const names = buildTeamSpeakTools({ music: true, band: true }).map((tool) => tool.name);
     expect(names.slice(-6, -2)).toEqual([
@@ -469,7 +469,7 @@ describe("play_music / stop_music / set_volume", () => {
     expect(harness.music.stops).toEqual(["stop_music", "stop_music"]);
   });
 
-  it("queues a request instead of interrupting what's already playing (PHA-3635)", async () => {
+  it("queues a request instead of interrupting what's already playing (#3635)", async () => {
     const harness = createHarness();
     const first = await harness.call(PLAY_MUSIC_TOOL, { query: "smooth jazz" });
     expect(first).toMatchObject({ ok: true, title: "Smooth Jazz Radio" });
@@ -509,7 +509,7 @@ describe("play_music / stop_music / set_volume", () => {
   });
 });
 
-describe("music queue v2 tools (PHA-3785)", () => {
+describe("music queue v2 tools (#3785)", () => {
   it("now_playing reports nothing playing, then the current track", async () => {
     const harness = createHarness();
     expect(await harness.call("now_playing")).toMatchObject({ ok: true, playing: false });
@@ -690,7 +690,7 @@ describe("who_is_here and poke", () => {
   });
 });
 
-describe("channel and presence tools (PHA-3784)", () => {
+describe("channel and presence tools (#3784)", () => {
   const TREE: ChannelInfo[] = [
     {
       channelId: 1,
@@ -842,7 +842,7 @@ describe("dispatch", () => {
   });
 });
 
-describe("moderation (PHA-3786)", () => {
+describe("moderation (#3786)", () => {
   const AUTHORIZED_ROSTER: RosterEntry[] = [
     { clientId: 4, nickname: "Brandon", muted: false, away: false, serverGroups: ["Server Admin"] },
     { clientId: 7, nickname: "[PHATT] Kai_", muted: true, away: false, serverGroups: [] },

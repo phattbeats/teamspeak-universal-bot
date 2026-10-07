@@ -1,6 +1,6 @@
-# ts-summoner (PHA-3821)
+# ts-summoner (#3821)
 
-> **PHA-3791: no longer a container.** It runs as program `summoner` inside the
+> **#3791: no longer a container.** It runs as program `summoner` inside the
 > one `teamspeak-universal-bot` container, with `local: true`: it starts and
 > stops each bot's `core-<id>` with a local `supervisorctl`, and each bot has its
 > own announce/off-duty files under `/config/bots/<id>/`. Its editable config
@@ -20,7 +20,7 @@ Chat rules (the typist must not be a bot):
 - A bot whose shift ends while a human is talking (`client_flag_talking`) stays until the room has been quiet for `idleGraceMin`.
 - Summoned bots leave once there have been no humans on the server for `idleGraceMin`.
 
-Entrance and exit lines (PHA-3824): on every start or stop, the summoner writes `{reason, at}` to `/config/.announce` in the bot's container. The reason is `shift_start`, `summon`, `shift_end` or `dismiss`. The bot's gateway says a random line from that slot in its workspace `lines.json`, which defaults to `personas/<bot>/lines.json`, and then deletes the file. Lines can be edited live without a rebuild. On exits the core is stopped only after the file is gone, or after `announce.exitWaitSec`. No line is requested when the server has no humans, or for a core that came back by itself while off shift.
+Entrance and exit lines (#3824): on every start or stop, the summoner writes `{reason, at}` to `/config/.announce` in the bot's container. The reason is `shift_start`, `summon`, `shift_end` or `dismiss`. The bot's gateway says a random line from that slot in its workspace `lines.json`, which defaults to `personas/<bot>/lines.json`, and then deletes the file. Lines can be edited live without a rebuild. On exits the core is stopped only after the file is gone, or after `announce.exitWaitSec`. No line is requested when the server has no humans, or for a core that came back by itself while off shift.
 
 HTTP (not published to the host): `GET /status`, `POST /summon/<bot>?by=<who>`, `POST /dismiss/<bot>?by=<who>` on `ts-summoner:8099`. This is for the bots' own voice tools, because ServerQuery gets no audio.
 
@@ -28,6 +28,6 @@ Server side: `/mnt/user/appdata/teamspeak6-server/tsserver.yaml` sets `server.qu
 
 Deploy: copy this dir to `/mnt/user/appdata/ts-summoner/` on PHATT-RAID and run `./deploy.sh`.
 
-Scenes, special nights and rare events (PHA-3841): a scheduled shift change with another bot in the room plays a short two-bot scene (`live/scenes.json`) instead of solo lines. A live-editable calendar (`live/calendar.json`) bends shifts and picks themed pools: Friday lounge, Halloween, Thanksgiving, Christmas, NYE, birthdays. Two rare events persist in `state/`: Lexton's hostile takeover, which sends the Sexton to Bot Jail for an hour, and Bexton's two-day bender. `POST /event/<takeover|bender>` and `POST /event/end?kind=` fire and end them by hand. **Full reference: [docs/universal-bot/SCHEDULE-AND-EVENTS.md](../docs/universal-bot/SCHEDULE-AND-EVENTS.md).** Tests: `node --test ts-summoner/test/*.test.mjs`.
+Scenes, special nights and rare events (#3841): a scheduled shift change with another bot in the room plays a short two-bot scene (`live/scenes.json`) instead of solo lines. A live-editable calendar (`live/calendar.json`) bends shifts and picks themed pools: Friday lounge, Halloween, Thanksgiving, Christmas, NYE, birthdays. Two rare events persist in `state/`: Lexton's hostile takeover, which sends the Sexton to Bot Jail for an hour, and Bexton's two-day bender. `POST /event/<takeover|bender>` and `POST /event/end?kind=` fire and end them by hand. **Full reference: [docs/universal-bot/SCHEDULE-AND-EVENTS.md](../docs/universal-bot/SCHEDULE-AND-EVENTS.md).** Tests: `node --test ts-summoner/test/*.test.mjs`.
 
-Guest stars (PHA-3842): Rotten Johnny and Trixie share one `guest` container and drop in on Bexton nights a few times a week for a few minutes: arrive scene, listen for their name, exit scene (`config.json → guests`, rules in `guests.mjs`). `POST /event/guest[?who=]` brings one in by hand. **Reference: [docs/universal-bot/SCHEDULE-AND-EVENTS.md §5b](../docs/universal-bot/SCHEDULE-AND-EVENTS.md).**
+Guest stars (#3842): Rotten Johnny and Trixie share one `guest` container and drop in on Bexton nights a few times a week for a few minutes: arrive scene, listen for their name, exit scene (`config.json → guests`, rules in `guests.mjs`). `POST /event/guest[?who=]` brings one in by hand. **Reference: [docs/universal-bot/SCHEDULE-AND-EVENTS.md §5b](../docs/universal-bot/SCHEDULE-AND-EVENTS.md).**

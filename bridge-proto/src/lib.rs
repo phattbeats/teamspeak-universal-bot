@@ -1,13 +1,13 @@
 //! bridge-proto — the contract between the Sexton (tsclientlib owner) and
 //! the ts-bridge sidecar.
 //!
-//! ## Why this crate exists (PHA-3341)
+//! ## Why this crate exists (#3341)
 //!
 //! Before this crate, the Sexton and ts-bridge each opened their *own*
 //! tsclientlib connection. Both connected as a "Sexton" identity (the text
 //! Sexton as `Sexton`, the bridge as `Sexton-Bridge` — same server group,
 //! separate clients) because the two containers evolved on independent
-//! tracks: the Sexton in PHA-3173 for the text lane, the bridge in PHA-3174
+//! tracks: the Sexton in #3173 for the text lane, the bridge in #3174
 //! for the audio lane. The two-client shape was the right starting
 //! hypothesis (the only Rust crates that already spoke tsclientlib for audio
 //! were written against a fresh client) but it leaks: the channel roster
@@ -43,7 +43,7 @@
 //! The bridge dies if the Sexton dies — by design (one connection, one
 //! process). The Sexton emits a `State { connected: false, .. }` event on
 //! every disconnect so the bridge's `Mixer` releases the duck envelope
-//! (PHA-3174's standing requirement: never leave the channel stuck ducked).
+//! (#3174's standing requirement: never leave the channel stuck ducked).
 //!
 //! The bridge reconnects if its Unix-socket dial fails (Sexton is
 //! restarting, container race): exponential backoff capped at 60 s, same

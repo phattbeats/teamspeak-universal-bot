@@ -1,17 +1,17 @@
 #!/usr/bin/env node
-// PHA-3607: fan out one whisper decode to every bot in the room instead of
+// #3607: fan out one whisper decode to every bot in the room instead of
 // one decode per bot.
 //
 // Each bot runs its own bridge connection into the same TeamSpeak channel and
 // receives the same opus packets, so their speaker segmenters close on the
 // same utterance and post byte-identical WAVs within a few hundred ms of each
-// other (PHA-3921 measured matching sample counts in pairs, 0-170 ms apart).
+// other (#3921 measured matching sample counts in pairs, 0-170 ms apart).
 // Before this, that was the exact same speech decoded once per bot.
 //
 // This is a small transparent HTTP proxy in front of the pool workers. Every
 // bot points its transcriber URL at it instead of at a worker directly.
 //
-// PHA-3921: the coalescing key is the `x-speaker-client-id` header the plugin
+// #3921: the coalescing key is the `x-speaker-client-id` header the plugin
 // sends (the TS6 roster clientId, identical for every bot watching the same
 // human) PLUS a hash of the multipart form content (every field, the WAV
 // included, the boundary ignored). A hit therefore means the same speaker,

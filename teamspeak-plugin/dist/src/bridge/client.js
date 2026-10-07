@@ -116,7 +116,7 @@ class TeamSpeakBridgeClient {
   sendText(target, text) {
     this.send(encodeFrame(TYPE_SEND_TEXT, { target, text }));
   }
-  // --- moderation (PHA-3786) -----------------------------------------------
+  // --- moderation (#3786) -----------------------------------------------
   kickClient(clientId, fromServer, reason) {
     this.send(encodeFrame(TYPE_CLIENT_KICK, { clientId, fromServer, reason }));
   }
@@ -154,14 +154,14 @@ class TeamSpeakBridgeClient {
   }
   /**
    * Ask the bridge for the full channel tree. Fire-and-forget: the answer
-   * arrives asynchronously on `events.onChannelTree` (PHA-3784) — there is no
+   * arrives asynchronously on `events.onChannelTree` (#3784) — there is no
    * per-request id, matching every other command on this connection.
    */
   listChannels() {
     this.send(encodeFrame(TYPE_LIST_CHANNELS, {}));
   }
   /**
-   * Set the bot's own client description (PHA-3857). The PLNT overlay shows
+   * Set the bot's own client description (#3857). The PLNT overlay shows
    * a description starting with `♪` as the bot's now-playing line. No reply.
    */
   setDescription(description) {

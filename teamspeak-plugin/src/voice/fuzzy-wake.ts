@@ -1,5 +1,5 @@
 /**
- * Fuzzy wake-name matching for the stt-tts lane (PHA-3428, tightened in PHA-3605).
+ * Fuzzy wake-name matching for the stt-tts lane (#3428, tightened in #3605).
  *
  * The SDK's `matchRealtimeVoiceActivationName` wants the name at the head or
  * tail of the utterance and spelled the way it is configured. Local whisper
@@ -13,7 +13,7 @@
  * The matched span is removed so the agent is not handed its own name as the
  * question.
  *
- * PHA-3605 added the guard rails a day of live logs asked for:
+ * #3605 added the guard rails a day of live logs asked for:
  *  - the first letter must agree ("next one", "stat on" no longer open a gate);
  *  - a joined word pair gets one edit, not two, and may not be shorter than the
  *    name ("be on", "sex to" no longer open a gate; "sex ton" still does);

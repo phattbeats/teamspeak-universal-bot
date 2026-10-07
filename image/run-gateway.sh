@@ -1,11 +1,11 @@
 #!/bin/sh
-# PHA-3428 option (a): the Sexton's own OpenClaw gateway, in-container.
+# #3428 option (a): the Sexton's own OpenClaw gateway, in-container.
 #
 # Brandon, 2026-09-12: "this container runs its own OpenClaw gateway instance
-# with the teamspeak plugin installed via the PHA-3326 managed install. Do not
+# with the teamspeak plugin installed via the #3326 managed install. Do not
 # wire the bridge socket out to the main gateway."
 #
-# PHA-3791: one gateway for EVERY bot in the container; the per-bot part is
+# #3791: one gateway for EVERY bot in the container; the per-bot part is
 # /opt/universal/stack.mjs. Three things happen here, in order, on every boot:
 #
 #   1. Seed the config if there isn't one. The seed already contains the
@@ -16,7 +16,7 @@
 #      boot on purpose: the install record lives in the mounted state dir, so
 #      running it here (rather than at build time, where the volume is not yet
 #      mounted) is what makes a fresh /config self-install and an image bump not
-#      need a manual reinstall. PHA-3326: `--link` is the ONLY install form this
+#      need a manual reinstall. #3326: `--link` is the ONLY install form this
 #      plugin works under — `git:` fails on it and a plain path install fails
 #      the built-runtime-entry check, because the plugin ships TypeScript.
 #   3. exec the gateway.
@@ -145,7 +145,7 @@ if ! grep -q '"apiKey"\|"models"' "$OPENCLAW_CONFIG_PATH" 2>/dev/null \
   echo "run-gateway:           Run image/deploy.sh's --import-gateway-config step." >&2
 fi
 
-# --- 2. the PHA-3326 managed link install ---
+# --- 2. the #3326 managed link install ---
 if [ -f "$SEXTON_PLUGIN_DIR/openclaw.plugin.json" ]; then
   echo "run-gateway: linking the teamspeak plugin from $SEXTON_PLUGIN_DIR"
   # --force so a re-run over an existing record is a no-op rather than an
@@ -158,7 +158,7 @@ else
   echo "run-gateway: WARNING — no plugin at $SEXTON_PLUGIN_DIR." >&2
 fi
 
-# --- 3. the bots (PHA-3791) ---
+# --- 3. the bots (#3791) ---
 #
 # Every persona in /config/bots.json gets an agent, a workspace, a teamspeak
 # account and a binding of one to the other. After the link install, because

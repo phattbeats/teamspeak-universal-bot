@@ -1,7 +1,7 @@
 /**
  * End-to-end over the mock bridge: recorded frames in, bridge frames out.
  *
- * This is the "test without a server" path from PHA-3175 — the mock bridge
+ * This is the "test without a server" path from #3175 — the mock bridge
  * replays the same binary protocol the Rust sidecar speaks, so roster
  * lifecycle, audio routing, barge-in, and chat commands are all exercised
  * through the real frame codec.
@@ -141,7 +141,7 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
     ]);
 
     // Per-speaker frames must not cross sessions; that mislabelling was defect
-    // (3) fixed on the bridge side in PHA-3174.
+    // (3) fixed on the bridge side in #3174.
     expect(harness.sessions.get(11)?.received).toHaveLength(2);
     expect(harness.sessions.get(12)?.received).toHaveLength(1);
     expect(harness.sessions.get(11)?.received[0]?.equals(FRAME_20MS)).toBe(true);
@@ -210,11 +210,11 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
     expect(harness.sessions.has(9)).toBe(false);
   });
 
-  // PHA-3607: sexton and bexton sit in the same channel and, before this,
+  // #3607: sexton and bexton sit in the same channel and, before this,
   // each opened a full STT session for the other's TTS audio on every
   // utterance — doubling whisper decode for zero benefit. `excludeWakeNames`
   // already carries the other bot's exact nickname for the wake gate
-  // (PHA-3605), so it doubles as the withhold list here at no extra config
+  // (#3605), so it doubles as the withhold list here at no extra config
   // cost. The entry still counts as present; only its session is withheld.
   it("withholds a speaker session for the other bot's nickname, but keeps it in the human count", () => {
     harness = createHarness({ voice: { excludeWakeNames: ["Bexton"] } });
@@ -267,7 +267,7 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
     expect(harness.runtime.snapshot().speakerSessions).toBe(1);
   });
 
-  // PHA-3857: TeamSpeak keeps a client's description across sessions, so a
+  // #3857: TeamSpeak keeps a client's description across sessions, so a
   // music bot re-states its `♪` line (here: nothing playing) on every new
   // session — once, not on every state frame.
   it("re-states the now-playing description once per session when music is enabled", () => {
@@ -415,7 +415,7 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
       expect(harness.runtime.snapshot().speakerSessions).toBe(1);
     });
 
-    it("comes back from a leave when the bridge reconnects (new shift, PHA-3791)", () => {
+    it("comes back from a leave when the bridge reconnects (new shift, #3791)", () => {
       vi.useFakeTimers();
       harness.bridge.deliver({ type: "roster", roster: [rosterEntry(11, "brandon")] });
       const leave = { type: "text_message", clientId: 11, nickname: "brandon", text: "!vc leave" };
@@ -458,13 +458,13 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
 });
 
 /**
- * PHA-3601: the room hears the announcement, or the failure line, but until
+ * #3601: the room hears the announcement, or the failure line, but until
  * now the agent itself was never told either happened — only `deliverSilentEvent`
  * (already used for roster join/leave) closes that gap. These exercise the real
  * `BandLeader` through a `command` generator, with only the music sink faked,
  * so the wiring in `createBandController`'s `onSettled` is what's under test.
  */
-describe("the house band tells the agent when it settles (PHA-3601)", () => {
+describe("the house band tells the agent when it settles (#3601)", () => {
   function fakeMusicOverrides(): TeamSpeakToolOverrides {
     return {
       createMusic: () => ({

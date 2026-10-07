@@ -1,5 +1,5 @@
 /**
- * The band's sound and its introductions (PHA-3554).
+ * The band's sound and its introductions (#3554).
  *
  * The rng is a scripted sequence, so what is asserted is the shape of the
  * variation — genre stays first, the vocal prefix goes on only when there is

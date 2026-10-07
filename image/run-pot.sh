@@ -1,5 +1,5 @@
 #!/bin/sh
-# PHA-3428: the bgutil POT provider for the PHA-3176 music lane.
+# #3428: the bgutil POT provider for the #3176 music lane.
 #
 # Optional on purpose. YouTube only intermittently challenges datacenter IPs,
 # and yt-dlp degrades to "challenged more often", not "broken", without a POT.

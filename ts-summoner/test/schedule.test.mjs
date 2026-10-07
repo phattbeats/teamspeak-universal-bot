@@ -10,7 +10,7 @@ const none = { entries: [] };
 // New York wall clock -> epoch ms. October/November are EDT (-4) until Nov 1 2026 02:00, then EST (-5).
 const ny = (s, off = '-04:00') => Date.parse(`${s}${off}`);
 
-test('plain schedule matches the PHA-3821 shifts', () => {
+test('plain schedule matches the #3821 shifts', () => {
   assert.equal(onShift(cfg, none, 'sexton', ny('2026-10-07T23:59:00')), true);
   assert.equal(onShift(cfg, none, 'sexton', ny('2026-10-08T00:00:00')), false);
   assert.equal(onShift(cfg, none, 'lexton', ny('2026-10-08T00:00:00')), true);

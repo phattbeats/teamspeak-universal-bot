@@ -21,7 +21,7 @@ pub struct RosterEntry {
     pub nickname: String,
     pub muted: bool,
     pub away: bool,
-    /// Names of the server groups this client belongs to (PHA-3786). Empty
+    /// Names of the server groups this client belongs to (#3786). Empty
     /// by default so old callers that construct a `RosterEntry` without it
     /// (tests, mostly) keep compiling. The moderation tool gate
     /// (`tools.moderation.allowGroups`) lives on the TS plugin side, not
@@ -44,13 +44,13 @@ pub enum BridgeCommand {
     /// `VoiceAudio` but encoded at the music bitrate and ducked by the
     /// server-side mixer the moment `SpeakerStart` arrives.
     MusicAudio { samples: Vec<i16> },
-    /// Set the music lane's gain (0..1). Default 0.25 (PHA-3174).
+    /// Set the music lane's gain (0..1). Default 0.25 (#3174).
     MusicGain { gain: f32 },
     /// Drop whatever the voice lane is mid-sentence. Required so the
     /// Sexton emits a `stop-talking` Opus frame on the connection (the
     /// server-side mixer holds the lane open until it sees one).
     ClearVoice,
-    /// TTS hook (PHA-3228). Server POSTs text to a configured URL and
+    /// TTS hook (#3228). Server POSTs text to a configured URL and
     /// expects raw pcm16 mono 48k samples back; the Sexton injects them
     /// on the voice lane the same way the bridge used to.
     SayText { text: String },
@@ -69,7 +69,7 @@ pub enum BridgeCommand {
     /// turns it into a `MessageTarget` on the `Connection`.
     SendText { target: SendTarget, text: String },
 
-    // --- moderation (PHA-3786, TOOL-CATALOG.md §4.3) -----------------------
+    // --- moderation (#3786, TOOL-CATALOG.md §4.3) -----------------------
     // Authorization (server-group allowlist) lives on the TS plugin side,
     // which owns `tools.moderation.allowGroups` config — the Sexton trusts
     // whatever bridge command it's given, same failure model as `Poke` and
@@ -107,7 +107,7 @@ pub enum BridgeCommand {
     /// command actually needs.
     ServerGroupAddClient { server_group_id: u64, client_id: u16 },
     /// Ask for the full channel tree — every channel on the server with
-    /// who currently occupies it (PHA-3784: `list_channels`, `where_is`,
+    /// who currently occupies it (#3784: `list_channels`, `where_is`,
     /// and `move_to_channel`'s `follow <nickname>` all need to see
     /// channels other than the Sexton's own). The Sexton answers with a
     /// `BridgeEvent::ChannelTree` pushed back over the same broadcast
@@ -115,7 +115,7 @@ pub enum BridgeCommand {
     /// no request/response correlation because `ws_server::run` only ever
     /// serves the one bridge client a live Sexton has.
     ListChannels,
-    /// Set the bot's own client description (PHA-3857). The music player
+    /// Set the bot's own client description (#3857). The music player
     /// publishes `♪ <title>` here while a track plays and `""` when it
     /// stops, which the PLNT overlay pins under the bot's row. Not a
     /// moderation command: it only ever edits the bot itself, and needs
@@ -124,7 +124,7 @@ pub enum BridgeCommand {
 }
 
 /// One channel and who is sitting in it, as of the last `ListChannels`
-/// request (PHA-3784). `channel_id` is the `u64` inside `ChannelId` so it
+/// request (#3784). `channel_id` is the `u64` inside `ChannelId` so it
 /// round-trips through `Join { channel: "<id>" }`, which already accepts a
 /// numeric channel spec via `audio::resolve_channel_id`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,13 +183,13 @@ pub enum BridgeEvent {
         target: &'static str,
     },
     State(StateSnapshot),
-    /// Result of a moderation `BridgeCommand` (PHA-3786). `action` names the
+    /// Result of a moderation `BridgeCommand` (#3786). `action` names the
     /// command (e.g. `"client_kick"`), `detail` is a short human-readable
     /// outcome. `BanList` always reports `ok: true` with a `detail` noting
     /// the request was sent but the server's response is not parsed by this
     /// codebase yet — there is no ban-list notify-event listener wired up.
     ModerationResult { action: &'static str, ok: bool, detail: String },
-    /// Answer to `BridgeCommand::ListChannels` (PHA-3784).
+    /// Answer to `BridgeCommand::ListChannels` (#3784).
     ChannelTree(Vec<ChannelInfo>),
 }
 

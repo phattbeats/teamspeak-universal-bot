@@ -1,13 +1,13 @@
 name: sexton
 
-# PHA-3173 verification pipeline, extended by PHA-3580 to cover the
+# #3173 verification pipeline, extended by #3580 to cover the
 # teamspeak-plugin/ tree that used to be the separate openclaw-teamspeak-plugin
 # repo's own workflow. The dev sandbox that writes this code has no C
 # toolchain (no cc/gcc), so it cannot compile tsclientlib locally — the
 # `build`/`docker` jobs, on a real Ubuntu runner, are the actual compile
 # check for the chat-memory bot. (The runtime image itself is built and
 # deployed via `image/build.sh` on PHATT-RAID, not by this workflow — see
-# PHA-3173 and PHA-3428 for those transcripts.)
+# #3173 and #3428 for those transcripts.)
 
 on:
   push:
@@ -60,7 +60,7 @@ jobs:
         run: cargo build --release
 
       # The unit tests are the only thing that ever checks the notice text and
-      # the welcomed-list round trip (PHA-3305), and they never ran here.
+      # the welcomed-list round trip (#3305), and they never ran here.
       - name: cargo test
         run: cargo test --release
 
@@ -82,7 +82,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      # PHA-3342: sexton now has a workspace path dependency on
+      # #3342: sexton now has a workspace path dependency on
       # `bridge-proto` (`../bridge-proto`), whose Cargo.toml inherits
       # `edition`/`license`/`publish` from the repo-root workspace
       # Cargo.toml — both have to be inside the build context. Matches
@@ -91,7 +91,7 @@ jobs:
       - name: Build image
         run: docker build -t phattbeats/sexton:ci -f sexton/Dockerfile .
 
-      # PHA-3798: this image now defaults to the env->argv wrapper
+      # #3798: this image now defaults to the env->argv wrapper
       # (`sexton/docker-entrypoint.sh`), not the `sexton` binary directly —
       # a BYO deploy with no TS_BRIDGE_CHANNEL set should fail loudly at
       # startup, not launch `sexton` with an empty --channel and let
@@ -112,7 +112,7 @@ jobs:
           docker run --rm --entrypoint send-test phattbeats/sexton:ci --help >/dev/null
 
   publish-ts-bridge:
-    # PHA-3798: the standalone bridge half, published for a bring-your-own-
+    # #3798: the standalone bridge half, published for a bring-your-own-
     # OpenClaw attach (someone else's gateway, this container is just the
     # TeamSpeak client). Separate from `combined-image` below, which is the
     # all-in-one Sexton/Bexton deploy and is not meant for a stranger's box.
@@ -147,9 +147,9 @@ jobs:
             ghcr.io/phattbeats/plnt-ts-bridge:${{ github.sha }}
 
   combined-image:
-    # PHA-3580: the `docker` job above only ever compile-checked the old
+    # #3580: the `docker` job above only ever compile-checked the old
     # standalone sexton/Dockerfile — it never covered image/Dockerfile, the
-    # one-container image (PHA-3428) that is actually deployed, and that is
+    # one-container image (#3428) that is actually deployed, and that is
     # what this PR changes (the plugin-builder stage now COPYs
     # teamspeak-plugin/ from this repo instead of a build.sh-staged copy of
     # a separate one). PHATT-RAID is the normal build host, and per
@@ -157,7 +157,7 @@ jobs:
     # job exists to give that specific change real CI coverage that doesn't
     # depend on the box having headroom on any given day.
     runs-on: ubuntu-24.04
-    # PHA-3791: + the suno-api stage (npm install, next build, chromium).
+    # #3791: + the suno-api stage (npm install, next build, chromium).
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -177,7 +177,7 @@ jobs:
       # bgutil-ytdlp-pot-provider clone/npm-install is the slowest optional
       # stage and buys nothing for this check.
       #
-      # PHA-3822: never export the full image. `docker build -t` (load into
+      # #3822: never export the full image. `docker build -t` (load into
       # the daemon) stalled on "exporting layers" for 11+ min on the hosted
       # runner and got killed, on main too. Instead append a tiny scratch
       # stage that COPYs only the plugin files out of the `runtime` stage and
@@ -213,7 +213,7 @@ jobs:
           echo ok
 
   stack:
-    # PHA-3791: the one-container wiring (image/universal/stack.mjs), the
+    # #3791: the one-container wiring (image/universal/stack.mjs), the
     # summoner it now runs next to, and the whisper pool's coalescing proxy.
     # Plain node:test, no deps.
     runs-on: ubuntu-24.04
@@ -229,7 +229,7 @@ jobs:
         run: node --test image/universal/*.test.mjs ts-summoner/test/*.test.mjs whisper/*.test.mjs
 
   plugin:
-    # PHA-3580: folded in from openclaw-teamspeak-plugin's own `test` workflow
+    # #3580: folded in from openclaw-teamspeak-plugin's own `test` workflow
     # now that the plugin lives in this repo at teamspeak-plugin/ instead of
     # a separate repo. Runs the plugin's standalone suite: the mock bridge
     # replays recorded frames, so no TeamSpeak server is needed. The live
@@ -259,7 +259,7 @@ jobs:
       - name: Test
         run: npm test
 
-      # PHA-3798: dist/ is committed (npm:/npm-pack:/git: installs need a
+      # #3798: dist/ is committed (npm:/npm-pack:/git: installs need a
       # compiled openclaw.extensions counterpart present at install time —
       # see package-entry-resolution.ts / plugin-peer-link.ts upstream, and
       # scripts/build.mjs's header comment for why this is a plain rebuild
@@ -269,10 +269,10 @@ jobs:
       - name: Build and check dist/ is committed
         run: |
           npm run build
-          # PHA-3806: `git diff` alone never reports untracked files, so a PR
+          # #3806: `git diff` alone never reports untracked files, so a PR
           # that added a new src/*.ts file and forgot to `git add` its dist/
           # counterpart passed this check while shipping an incomplete dist/
-          # (missing stt-provider.js/stt-registry.js, PHA-3790). Stage first so
+          # (missing stt-provider.js/stt-registry.js, #3790). Stage first so
           # new files show up too.
           git add -A -- dist
           git diff --cached --exit-code -- dist \

@@ -1,5 +1,5 @@
 /**
- * Lexton's villain tools (PHA-3820): `sentence` (timed Bot Jail), `silence`
+ * Lexton's villain tools (#3820): `sentence` (timed Bot Jail), `silence`
  * (timed mute), `summon` (a temporary LexCorp Board Room) and `dossier`.
  *
  * The first three change the server, and every change has to undo itself even

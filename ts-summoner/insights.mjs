@@ -1,4 +1,4 @@
-// PHA-3963: the room's memory. One SQLite file (node:sqlite, no npm deps) that
+// #3963: the room's memory. One SQLite file (node:sqlite, no npm deps) that
 // the summoner writes as things happen and the insights dashboard reads.
 //
 // What gets recorded, and by whom:

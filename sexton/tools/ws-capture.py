@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PHA-3216 acceptance capture: record what the channel actually hears.
+"""#3216 acceptance capture: record what the channel actually hears.
 
 Connects to a *listener* Sexton's audio bridge WebSocket (a second Sexton
 instance sitting in the same TS6 channel as the bridge under test), records every

@@ -1,4 +1,4 @@
-// PHA-3829: two narrow patches to OpenClaw core for TeamSpeak turns. The voice
+// #3829: two narrow patches to OpenClaw core for TeamSpeak turns. The voice
 // lane marks its turns ChatType "direct" (a group context would re-run the
 // channel's mention policy, and the wake gate already did that job), and core
 // treats "direct" in two ways that break a bot sharing a room:
@@ -24,14 +24,14 @@ const patches = [
   {
     name: "inbound-meta",
     prefix: "inbound-meta-",
-    marker: "/* PHA-3829 teamspeak meta */",
+    marker: "/* #3829 teamspeak meta */",
     find: "function buildInboundUserContextPrefix(ctx, envelope, sessionEntry) {",
     replace: (find, marker) => `${find}\n\t${marker} if ${IS_TEAMSPEAK} return "";`,
   },
   {
     name: "silent-reply",
     prefix: "dispatch-from-config-",
-    marker: "/* PHA-3829 teamspeak silent */",
+    marker: "/* #3829 teamspeak silent */",
     find: "const silentReplyConversationType = resolveRoutedPolicyConversationType(ctx);",
     replace: (_find, marker) =>
       `const silentReplyConversationType = ${marker} ${IS_TEAMSPEAK} ? "group" : resolveRoutedPolicyConversationType(ctx);`,

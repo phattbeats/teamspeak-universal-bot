@@ -50,7 +50,7 @@ class TeamSpeakSttTtsSpeakerSession {
   consecutiveFollowUps = 0;
   /** What whisper called the wake name on the last fuzzy match, for the log. */
   lastFuzzyHearing;
-  /** The other bot's name that claimed the last declined hearing, for the log (PHA-3605). */
+  /** The other bot's name that claimed the last declined hearing, for the log (#3605). */
   lastExcludedBy;
   /** Room playback key: the clientId owns the lane, not the nickname. */
   get playbackOwnerKey() {
@@ -126,7 +126,7 @@ class TeamSpeakSttTtsSpeakerSession {
     }
     this.segmenter.handleSpeakerStop();
   }
-  /** Close the follow-up window; the next answer needs our name (PHA-3829). */
+  /** Close the follow-up window; the next answer needs our name (#3829). */
   endFollowUp(reason) {
     if (this.conversationIdleFrom === void 0) {
       return;

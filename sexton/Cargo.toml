@@ -2,7 +2,7 @@
 name = "sexton"
 version = "0.3.0"
 edition = "2021"
-description = "The Sexton — persistent TeamSpeak channel chat logger (PHA-3099), now also the audio bridge (PHA-3342)"
+description = "The Sexton — persistent TeamSpeak channel chat logger (#3099), now also the audio bridge (#3342)"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -24,12 +24,12 @@ path = "src/bin/bridge-test.rs"
 
 [dependencies]
 # tsclientlib pinned by exact commit — same rev already proven against this
-# server by PHA-3073 (voicespike) and vendored in plnt-android/core.
+# server by #3073 (voicespike) and vendored in plnt-android/core.
 #
-# PHA-3342: `features = ["audio"]` turns on `StreamItem::Audio` and
+# #3342: `features = ["audio"]` turns on `StreamItem::Audio` and
 # `tsclientlib::audio::AudioHandler` (and pulls in `audiopus`) — the bit that
 # used to live only in ts-bridge's Cargo.toml. `default-tls` stays off
-# (unchanged from PHA-3099): the Sexton's avatar upload already runs over
+# (unchanged from #3099): the Sexton's avatar upload already runs over
 # the in-cluster Docker network with plain reqwest, and turning it on would
 # add a native-TLS build dependency for no behavioural gain.
 tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5", default-features = false, features = ["audio"] }
@@ -41,7 +41,7 @@ tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45
 time = "0.3"
 tsproto-packets = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5" }
 
-# PHA-3342: bridge-proto's BridgeEvent/BridgeCommand/Snapshot vocabulary is
+# #3342: bridge-proto's BridgeEvent/BridgeCommand/Snapshot vocabulary is
 # reused in-process now — see the workspace Cargo.toml for why the crate
 # still exists post-consolidation.
 bridge-proto = { path = "../bridge-proto" }

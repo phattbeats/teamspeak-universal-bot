@@ -1,5 +1,5 @@
 {
-  "_doc": "Special nights (PHA-3841). See docs/universal-bot/SCHEDULE-AND-EVENTS.md. Edit live on the box; re-read within one reconcile. Later entries win. Shifts belong to the day they START; pools/vars/events belong to the service day, which flips at 06:00.",
+  "_doc": "Special nights (#3841). See docs/universal-bot/SCHEDULE-AND-EVENTS.md. Edit live on the box; re-read within one reconcile. Later entries win. Shifts belong to the day they START; pools/vars/events belong to the service day, which flips at 06:00.",
   "entries": [
     {
       "id": "friday-lounge",

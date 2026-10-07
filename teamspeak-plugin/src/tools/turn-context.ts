@@ -1,5 +1,5 @@
 /**
- * Who the current agent turn is for, and which runtime can act on it (PHA-3428).
+ * Who the current agent turn is for, and which runtime can act on it (#3428).
  *
  * The realtime lane hands tool calls straight to the provider session, so it
  * always knows the speaker: the session *is* the speaker. The stt-tts and text

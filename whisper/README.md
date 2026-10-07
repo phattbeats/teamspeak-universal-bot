@@ -1,12 +1,12 @@
-# whisper — the local STT lane (PHA-3228)
+# whisper — the local STT lane (#3228)
 
-> **PHA-3791: a program again, not a container.** `run-whisper-pool.sh` and
+> **#3791: a program again, not a container.** `run-whisper-pool.sh` and
 > `coalescing-proxy.mjs` run as program `whisper` inside the one
 > `teamspeak-universal-bot` container (2 workers x 3 threads, proxy on
 > `127.0.0.1:8082`, the silero VAD model baked in). The history below explains
 > why the pool and the proxy exist.
 
-> **Back as a container since PHA-3598, as a pool.** PHA-3428 baked whisper.cpp
+> **Back as a container since #3598, as a pool.** #3428 baked whisper.cpp
 > and `ggml-base.en.bin` into the `phattbeats/sexton` image and ran one server
 > inside each bot. With two bots in one channel that was two decoders doing the
 > same work; `deploy.sh` here now runs that same image as a third container
@@ -20,7 +20,7 @@
 > one mutex. That is why the pool is one process per worker and not one
 > server with a flag.
 >
-> **PHA-3607: a coalescing proxy sits in front of the pool, one port past the
+> **#3607: a coalescing proxy sits in front of the pool, one port past the
 > workers (`:8082` for the default 2-worker pool).** Sexton and bexton each
 > hear the exact same channel audio and independently segment it, so their
 > speaker sessions close on the same utterance within a few hundred ms of each
@@ -39,7 +39,7 @@
 > `whisper/coalescing-proxy.test.mjs` (`node --test`) covers the proxy in
 > isolation against two fake backends.
 >
-> **PHA-3921: the key is the clientId plus a hash of the form content**
+> **#3921: the key is the clientId plus a hash of the form content**
 > (boundary ignored), so a hit means the same speaker, byte-identical audio and
 > the same decode options. Every bot (sexton, bexton, lexton, the guest slot)
 > points at `:8082`; the proxy shares one decode across all of them, keeps a
@@ -52,7 +52,7 @@ The `voice.mode=stt-tts` lane transcribes speaker audio here, on the TS6 host's
 own Docker network, and nowhere else.
 
 That is not a performance decision. It is the two constraints Brandon set on
-PHA-3177, expressed as a container:
+#3177, expressed as a container:
 
 - **$0 marginal cost.** Every transcription provider OpenClaw registers
   (deepgram, openai, elevenlabs, mistral) bills per minute of audio. A hot mic
@@ -63,7 +63,7 @@ PHA-3177, expressed as a container:
 
 The plugin enforces this: `voice.streaming.transcription.provider` must name a
 provider the STT registry declares `kind: "local"`, or the account refuses to
-start. Since PHA-3790 that is a slot rule rather than a hardcoded allowlist — a
+start. Since #3790 that is a slot rule rather than a hardcoded allowlist — a
 hosted provider *can* be the primary, but only when the same config block also
 says `allowHosted: true`, which is a deliberate act with a name on it. See
 `teamspeak-plugin/src/voice/stt-provider.ts` and `stt-registry.ts`, and

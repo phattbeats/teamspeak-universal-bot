@@ -70,11 +70,11 @@ export type VoiceSpeakerSession = SpeakerSession & {
   handleSpeakerStart(reason?: string): boolean;
   /**
    * TeamSpeak's end-of-talk-burst edge. The realtime lane has no use for it —
-   * the provider does its own endpointing — but the stt-tts lane (PHA-3228)
+   * the provider does its own endpointing — but the stt-tts lane (#3228)
    * closes its segment on it, so the runtime forwards it when a session cares.
    */
   handleSpeakerStop?(): void;
-  /** Close the no-name follow-up window: another bot has the room now (PHA-3829). */
+  /** Close the no-name follow-up window: another bot has the room now (#3829). */
   endFollowUp?(reason: string): void;
   readonly wakeNameRequired: boolean;
   readonly bargeInEnabled: boolean;
@@ -88,7 +88,7 @@ export type VoiceSpeakerSession = SpeakerSession & {
 export type TeamSpeakToolOverrides = {
   createMusic?: ((sink: MusicSink) => MusicController | undefined) | undefined;
   /**
-   * The house band (PHA-3554). Receives the runtime's music controller and a
+   * The house band (#3554). Receives the runtime's music controller and a
    * `speak` that goes through the room playback queue, so a substitute band
    * still announces and plays where the real one would.
    */
@@ -113,7 +113,7 @@ export type TeamSpeakVoiceRuntimeParams = {
   /**
    * Turn a line into bridge PCM, for things the runtime says on its own
    * behalf rather than as a reply to a speaker — today, the band leader's
-   * announcement (PHA-3554). The stt-tts lane supplies its synthesizer;
+   * announcement (#3554). The stt-tts lane supplies its synthesizer;
    * undefined means the band plays without an introduction.
    */
   synthesize?: ((text: string) => Promise<SpeechSynthesisOutcome>) | undefined;
@@ -125,7 +125,7 @@ export type TeamSpeakVoiceRuntimeParams = {
   deliverSilentEvent?: ((text: string) => void) | undefined;
   providerId?: (() => string | undefined) | undefined;
   /**
-   * A chat message that is not a command (PHA-3428). The runtime hands over the
+   * A chat message that is not a command (#3428). The runtime hands over the
    * addressed ones and writes whatever comes back to the same target the
    * message arrived on; undefined disables the text lane entirely.
    */
@@ -137,7 +137,7 @@ export type TeamSpeakVoiceRuntimeParams = {
 
 const DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 /**
- * `listChannels()`/`onChannelTree` have no request id (PHA-3784, same shape
+ * `listChannels()`/`onChannelTree` have no request id (#3784, same shape
  * as every other command on this connection) — a FIFO queue of waiters is
  * correct as long as the bridge answers in the order asked, which a single
  * TCP-ish WebSocket guarantees. This bounds how long a tool call waits if
@@ -163,7 +163,7 @@ export class TeamSpeakVoiceRuntime {
   private state: BridgeStateHeader = { connected: false, channelId: 0, channelName: "" };
   private muted = false;
   /**
-   * Sitting out (PHA-3428). Parked is deaf, not disconnected: THE_PLANT has one
+   * Sitting out (#3428). Parked is deaf, not disconnected: THE_PLANT has one
    * channel, so there is nowhere to walk off to and the bridge has no disconnect
    * frame. Inbound speech and conversational text are dropped, music stops, and
    * the only things still answered are `!vc join` / `join_voice`.
@@ -173,7 +173,7 @@ export class TeamSpeakVoiceRuntime {
   private channelTreeWaiters: Array<(channels: ChannelInfo[]) => void> = [];
   private selfClientId: TeamSpeakClientId | undefined;
   private readonly chatTurnsInFlight = new Set<TeamSpeakClientId>();
-  /** Other bots in the channel that are mid-burst right now (PHA-3829). */
+  /** Other bots in the channel that are mid-burst right now (#3829). */
   private readonly otherBotsSpeaking = new Set<TeamSpeakClientId>();
 
   constructor(private readonly params: TeamSpeakVoiceRuntimeParams) {
@@ -203,7 +203,7 @@ export class TeamSpeakVoiceRuntime {
       events: {
         onConnected: () => {
           this.params.onConnectionChange?.(true);
-          // PHA-3791: a new bridge session means the core was (re)started:
+          // #3791: a new bridge session means the core was (re)started:
           // ts-summoner putting the bot on shift, a summon, or a restart. A
           // `leave_voice` from an earlier shift must not carry over. With one
           // long-lived gateway for every bot nothing else clears it, and a
@@ -281,7 +281,7 @@ export class TeamSpeakVoiceRuntime {
     this.announcer = this.createAnnouncer();
     // Held as deps, not just as the realtime registration, because the agent
     // tools reach the same implementations through `runTeamSpeakTool` with a
-    // precise result type (PHA-3428 item 4).
+    // precise result type (#3428 item 4).
     this.toolDeps = areTeamSpeakToolsEnabled(params.config)
       ? {
           config: params.config.tools,
@@ -319,7 +319,7 @@ export class TeamSpeakVoiceRuntime {
   }
 
   /**
-   * Lexton's villain tools (PHA-3820), off unless `tools.villain.enabled`.
+   * Lexton's villain tools (#3820), off unless `tools.villain.enabled`.
    * `start()` re-arms reverts a previous gateway left pending; they wait out a
    * grace period and retry until the bridge answers with a channel tree.
    */
@@ -352,7 +352,7 @@ export class TeamSpeakVoiceRuntime {
 
   /**
    * The same six tools as `toolRegistration`, in the shape the agent-tool face
-   * calls (PHA-3428 item 4). Undefined when tools are disabled for this
+   * calls (#3428 item 4). Undefined when tools are disabled for this
    * account, so the account simply never publishes any.
    */
   get toolAccess(): TeamSpeakToolAccess | undefined {
@@ -424,7 +424,7 @@ export class TeamSpeakVoiceRuntime {
     }
   }
 
-  /** The bot's `♪ <title>` description for the PLNT overlay (PHA-3857). */
+  /** The bot's `♪ <title>` description for the PLNT overlay (#3857). */
   private publishNowPlaying(track: MusicTrack | undefined): void {
     const description = formatNowPlayingDescription(track);
     if (description === this.publishedDescription) {
@@ -436,7 +436,7 @@ export class TeamSpeakVoiceRuntime {
 
   /**
    * Ask the bridge for the full channel tree and wait for the answer
-   * (PHA-3784). Resolves to `[]` on timeout rather than rejecting — the
+   * (#3784). Resolves to `[]` on timeout rather than rejecting — the
    * tools that call this (`list_channels`, `where_is`, `move_to_channel`'s
    * `follow`) already treat an empty tree as "found nothing" and say so,
    * which is a better outcome for a voice turn than an unhandled rejection.
@@ -484,7 +484,7 @@ export class TeamSpeakVoiceRuntime {
   }
 
   /**
-   * The house band (PHA-3554). Needs the music lane to exist and the account
+   * The house band (#3554). Needs the music lane to exist and the account
    * to have opted in; a band that cannot start logs why once and the account
    * simply has no `compose_song`.
    */
@@ -519,7 +519,7 @@ export class TeamSpeakVoiceRuntime {
   }
 
   /**
-   * Entrance/exit lines (PHA-3824). Ready once the bridge has put us in the
+   * Entrance/exit lines (#3824). Ready once the bridge has put us in the
    * channel; an entrance written before the core started waits for that.
    */
   private createAnnouncer(): Announcer | undefined {
@@ -536,7 +536,7 @@ export class TeamSpeakVoiceRuntime {
   }
 
   /**
-   * PHA-3601: the room hears the announcement, or the in-character line when a
+   * #3601: the room hears the announcement, or the in-character line when a
    * song fails, but the agent itself was never told either happened — only the
    * room did. So the next time someone asked for the words or to hear it
    * again, the agent had nothing to check and improvised in character instead
@@ -604,10 +604,10 @@ export class TeamSpeakVoiceRuntime {
    * Is this roster nickname the other bot?
    *
    * `excludeWakeNames` is already hand-populated with the other bot's exact
-   * TeamSpeak nickname for the wake gate (PHA-3605); a roster nickname never
+   * TeamSpeak nickname for the wake gate (#3605); a roster nickname never
    * collides with the non-nickname aliases also listed there ("band leader",
    * "maestro"), so reusing the same list to withhold a speaker session costs
-   * nothing extra to configure (PHA-3607).
+   * nothing extra to configure (#3607).
    */
   private isExcludedNickname(nickname: string): boolean {
     const excludeNames = resolveTeamSpeakWakeConfig(this.params.config).excludeWakeNames ?? [];
@@ -699,7 +699,7 @@ export class TeamSpeakVoiceRuntime {
   }
 
   /**
-   * Another bot started talking (PHA-3829). Two bots each holding a follow-up
+   * Another bot started talking (#3829). Two bots each holding a follow-up
    * window on the same person answered every line that person said, on top of
    * each other. Whoever speaks takes the room: every follow-up window here
    * closes, and a new answer needs our name again.
@@ -823,7 +823,7 @@ export class TeamSpeakVoiceRuntime {
   }
 
   /**
-   * Conversational text (PHA-3428).
+   * Conversational text (#3428).
    *
    * Only addressed messages get a turn: a PM is always addressed, channel text
    * only when it names the Sexton. Answering every line in a busy room would

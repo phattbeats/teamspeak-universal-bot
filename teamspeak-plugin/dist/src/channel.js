@@ -63,7 +63,7 @@ function startTeamSpeakVoiceRuntime(params) {
       realtimeConfig,
       playback,
       ...params.bootstrapContextInstructions ? { bootstrapContextInstructions: params.bootstrapContextInstructions } : {},
-      // PHA-3176: play_music / stop_music / set_volume / what_did_i_miss /
+      // #3176: play_music / stop_music / set_volume / what_did_i_miss /
       // who_is_here / poke, executed by the runtime that owns the bridge.
       ...tools ? { toolRegistration: tools } : {},
       humanParticipantCount: () => runtime.humanParticipantCount(),
@@ -96,12 +96,12 @@ function startTeamSpeakSttTtsRuntime(params) {
     runtime: {
       agent: hostRuntime.agent,
       tts: hostRuntime.tts,
-      // The block-streaming reply path (PHA-3792). Optional-chained: a host
+      // The block-streaming reply path (#3792). Optional-chained: a host
       // older than the reply runtime still gets the ingress fallback.
       ...hostRuntime.channel?.reply ? { reply: hostRuntime.channel.reply } : {}
     },
     humanParticipantCount: () => runtime?.humanParticipantCount() ?? 0,
-    // PHA-3823: the summoner decides (names + insults + its own cooldown)
+    // #3823: the summoner decides (names + insults + its own cooldown)
     // whether a spoken jab at Lexton brings him crashing in.
     onHeard: (text, nickname) => forwardHeard(account.config.tools?.summoner, text, nickname, (message) => logger.info(message)),
     onTerminalError: (error) => logger.warn(`teamspeak: stt-tts turn failed: ${error.message}`),
@@ -126,7 +126,7 @@ function startTeamSpeakSttTtsRuntime(params) {
     }),
     log: (message) => logger.info(message),
     createSpeakerSession: (client, playback) => lane.lane.createSpeakerSession(client, playback),
-    // The band leader's announcement goes through the lane's own TTS (PHA-3554).
+    // The band leader's announcement goes through the lane's own TTS (#3554).
     synthesize: (text) => lane.lane.synthesizer.synthesize(text)
   });
   runtimes.set(account.accountId, runtime);

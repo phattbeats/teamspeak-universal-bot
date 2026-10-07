@@ -1,6 +1,6 @@
 # Universal TeamSpeak Bot — research notes and tool catalog
 
-PHA-3783, 2026-09-24. Brandon's ask: one universal TeamSpeak bot platform
+#3783, 2026-09-24. Brandon's ask: one universal TeamSpeak bot platform
 that Sexton and Bexton become instances of, with a real tool catalog
 (queue, moderation, channel movement, web search, skills, persona editing,
 token control) and pluggable STT.
@@ -13,7 +13,7 @@ token control) and pluggable STT.
 | OpenClaw channel plugin | `teamspeak-plugin/` (TS) | STT→agent→TTS lane, wake gate, 12 agent tools, text commands |
 | STT | whisper.cpp pool container + MiniMax ASR fallback | already a provider switch (`sttProvider=whisper-local\|minimax`) |
 | TTS | MiniMax T2A (streaming) | per-bot `voiceId` |
-| Personas | `personas/<name>/*.md` | Both versioned (PHA-3791 landed the persona-pack layout below; see §5) |
+| Personas | `personas/<name>/*.md` | Both versioned (#3791 landed the persona-pack layout below; see §5) |
 
 Existing agent tools (`teamspeak-plugin/src/tools/registry.ts`):
 `play_music`, `stop_music`, `set_volume`, `what_did_i_miss`, `who_is_here`,
@@ -67,7 +67,7 @@ half of it. Token/turn control (§4.6) is also a latency fix.
 One image, N instances. Each instance = `persona pack` + `openclaw.json`
 overlay + TS identity. Everything else identical.
 
-**Shipped (PHA-3791, 2026-09-25):** the `personas/` layout below — one
+**Shipped (#3791, 2026-09-25):** the `personas/` layout below — one
 directory per bot holding its versioned SOUL/AGENTS/IDENTITY(/USER).md,
 avatar, `voice.json` (wake names/aliases/excludes, TTS voice id) and
 `tools.json` (`music`/`moderation`/`band` gates), sourced by
@@ -122,9 +122,9 @@ needs an agent tool, **new** = build.
 | `send_text` | plumbed | `BridgeCommand::SendText` (channel/server/client) |
 | `leave_voice` / `join_voice` | have | |
 
-### 4.2 Music queue (PHA-3635 gave us a queue the bot can't see)
+### 4.2 Music queue (#3635 gave us a queue the bot can't see)
 
-PHA-3785 shipped the "new" rows below against the existing `MusicPlayer`
+#3785 shipped the "new" rows below against the existing `MusicPlayer`
 queue (`teamspeak-plugin/src/tools/music.ts`) — no second queue, same
 `ActiveStream`/`queue` the pacing-rules comment at the top of the file
 already documents. Tool defs and dispatch: `teamspeak-plugin/src/tools/registry.ts`;
@@ -167,12 +167,12 @@ Three different operations that are easy to conflate:
 | `move_in_queue` | `id` (string), `position` (number, 1-based) | `{ queue: [{ position, id, title }] }` | clamps out-of-range positions to the ends of the queue |
 | `clear_queue` | none | `{ cleared }` (count removed) | current track keeps playing |
 | `search_music` | `query` (string), `limit` (number, optional, default 5, max 10) | `{ count, candidates: [{ title, id, url, durationSeconds?, channel? }] }` | a read-only `yt-dlp` `ytsearchN:` lookup; **never plays anything** — results come back as one structured batch, not narrated as separate chat/voice lines |
-| `play_source` | `source` (`youtube`\|`soundcloud`\|`bandcamp`\|`direct-url`\|`local`\|`band-library`), plus `query`/`url`/`file` as the source needs | `{ title, source }` or `{ queued, position, title, source }` | `bandcamp` has no yt-dlp search extractor and requires a direct URL; `band-library` currently has **no backing catalog** in this repo and fails with a clear "not available" error rather than fabricating a listing (scope omission, see PHA-3785 report) |
+| `play_source` | `source` (`youtube`\|`soundcloud`\|`bandcamp`\|`direct-url`\|`local`\|`band-library`), plus `query`/`url`/`file` as the source needs | `{ title, source }` or `{ queued, position, title, source }` | `bandcamp` has no yt-dlp search extractor and requires a direct URL; `band-library` currently has **no backing catalog** in this repo and fails with a clear "not available" error rather than fabricating a listing (scope omission, see #3785 report) |
 | `pause` | none | `{ paused }` | `ok:false` if nothing is playing or it's already paused |
 | `resume` | none | `{ resumed }` | `ok:false` if nothing is paused |
 | `seek` | `seconds` (number, >= 0) | `{ title, seconds }` | restarts ffmpeg with `-ss` on the same resolved stream; `ok:false` if nothing is playing |
 
-### 4.3 Moderation (PHA-3786 — gated: only on request from an allowed server group)
+### 4.3 Moderation (#3786 — gated: only on request from an allowed server group)
 
 Status: **have**, Path A (tsclientlib, no server change). `bridge-proto`'s
 `BridgeCommand` grew 11 moderation variants; `sexton/src/main.rs` executes
@@ -206,14 +206,14 @@ channels.teamspeak.tools.moderation: {
 }
 ```
 
-**PHA-3791 gave this a declarative home**: `personas/<name>/tools.json`'s
+**#3791 gave this a declarative home**: `personas/<name>/tools.json`'s
 `moderation` block is applied as the fresh-deploy default by
 `image/run-gateway.sh` (first boot only, same as everything else in that
 step). Both `personas/sexton/tools.json` and `personas/bexton/tools.json`
 ship the fail-closed default shown above with everything off and
 `allowGroups: []`, matching the fact that no script had ever set this before
 — it does not touch or overwrite the live moderation grants already applied
-by hand on the running sexton/bexton containers (PHA-3793/PHA-3797); wiring
+by hand on the running sexton/bexton containers (#3793/#3797); wiring
 per-persona live permissions into the persona pack is follow-up work.
 
 - `kick`/`ban`/`edit` gate which tool *groups* get registered at all (per the
@@ -262,9 +262,9 @@ needs Brandon to enable it and mint a scoped API key; not attempted here.
 ### 4.5 Web and skills (OpenClaw core, just needs enabling)
 | Tool | Status | Notes |
 | --- | --- | --- |
-| `web_search` | **done (PHA-3788)** | see §6 below |
-| `web_fetch` | **done (PHA-3788)** | see §6 below |
-| skills | **done (PHA-3788)** | pruned from ~53 bundled to a curated per-persona list; see §6.3 |
+| `web_search` | **done (#3788)** | see §6 below |
+| `web_fetch` | **done (#3788)** | see §6 below |
+| skills | **done (#3788)** | pruned from ~53 bundled to a curated per-persona list; see §6.3 |
 | `memory`/notes | have | daily memory already writes |
 
 ### 4.6 Token and turn control ("every token end to end per instruction")
@@ -307,7 +307,7 @@ What this issue ships against that:
 | `queueWaitMs=` in the per-turn log | shipped | the previously hidden stage is now a number |
 | `hangoverMs` 600 → lower | **not changed** | it is a real 600 ms of first-audio, but it is the only thing keeping a mid-sentence breath from splitting one utterance into two turns; a config knob already, tune per room from the log rather than globally |
 | `bootstrapContextMode: "lightweight"` | **cut** | it IS an ingress-exposed per-turn knob (`AgentCommandOpts`), but "lightweight" drops *every* bootstrap file (`bootstrap-files.ts` `applyContextModeFilter` returns `[]`), i.e. no SOUL/IDENTITY/AGENTS. That is "no persona", not "smaller persona". Not usable for a character bot. |
-| stream the reply into TTS | **shipped (PHA-3792, PR #31)** | `agent-turn.ts` now runs stt-tts voice turns through `runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher` instead of `runCommandFromIngress`: a finalized inbound context on the voice session key, `replyOptions.disableBlockStreaming: false` (forces block streaming on regardless of `agents.defaults.blockStreamingDefault`), `thinkingLevelOverride` for `voice.thinking`, and a dispatcher whose `deliver` hands every `block` payload to a new `SpeechPipeline` (`speech-pipeline.ts`) that splits, synthesizes with one-chunk prefetch, and enqueues on the room queue while the model is still generating. Nothing reaches the text channel: our `deliver` is the only delivery. Per-turn chunking rides on a copy of the config (`agents.defaults.blockStreamingChunk = {minChars 24, maxChars 400, sentence}`, coalesce `idleMs 0`), because the host default is 800-char paragraphs, which for a voice reply is the whole reply in one block. `voice.model` goes on that same copy (`getReplyFromConfig` has no one-shot model option; `/model` persists to the session). `final` payloads are dropped by the host when streaming succeeded and are spoken only if they carry text the blocks did not. Barge-in: the pipeline checks the turn generation before every enqueue. `voice.blockStreaming: false` restores the ingress path. The turn log gains `firstBlockMs=` (how far into `agentMs` the first block landed) and `replyPath=block-stream blocks=N`. Live measurement: pending the next voice turns on sexton after deploy; read `firstBlockMs` against `agentMs` on the `stt-tts turn` line. |
+| stream the reply into TTS | **shipped (#3792, PR #31)** | `agent-turn.ts` now runs stt-tts voice turns through `runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher` instead of `runCommandFromIngress`: a finalized inbound context on the voice session key, `replyOptions.disableBlockStreaming: false` (forces block streaming on regardless of `agents.defaults.blockStreamingDefault`), `thinkingLevelOverride` for `voice.thinking`, and a dispatcher whose `deliver` hands every `block` payload to a new `SpeechPipeline` (`speech-pipeline.ts`) that splits, synthesizes with one-chunk prefetch, and enqueues on the room queue while the model is still generating. Nothing reaches the text channel: our `deliver` is the only delivery. Per-turn chunking rides on a copy of the config (`agents.defaults.blockStreamingChunk = {minChars 24, maxChars 400, sentence}`, coalesce `idleMs 0`), because the host default is 800-char paragraphs, which for a voice reply is the whole reply in one block. `voice.model` goes on that same copy (`getReplyFromConfig` has no one-shot model option; `/model` persists to the session). `final` payloads are dropped by the host when streaming succeeded and are spoken only if they carry text the blocks did not. Barge-in: the pipeline checks the turn generation before every enqueue. `voice.blockStreaming: false` restores the ingress path. The turn log gains `firstBlockMs=` (how far into `agentMs` the first block landed) and `replyPath=block-stream blocks=N`. Live measurement: pending the next voice turns on sexton after deploy; read `firstBlockMs` against `agentMs` on the `stt-tts turn` line. |
 
 **Bottom line:** of the five asks, two were real, ingress-level, plugin-side
 work and are done. The other three either don't exist as a per-call knob today
@@ -317,7 +317,7 @@ issue against `openclaw` core for `maxOutputTokens` override + usage-on-result
 if the `requestedModel`/`requestedThinking` log line, once it has a few days
 of live data, shows spend that's worth capping rather than just watching.
 
-### 4.7 STT as a connector — **done (PHA-3790)**
+### 4.7 STT as a connector — **done (#3790)**
 Full write-up: [STT-PROVIDERS.md](STT-PROVIDERS.md).
 
 The premise turned out to be half wrong, which is the interesting part.
@@ -332,7 +332,7 @@ Shipped:
 | --- | --- |
 | `transcribe(request) -> {text, provider, ms, confidence?, escalated?}` | `src/voice/stt-provider.ts` |
 | Name → factory registry, aliases, `kind: local \| hosted` | `src/voice/stt-registry.ts` |
-| `whisper-local` (whisper pool, PHA-3598/3607), `minimax-asr` | their own modules, each with its own defaults and refusals |
+| `whisper-local` (whisper pool, #3598/3607), `minimax-asr` | their own modules, each with its own defaults and refusals |
 | Both slots chosen by name from per-account config | `voice.streaming.transcription` / `.secondaryTranscription` |
 
 Three notes worth keeping:
@@ -347,14 +347,14 @@ Three notes worth keeping:
   The escalation router still does not read it, for exactly that reason.
 - **`prompt` is wired and unset.** whisper takes an initial prompt; MiniMax has
   no such parameter and ignores it. Priming with the bot's own wake names is the
-  obvious use (see the sexton/bexton cross-wake in PHA-3605) but it changes what
+  obvious use (see the sexton/bexton cross-wake in #3605) but it changes what
   comes back, so it stays an operator decision rather than a default.
 
-## 6. Web search + skills curation implementation (PHA-3788)
+## 6. Web search + skills curation implementation (#3788)
 
 Closes the "have-but-dead" gap from §4.5. Applied by hand on both live
 gateway containers on PHATT-RAID (config is not reconstructed by
-`deploy.sh` per PHA-3601 — this needs redoing if either container is
+`deploy.sh` per #3601 — this needs redoing if either container is
 rebuilt from scratch instead of restarted).
 
 ### 6.1 Provider: DuckDuckGo (key-free)
@@ -416,7 +416,7 @@ bots before this change). Curated via `skills: [...]` on each agent entry:
 | Bot | Persona | Skills kept | Why |
 | --- | --- | --- | --- |
 | Sexton | general TS channel voice assistant + music | `weather`, `summarize`, `songsee`, `spotify-player`, `meme-maker`, `model-usage`, `healthcheck`, `control-ui` | small-talk/utility (`weather`), channel recap (`summarize`), music identification/lookup (`songsee`, `spotify-player`), voice-chat personality (`meme-maker`), self-ops (`model-usage`, `healthcheck`, `control-ui`) |
-| Bexton | Velvet Vice Lounge Band leader, Suno song queue (PHA-3554/PHA-3636) | `weather`, `songsee`, `spotify-player`, `sonoscli`, `meme-maker`, `model-usage`, `healthcheck`, `control-ui` | same ops/personality set as Sexton, `sonoscli` in place of `summarize` since the band persona's job is playback/queue, not channel recap |
+| Bexton | Velvet Vice Lounge Band leader, Suno song queue (#3554/#3636) | `weather`, `songsee`, `spotify-player`, `sonoscli`, `meme-maker`, `model-usage`, `healthcheck`, `control-ui` | same ops/personality set as Sexton, `sonoscli` in place of `summarize` since the band persona's job is playback/queue, not channel recap |
 
 Everything else (github/gh-issues, 1password, apple-notes/reminders,
 bear-notes, taskflow\*, things-mac, notion, obsidian, trello, coding-agent,
@@ -436,7 +436,7 @@ chat (`say:<text>` steps) — text messages don't reach the STT/wake-gate
 pipeline at all (confirmed live: a `say:` message produced no wake-gate log
 line, while a real human talking in the same channel did produce
 `wake gate declined` lines). `bridge-test` only emits sine tones for the
-bot's own outbound-mixing test (PHA-3174 acceptance test), not
+bot's own outbound-mixing test (#3174 acceptance test), not
 speech-like input a real human speaker would produce, and there's no
 documented bridge frame type for injecting a fake speaker's transcript.
 Building a synthetic-speech-over-the-wire injector was out of scope for
@@ -480,10 +480,10 @@ that distinction matters.
 - If DuckDuckGo's scrape-based provider proves flaky in practice, Brave
   Search is the documented next step, but needs an approved key/spend
   first — not enabled here.
-- Lexton (PHA-3819, added after this pass) has none of it: no
+- Lexton (#3819, added after this pass) has none of it: no
   `tools.web` block, no `alsoAllow`, no `skills` allowlist, so it still
-  loads every bundled skill. Checked live 2026-10-01 (PHA-3836); Sexton and
-  Bexton still match §6.1-6.3 after their PHA-3836 recreate (the
+  loads every bundled skill. Checked live 2026-10-01 (#3836); Sexton and
+  Bexton still match §6.1-6.3 after their #3836 recreate (the
   DuckDuckGo plugin lives under `/config/openclaw/npm`, so it survives).
 
 ## 7. Things found on the way

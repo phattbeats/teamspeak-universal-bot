@@ -1,10 +1,10 @@
 # Multi-stage build: compile the Sexton (and its verification helpers) with
 # a full Rust toolchain, ship only the runtime binaries.
 #
-# PHA-3342: the Sexton now depends on `bridge-proto` via a workspace path
+# #3342: the Sexton now depends on `bridge-proto` via a workspace path
 # dependency (`../bridge-proto`), and links against libopus/libasound for
 # the audio lane the old `ts-bridge` container used to own. Both mean the
-# build context can no longer be `sexton/` alone (as it was pre-PHA-3342) —
+# build context can no longer be `sexton/` alone (as it was pre-#3342) —
 # it has to be the repo root, so `bridge-proto` and the workspace
 # `Cargo.toml` (which `bridge-proto/Cargo.toml` inherits `edition`/
 # `license`/`publish` from via `.workspace = true`) are both present. See
@@ -34,7 +34,7 @@ COPY --from=builder /build/target/release/sexton /usr/local/bin/sexton
 COPY --from=builder /build/target/release/send-test /usr/local/bin/send-test
 COPY --from=builder /build/target/release/probe-channels /usr/local/bin/probe-channels
 COPY --from=builder /build/target/release/bridge-test /usr/local/bin/bridge-test
-# PHA-3791: the avatar used to live at sexton/avatar/brandon.png; it moved to
+# #3791: the avatar used to live at sexton/avatar/brandon.png; it moved to
 # personas/sexton/avatar.png with the rest of the persona pack (see
 # image/Dockerfile and docs/universal-bot/TOOL-CATALOG.md section 3). Same
 # destination filename as before, so nothing downstream changes.
@@ -42,7 +42,7 @@ COPY personas/sexton/avatar.png /usr/local/share/sexton-avatar/brandon.png
 COPY sexton/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 ENV RUST_LOG=info
-# PHA-3798: this image is published standalone as ghcr.io/phattbeats/plnt-ts-bridge
+# #3798: this image is published standalone as ghcr.io/phattbeats/plnt-ts-bridge
 # for a bring-your-own-OpenClaw deploy (someone else's gateway, this
 # container is just the TeamSpeak client half). /data is where the pinned
 # TS identity and the chat-history logs live; back it up or lose the bot's

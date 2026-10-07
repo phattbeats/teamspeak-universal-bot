@@ -1,5 +1,5 @@
 /**
- * The ts-summoner sidecar (PHA-3821/PHA-3823): it owns the bots' shifts and
+ * The ts-summoner sidecar (#3821/#3823): it owns the bots' shifts and
  * is the only thing that can bring a fully disconnected bot back, because a
  * bot that is off duty has no core running to hear anything. A bot that IS in
  * the channel reaches it over HTTP on the phattvip network:
@@ -15,7 +15,7 @@ export type TeamSpeakSummonerConfig = {
   enabled?: boolean;
   /** Default: http://ts-summoner:8099. */
   url?: string;
-  /** This bot's id at the summoner (PHA-3791: several bots share one gateway). Default: SEXTON_AGENT_ID, else sexton. */
+  /** This bot's id at the summoner (#3791: several bots share one gateway). Default: SEXTON_AGENT_ID, else sexton. */
   self?: string;
   /** Forward every non-empty STT transcript to `/heard` (Lexton's trash-talk crash-in). Default: true. */
   forwardHeard?: boolean;
@@ -35,7 +35,7 @@ export function summonerUrl(config: TeamSpeakSummonerConfig | undefined): string
 
 /**
  * This bot's own id at the summoner. One bot per gateway: the agent id, which
- * is the container name. Several bots per gateway (PHA-3791): each account
+ * is the container name. Several bots per gateway (#3791): each account
  * says who it is in `tools.summoner.self`.
  */
 export function selfBotId(

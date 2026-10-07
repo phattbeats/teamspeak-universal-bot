@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PHA-3791: (re)create the ONE container that runs every TeamSpeak bot.
+# #3791: (re)create the ONE container that runs every TeamSpeak bot.
 #
 #   TAG=<git sha> image/deploy.sh          # after image/build.sh
 #
@@ -14,7 +14,7 @@
 #   config/openclaw/            the one gateway: openclaw.json, agents, workspaces
 #   config/summoner/            shifts/scenes/guests config.json, live/, state/, query-pass.txt
 #   config/suno-api.env         Suno cookie + 2Captcha key + proxy (0600)
-#   config/insights/            the insights db + auth.txt, the dashboard login (PHA-3963)
+#   config/insights/            the insights db + auth.txt, the dashboard login (#3963)
 #   config/personas/<id>/       optional: add or override a persona pack without a rebuild
 #   logs/<id>/                  each bot's room log
 #
@@ -34,7 +34,7 @@ MAIN_GATEWAY=${MAIN_GATEWAY:-OpenClaw}
 MAIN_CONFIG_PATH=${MAIN_CONFIG_PATH:-/root/.openclaw/openclaw.json}
 # Extra `docker run` args, e.g. EXTRA_ARGS="-e SUMMONER_ENABLED=0" for a test instance.
 EXTRA_ARGS=${EXTRA_ARGS:-}
-# Host port for the insights dashboard (PHA-3963); empty publishes nothing.
+# Host port for the insights dashboard (#3963); empty publishes nothing.
 INSIGHTS_PUBLISH=${INSIGHTS_PUBLISH-8097}
 
 log() { printf '\n== %s\n' "$*"; }

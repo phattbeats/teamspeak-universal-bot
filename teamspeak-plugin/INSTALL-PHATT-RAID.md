@@ -1,12 +1,12 @@
 # Installing the TeamSpeak plugin on PHATT-RAID
 
-State verified 2026-09-07 (PHA-3326). **The recommended path is now the
+State verified 2026-09-07 (#3326). **The recommended path is now the
 managed `--link` plugin install below, not the custom-image build** — a
 custom image gets silently wiped by the next `openclaw update`/base-image
 pull, a managed install does not. The custom-image path (originally written
-2026-09-06 for PHA-3220) is kept further down as a fallback/dev option.
+2026-09-06 for #3220) is kept further down as a fallback/dev option.
 
-**Update 2026-09-07, post PHA-3220 repo split:** this plugin moved out of
+**Update 2026-09-07, post #3220 repo split:** this plugin moved out of
 `plnt-sexton` into its own repo, `phattbeats/openclaw-teamspeak-plugin`. The
 staging recipe below now clones/tars from that repo, not `plnt-sexton`. A
 `git:` install straight from the new repo was also re-tested and still fails
@@ -21,7 +21,7 @@ true`) against `ghcr.io/openclaw/openclaw:latest` (2026.9.2) in a scratch
 container.
 
 **Update 2026-09-09: the live production cutover below is done.** Brandon
-accepted the cutover confirmation on PHA-3326 (2026-09-07). The Gateway core
+accepted the cutover confirmation on #3326 (2026-09-07). The Gateway core
 is now `ghcr.io/openclaw/openclaw:2026.9.3`; the plugin is `--link`-installed
 and loads clean (`openclaw plugins inspect teamspeak --runtime --json` reports
 `"imported": true`); and the `/plugins/teamspeak` Path mapping is a permanent
@@ -33,8 +33,8 @@ recording: a crashed prior migration attempt left an unexpired
 reacquire — `openclaw doctor --fix` does not detect or clear it. Fix was a
 direct `DELETE FROM state_leases WHERE scope='startup-migrations'` against
 `openclaw.sqlite` (config backed up first) before restarting; see the
-PHA-3326 comment thread for the full diagnosis. The `channels.teamspeak`
-config block below is **not** applied yet — that's PHA-3220's live-voice
+#3326 comment thread for the full diagnosis. The `channels.teamspeak`
+config block below is **not** applied yet — that's #3220's live-voice
 verification pass, tracked separately and not required for this issue.
 
 ## What is already true on the box
@@ -45,13 +45,13 @@ verification pass, tracked separately and not required for this issue.
   managed `--link` install is live and loaded (verified via `openclaw plugins
   inspect teamspeak --runtime --json` and `openclaw plugins list`); the
   `channels.teamspeak` block has not been added yet, so the channel itself
-  isn't configured (see PHA-3220 for that pass).
+  isn't configured (see #3220 for that pass).
 - Config lives at `/mnt/cache/appdata/openclaw/config/openclaw.json` (mounted at
   `/root/.openclaw`; the container runs as root, not the upstream compose's `node`).
 - It is already on **both** `phattclaw-network` and `phattvip`, so it can reach
   the bridge by container name.
 - **ts-bridge is already up** on `phattvip` (172.19.0.51:9099, nick `Sexton-Bridge`,
-  channel `General Shit`, its own pinned `TS_IDENTITY`). Step 4 of PHA-3220 is done.
+  channel `General Shit`, its own pinned `TS_IDENTITY`). Step 4 of #3220 is done.
 - The live Gateway also serves **Discord and Signal** right now (`channels` in
   the live config). Any of the steps below that restart the container —
   cutting to a new image, or a managed plugin install — briefly interrupts
@@ -67,7 +67,7 @@ verification pass, tracked separately and not required for this issue.
   moment later). Worth a cleanup pass or expansion before it starts failing
   writes outright; not this issue's scope to fix.
 
-## The managed `--link` install (PHA-3326)
+## The managed `--link` install (#3326)
 
 **Done on this box as of 2026-09-09 — steps 1-3 below are the historical
 recipe, kept for rebuilding from scratch.** This needs the Gateway core at
@@ -122,15 +122,15 @@ ssh root@10.0.0.100 \
 This stages a runtime-ready copy at `/mnt/cache/appdata/openclaw/plugins/teamspeak`
 (test suite stripped, `ws` installed via the Gateway image's own npm — see
 the script for why the host can't run npm itself). Already done once against
-this exact box as part of PHA-3326's verification (re-staged from the new
-repo after the PHA-3220 split, `--link`-validated clean in a scratch
+this exact box as part of #3326's verification (re-staged from the new
+repo after the #3220 split, `--link`-validated clean in a scratch
 container); re-run after any plugin source change.
 
 Then, Unraid GUI → Docker → `OpenClaw` → Edit → add a **Path** mapping:
 Container Path `/plugins/teamspeak` → Host Path
 `/mnt/cache/appdata/openclaw/plugins/teamspeak` (read-only) → Apply. This is
 the one part of the setup that has to be a permanent fixture of the container
-definition — the option 1 tradeoff called out on PHA-3326. Done as of
+definition — the option 1 tradeoff called out on #3326. Done as of
 2026-09-09 by editing `my-OpenClaw.xml` directly (a `Path` Config entry,
 `Mode="ro,slave"`) rather than through the GUI; either way lands in the same
 template file, so it now persists across an Unraid "Update Container" the
@@ -155,7 +155,7 @@ pull replaces `/app` inside the container; it does not touch either of those,
 so the plugin keeps loading with no re-deploy step. The custom
 `phattbeats/openclaw-sexton:teamspeak` image below has the plugin compiled
 into `/app/dist` itself — the first image pull silently reverts to whatever
-image the Repository field names, which is exactly the failure mode PHA-3326
+image the Repository field names, which is exactly the failure mode #3326
 exists to close.
 
 ## Fallback: build a custom image
@@ -206,7 +206,7 @@ block):
 "teamspeak": {
   "bridgeUrl": "ws://ts-bridge:9099",
   "channel": "General Shit",
-  "tools": { "enabled": false },   // PHA-3176; needs yt-dlp+ffmpeg in the image
+  "tools": { "enabled": false },   // #3176; needs yt-dlp+ffmpeg in the image
   "voice": {
     "enabled": true,
     "mode": "agent-proxy",
@@ -223,7 +223,7 @@ block):
 }
 ```
 
-Leave `requireWakeName` unset — unset *is* the automatic policy PHA-3220's
+Leave `requireWakeName` unset — unset *is* the automatic policy #3220's
 acceptance tests (no wake name alone, wake name once a second human joins).
 
 ## The one prerequisite the box does not have
@@ -243,7 +243,7 @@ docker exec OpenClaw openclaw plugins inspect teamspeak --runtime --json   # "im
 ```
 
 Then in the channel: `!sexton status` should report bridge/channel/session/
-wake-name/barge-in state. After that, PHA-3220's acceptance list.
+wake-name/barge-in state. After that, #3220's acceptance list.
 
 If the bridge socket doesn't connect, resolve the name first — `docker exec
 OpenClaw getent hosts ts-bridge` — and fall back to `ws://172.19.0.51:9099`.

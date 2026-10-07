@@ -1,4 +1,4 @@
-//! Verification helper for PHA-3107 / PHA-3173: join a channel as a throwaway
+//! Verification helper for #3107 / #3173: join a channel as a throwaway
 //! identity and run a scripted sequence of actions against it — text messages,
 //! mute/unmute, and a channel hop — so the Sexton's "content only" hard rule
 //! can be exercised in a deterministic order.
@@ -60,7 +60,7 @@ struct Args {
 
     /// Separator between script steps. Override it to send a message that
     /// itself contains commas — a real TS6 attachment payload, for one
-    /// (PHA-3425), which is JSON and so is full of them.
+    /// (#3425), which is JSON and so is full of them.
     #[arg(long, default_value = ",")]
     script_sep: String,
 

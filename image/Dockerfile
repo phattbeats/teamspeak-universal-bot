@@ -1,4 +1,4 @@
-# PHA-3791: every TeamSpeak bot, and everything they lean on, as ONE image
+# #3791: every TeamSpeak bot, and everything they lean on, as ONE image
 # and ONE container (teamspeak-universal-bot). Brandon, 2026-10-02/03: "since
 # openclaw can handle multiple agents, cant they all be under one, expanding
 # container?" ... "combine everything into one". So one gateway runs one agent
@@ -7,7 +7,7 @@
 # the whisper pool + coalescing proxy, the POT provider, suno-api and
 # ts-summoner. image/universal/ holds the per-bot wiring (stack.mjs).
 #
-# PHA-3428 (the history below still holds for each piece): the whole Sexton
+# #3428 (the history below still holds for each piece): the whole Sexton
 # stack as ONE image.
 #
 # Brandon's decision 2026-09-12: one image, one container, one Unraid template
@@ -17,23 +17,23 @@
 #
 # What is inside, and why each piece is here rather than beside it:
 #
-#   sexton          The bot. Since PHA-3342 this one binary is also the audio
-#                   bridge PHA-3174 used to run as `ts-bridge`: one tsclientlib
+#   sexton          The bot. Since #3342 this one binary is also the audio
+#                   bridge #3174 used to run as `ts-bridge`: one tsclientlib
 #                   connection, one bot account, and the bridge WebSocket on
 #                   :9099 that the OpenClaw teamspeak plugin dials.
 #   whisper-server  whisper.cpp's HTTP server plus `ggml-base.en.bin`, BAKED IN
-#                   (PHA-3228). Formerly the `whisper` sidecar container. The
+#                   (#3228). Formerly the `whisper` sidecar container. The
 #                   weights are ~148 MB and they are the single reason the STT
 #                   lane costs $0 and never leaves the box, so they ship with
 #                   the image rather than being fetched on first boot into a
 #                   host directory somebody can forget to back up.
-#   ffmpeg, yt-dlp  The PHA-3176 music lane, plus the ffmpeg the stt-tts lane
+#   ffmpeg, yt-dlp  The #3176 music lane, plus the ffmpeg the stt-tts lane
 #   + POT provider  decodes TTS with. The plugin spawns ffmpeg and yt-dlp as
 #                   child processes, and under option (a) the plugin runs in
 #                   THIS container, so they are simply on PATH here. No export
 #                   directory, no bind-mount into another container.
 #   openclaw        A gateway of its own, running the `teamspeak` channel
-#   + the plugin    plugin, installed by the PHA-3326 `--link` path at boot.
+#   + the plugin    plugin, installed by the #3326 `--link` path at boot.
 #                   This is option (a), per Brandon 2026-09-12. See the note
 #                   below and image/README.md.
 #   supervisord     PID 1. `autorestart=true` per program, so whisper OOMing on
@@ -57,7 +57,7 @@
 #     gateways on one bridge socket is two answers to every message.
 #
 # The cost (b) was written to avoid is real and unchanged: a second gateway
-# needs its own config, state dir and model credentials, and PHA-3326's finding
+# needs its own config, state dir and model credentials, and #3326's finding
 # stands — a core bump does not update a managed channel plugin, so both
 # gateways need checking after an upgrade. image/deploy.sh pays most of that
 # once, by importing the model/auth blocks from the main gateway rather than
@@ -76,7 +76,7 @@ ARG OPENCLAW_VERSION=2026.9.3
 
 # --------------------------------------------------------------------------
 # 1. The Rust build. Same toolchain and same system deps as the old
-#    sexton/Dockerfile — libopus/libasound are the audio lane PHA-3342 folded
+#    sexton/Dockerfile — libopus/libasound are the audio lane #3342 folded
 #    in, not incidental.
 # --------------------------------------------------------------------------
 FROM rust:1-bookworm AS rust-builder
@@ -94,7 +94,7 @@ RUN cargo build --release -p sexton
 
 # --------------------------------------------------------------------------
 # 2. whisper.cpp. We take the upstream image's prebuilt binaries rather than
-#    compiling whisper.cpp ourselves: it is the exact artifact PHA-3228
+#    compiling whisper.cpp ourselves: it is the exact artifact #3228
 #    verified against this server, and a from-source build would add ~10
 #    minutes to every image build for a bit-identical result.
 #
@@ -106,7 +106,7 @@ RUN cargo build --release -p sexton
 #    its own libwhisper/libggml*, which come along in /opt/whisper/bin.
 # --------------------------------------------------------------------------
 #
-#    PHA-3554: NOT `ghcr.io/ggml-org/whisper.cpp:main` any more. That tag
+#    #3554: NOT `ghcr.io/ggml-org/whisper.cpp:main` any more. That tag
 #    moves, and the 2026-09-17 build of it (ggml 0.24, parakeet) dies with
 #    SIGILL on PHATT-RAID's Ryzen 2600X the moment it runs inference — a
 #    binary built for instructions this CPU does not have. `--help` still
@@ -154,7 +154,7 @@ RUN mkdir -p /models \
     && ls -l /models
 
 # --------------------------------------------------------------------------
-# 4. The bgutil POT provider (PHA-3176). YouTube intermittently challenges
+# 4. The bgutil POT provider (#3176). YouTube intermittently challenges
 #    datacenter IPs, and the yt-dlp wiki's answer is a cookie file plus this
 #    provider. It is a small node service; yt-dlp reaches it over HTTP, so it
 #    can live in this container and still serve a yt-dlp running in the
@@ -192,18 +192,18 @@ RUN set -eu; \
 # --------------------------------------------------------------------------
 # 5. The OpenClaw teamspeak channel plugin (option (a)).
 #
-#    The plugin ships TypeScript and no compiled dist/, deliberately: PHA-3326
+#    The plugin ships TypeScript and no compiled dist/, deliberately: #3326
 #    found that `openclaw plugins install --link` is the one install form
 #    exempt from the built-runtime-entry check, and that `git:` installs fail
 #    on this plugin outright. So there is no build step here — only its runtime
 #    dependency (`ws`), installed with the gateway image's own node/npm so the
 #    resolved tree is the one that gateway will actually load.
 #
-#    PHA-3580: the source is teamspeak-plugin/ in THIS repo, not a staged copy
-#    of a separate `openclaw-teamspeak-plugin` repo — that split (PHA-3220)
+#    #3580: the source is teamspeak-plugin/ in THIS repo, not a staged copy
+#    of a separate `openclaw-teamspeak-plugin` repo — that split (#3220)
 #    existed to let the plugin and the chat logger ship on independent
-#    cadences, a reason that evaporated once PHA-3341/3342 folded them onto
-#    one tsclientlib connection and PHA-3428 put them in one image. One git
+#    cadences, a reason that evaporated once #3341/3342 folded them onto
+#    one tsclientlib connection and #3428 put them in one image. One git
 #    tree, one PR, one CI run.
 #
 #    The standalone-only scaffolding (SDK stubs, the standalone vitest config)
@@ -225,7 +225,7 @@ RUN npm install --omit=dev --no-audit --no-fund \
     && test -d /plugin/node_modules/ws
 
 # --------------------------------------------------------------------------
-# 5b. suno-api (PHA-3554), Bexton's band generator. Upstream gcui-art/suno-api
+# 5b. suno-api (#3554), Bexton's band generator. Upstream gcui-art/suno-api
 #     at the commit it stalled on, plus our patches (image/suno-api/
 #     phattbeats.patch: the 2026 Suno UI, Turnstile through 2Captcha, the
 #     v2-web generate path, the proxy, the decrypted-audio route). Built on the
@@ -288,7 +288,7 @@ ARG WHISPER_MODEL=ggml-base.en.bin
 USER root
 
 # ca-certificates/curl: TLS out and the healthcheck.
-# libopus0/libasound2: the Sexton's audio lane (PHA-3342).
+# libopus0/libasound2: the Sexton's audio lane (#3342).
 # libstdc++6/libgomp1: whisper-server's only non-bundled deps.
 # ffmpeg: the music lane AND the stt-tts decode path. The gateway image has
 #   neither ffmpeg nor yt-dlp — checked, `which` returns nothing in it — which
@@ -323,7 +323,7 @@ COPY --from=rust-builder /build/target/release/sexton          /usr/local/bin/se
 COPY --from=rust-builder /build/target/release/send-test       /usr/local/bin/send-test
 COPY --from=rust-builder /build/target/release/probe-channels  /usr/local/bin/probe-channels
 COPY --from=rust-builder /build/target/release/bridge-test     /usr/local/bin/bridge-test
-# PHA-3791: the default avatar used to live here (sexton/avatar/brandon.png,
+# #3791: the default avatar used to live here (sexton/avatar/brandon.png,
 # an existing inconsistency with bexton whose avatar lived under image/).
 # It is now personas/sexton/avatar.png, copied below with the rest of the
 # persona pack — see the persona COPY block.
@@ -355,18 +355,18 @@ COPY --from=pot-builder  /out/                                 /opt/bgutil-pot/
 RUN mkdir -p /etc/yt-dlp/plugins/bgutil \
     && cp -a /opt/bgutil-pot/ytdlp-plugin/yt_dlp_plugins /etc/yt-dlp/plugins/bgutil/ 2>/dev/null || true
 
-# --- PHA-3791: the shared whisper pool (was the `whisper` container) ---
+# --- #3791: the shared whisper pool (was the `whisper` container) ---
 COPY whisper/run-whisper-pool.sh                               /usr/local/bin/run-whisper-pool
 COPY whisper/coalescing-proxy.mjs                              /opt/whisper/coalescing-proxy.mjs
 
-# --- PHA-3791: suno-api (was the `suno-api` container) + its chromium ---
+# --- #3791: suno-api (was the `suno-api` container) + its chromium ---
 COPY --from=suno-builder /opt/suno-api/                        /opt/suno-api/
 COPY --from=suno-builder /opt/ms-playwright/                   /opt/ms-playwright/
 RUN cd /opt/suno-api \
     && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright npx -y playwright install-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
-# --- PHA-3791: ts-summoner (was the `ts-summoner` container) ---
+# --- #3791: ts-summoner (was the `ts-summoner` container) ---
 COPY ts-summoner/summoner.mjs ts-summoner/schedule.mjs ts-summoner/story.mjs \
      ts-summoner/variety.mjs ts-summoner/guests.mjs ts-summoner/banter.mjs \
      ts-summoner/insights.mjs ts-summoner/insights-stats.mjs ts-summoner/insights-web.mjs \
@@ -382,7 +382,7 @@ COPY ts-summoner/live/                                         /opt/ts-summoner/
 # also what makes it survive an image bump without a manual reinstall.
 COPY --from=plugin-builder /plugin/ /opt/openclaw-teamspeak-plugin/
 
-# PHA-3829: two narrow OpenClaw core patches for TeamSpeak turns, both caused
+# #3829: two narrow OpenClaw core patches for TeamSpeak turns, both caused
 # by the voice lane marking its turns ChatType "direct":
 #  - a "Conversation info" block wrapped in <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>
 #    rode after every line, and the bots took it for something the speaker
@@ -396,7 +396,7 @@ RUN node /tmp/patch-openclaw-teamspeak.mjs /app/dist \
     && rm /tmp/patch-openclaw-teamspeak.mjs
 
 COPY image/gateway/openclaw.seed.json /opt/sexton-gateway/openclaw.seed.json
-# PHA-3791: the persona packs, whole. Each personas/<id>/ is one bot: its
+# #3791: the persona packs, whole. Each personas/<id>/ is one bot: its
 # workspace markdown, voice.json/tools.json (account seed), lines/moods and
 # avatar. stack.mjs reads them in place; /config/personas/<id>/ adds or
 # overrides a pack without a rebuild. HUMAN.md is the shared tone for all.
@@ -440,7 +440,7 @@ ENV RUST_LOG=info \
 
 # Every service in the container talks to the others over loopback: bridges
 # 9101+, whisper 8080-8082, POT 4416, suno-api 3000, summoner 8099. 18789 is
-# the gateway's own control port. 8097 is the insights dashboard (PHA-3963),
+# the gateway's own control port. 8097 is the insights dashboard (#3963),
 # the one port deploy.sh publishes; it sits behind basic auth.
 EXPOSE 18789 8097
 

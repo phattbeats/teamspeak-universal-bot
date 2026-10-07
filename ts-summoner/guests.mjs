@@ -1,4 +1,4 @@
-// PHA-3842 G1: the guest-star slot. Pure functions; the summoner does the I/O.
+// #3842 G1: the guest-star slot. Pure functions; the summoner does the I/O.
 // Tested in test/guests.test.mjs.
 //
 // Guests (Rotten Johnny, Trixie, ...) are bots in config.json with a `guest`
@@ -8,7 +8,7 @@
 // with whoever's in, a few minutes listening for their wake name, exit scene.
 // Brandon: guest stars shouldn't overstay their welcome.
 //
-// Cost (PHA-3597) is bounded by construction: one guest at a time, a hard
+// Cost (#3597) is bounded by construction: one guest at a time, a hard
 // weekly cap, a minimum gap between visits, only while humans are on the
 // server (the summoner already ends every summons on an empty server), and
 // only while one of the guest's `needs` bots is in the room. Johnny and

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PHA-3798: produce dist/*.js so npm:/npm-pack:/git: plugin installs work.
+// #3798: produce dist/*.js so npm:/npm-pack:/git: plugin installs work.
 //
 // --link is the only OpenClaw install kind that accepts a raw .ts
 // `openclaw.extensions` entry (package-entry-resolution.ts upstream, gated
@@ -12,7 +12,7 @@
 // openclaw/plugin-sdk subpaths (channel-entry-contract, channel-core,
 // realtime-bootstrap-context, routing) that tsconfig.json's standalone stub
 // set does not model, which is why tsconfig.json's own `exclude` list
-// already keeps those two files out of `npm run typecheck` (PHA-3787).
+// already keeps those two files out of `npm run typecheck` (#3787).
 // Building them against the stubs would just fail on the same gaps for a
 // different reason. esbuild strips types without resolving them, which
 // matches that existing, documented gap rather than papering over it with

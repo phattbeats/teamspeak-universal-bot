@@ -1,4 +1,4 @@
-// PHA-3859: bot-on-bot banter. Pure functions; the summoner does the I/O.
+// #3859: bot-on-bot banter. Pure functions; the summoner does the I/O.
 // Tested in test/banter.test.mjs.
 //
 // Brandon loved the Johnny/Trixie introductions and wanted more of that:

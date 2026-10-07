@@ -7,7 +7,7 @@ const scenes = JSON.parse(readFileSync(new URL('../live/scenes.json', import.met
 const lines = (bot) => JSON.parse(readFileSync(new URL(`../../personas/${bot}/lines.json`, import.meta.url)));
 const has = (k) => Array.isArray(scenes[k]);
 const BOTS = ['sexton', 'bexton', 'lexton'];
-const ALL = [...BOTS, 'johnny', 'trixie']; // PHA-3842 guests can be in scenes too
+const ALL = [...BOTS, 'johnny', 'trixie']; // #3842 guests can be in scenes too
 
 test('midnight: Sexton out + Lexton in is one hand-off, Bexton just watches', () => {
   const r = planScenes({

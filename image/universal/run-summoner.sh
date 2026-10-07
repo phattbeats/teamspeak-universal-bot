@@ -1,5 +1,5 @@
 #!/bin/sh
-# PHA-3791: ts-summoner, in the same container as the bots it schedules. Its
+# #3791: ts-summoner, in the same container as the bots it schedules. Its
 # config is /config/summoner/config.json plus this container's wiring, merged
 # by stack.mjs into /run/universal/summoner.json. SUMMONER_ENABLED=0 idles it
 # (every core then just runs), which is what a test instance wants.

@@ -1,5 +1,5 @@
 /**
- * The stt-tts lane: one session per TeamSpeak client (PHA-3228).
+ * The stt-tts lane: one session per TeamSpeak client (#3228).
  *
  *   bridge `speaker_audio` (48k mono pcm16, per clientId)
  *     -> SpeakerSegmenter (speaker_start/stop + hangover)
@@ -44,7 +44,7 @@ import type {
 import { WakeGate } from "./wake-gate.js";
 
 export type TeamSpeakVoiceAgentTurnHooks = {
-  /** Reply text as it streams in, in order (PHA-3792). Optional for a turn to call. */
+  /** Reply text as it streams in, in order (#3792). Optional for a turn to call. */
   onBlock?: ((text: string) => void) | undefined;
 };
 
@@ -61,7 +61,7 @@ export type TeamSpeakVoiceAgentTurnOutcome = {
  * that text immediately, and the returned text is only used for what the
  * blocks did not already cover. A turn that ignores the hooks and returns a
  * plain string (the ingress fallback, and every test double written before
- * PHA-3792) is spoken whole at the end, as before.
+ * #3792) is spoken whole at the end, as before.
  */
 export type TeamSpeakVoiceAgentTurn = (
   params: {
@@ -71,7 +71,7 @@ export type TeamSpeakVoiceAgentTurn = (
     message: string;
     /** The wake name that opened the gate, when one was required. */
     wakeName?: string;
-    /** Opened by the follow-up window, not by the name (PHA-3829). */
+    /** Opened by the follow-up window, not by the name (#3829). */
     followUp?: boolean;
   },
   hooks: TeamSpeakVoiceAgentTurnHooks,
@@ -89,14 +89,14 @@ export type TeamSpeakSttTtsSessionParams = {
   runAgentTurn: TeamSpeakVoiceAgentTurn;
   /**
    * Model and thinking level the turn ran with, for the per-turn log line
-   * only (PHA-3789). Not the actual model selected by fallback/rotation --
+   * only (#3789). Not the actual model selected by fallback/rotation --
    * `runCommandFromIngress` does not return that to the ingress caller, only
    * `payloads`. Labeled "requested" in the log for that reason.
    */
   agentTurnLabel?: { model?: string | undefined; thinking?: string | undefined } | undefined;
   playback: RoomPlaybackQueue;
   humanParticipantCount: () => number;
-  /** Every non-empty transcript, before the wake gate (PHA-3823: trash-talk crash-ins). */
+  /** Every non-empty transcript, before the wake gate (#3823: trash-talk crash-ins). */
   onHeard?: ((text: string, nickname: string) => void) | undefined;
   onTerminalError?: ((error: Error) => void) | undefined;
   now?: (() => number) | undefined;
@@ -118,7 +118,7 @@ export type TeamSpeakVoiceTurnTimings = {
 /**
  * How long the conversation stays open after the last thing was said.
  *
- * Brandon, PHA-3428: "it's like a real conversation, wake on his name, wait 3-5
+ * Brandon, #3428: "it's like a real conversation, wake on his name, wait 3-5
  * seconds max of silence before ending it. Anything past that is awkward dead
  * air." So this is a *silence* budget, not a window from the reply: it is
  * measured from the moment the bot's own speech finishes playing to the moment
@@ -126,8 +126,8 @@ export type TeamSpeakVoiceTurnTimings = {
  * play out does not spend it, and a long follow-up question does not either --
  * only actual dead air does.
  *
- * Was off by default (Brandon, PHA-3428 2026-09-13: "HE LISTENS FOR HIS NAME
- * ONLY"). Reversed in PHA-3783 (2026-09-24): with the window shut, nobody could
+ * Was off by default (Brandon, #3428 2026-09-13: "HE LISTENS FOR HIS NAME
+ * ONLY"). Reversed in #3783 (2026-09-24): with the window shut, nobody could
  * answer the bot's own question without saying the name again, and it "just
  * doesn't respond". 15 s of dead air after our speech ends is the default now;
  * `voice.followUpSilenceMs: 0` shuts it again for a bot that must be name-only.
@@ -135,7 +135,7 @@ export type TeamSpeakVoiceTurnTimings = {
 export const DEFAULT_FOLLOW_UP_SILENCE_MS = 15_000;
 
 /**
- * Nameless follow-ups in a row before the name is needed again (PHA-3829).
+ * Nameless follow-ups in a row before the name is needed again (#3829).
  * Each answer re-armed the window, so one "henchman" bought a bot two
  * straight minutes of replying to every line one person said.
  */
@@ -159,7 +159,7 @@ export class TeamSpeakSttTtsSpeakerSession {
   private consecutiveFollowUps = 0;
   /** What whisper called the wake name on the last fuzzy match, for the log. */
   private lastFuzzyHearing: string | undefined;
-  /** The other bot's name that claimed the last declined hearing, for the log (PHA-3605). */
+  /** The other bot's name that claimed the last declined hearing, for the log (#3605). */
   private lastExcludedBy: string | undefined;
 
   constructor(private readonly params: TeamSpeakSttTtsSessionParams) {
@@ -279,7 +279,7 @@ export class TeamSpeakSttTtsSpeakerSession {
     this.segmenter.handleSpeakerStop();
   }
 
-  /** Close the follow-up window; the next answer needs our name (PHA-3829). */
+  /** Close the follow-up window; the next answer needs our name (#3829). */
   endFollowUp(reason: string): void {
     if (this.conversationIdleFrom === undefined) {
       return;
@@ -311,7 +311,7 @@ export class TeamSpeakSttTtsSpeakerSession {
   private enqueueTurn(segment: SpeakerSegment): void {
     const generation = this.generation;
     // Transcription starts the moment the segment closes, NOT when the queue
-    // frees up (PHA-3789 latency pass). STT has no side effects on the lane,
+    // frees up (#3789 latency pass). STT has no side effects on the lane,
     // so it does not need the serialization the agent turn and playback do.
     // Without this, a speaker who talks again while the previous answer is
     // still synthesizing its trailing chunks pays the full sttMs on top of
@@ -383,15 +383,15 @@ export class TeamSpeakSttTtsSpeakerSession {
       return;
     }
 
-    // Speech starts before the agent turn ends (PHA-3792). The pipeline is
+    // Speech starts before the agent turn ends (#3792). The pipeline is
     // built first so a block that arrives mid-generation has somewhere to go;
     // it synthesizes in order with one call prefetched ahead of playback
-    // (PHA-3789) and puts frames on the room queue as each chunk lands. A
+    // (#3789) and puts frames on the room queue as each chunk lands. A
     // turn that does not stream (ingress fallback, older doubles) delivers
     // nothing through `onBlock`, and its returned text is pushed whole below
-    // -- the pre-PHA-3792 behavior, unchanged.
+    // -- the pre-#3792 behavior, unchanged.
     const isLive = () => !this.isStopped() && generation === this.generation;
-    // A nameless follow-up doesn't start on top of another bot (PHA-3829).
+    // A nameless follow-up doesn't start on top of another bot (#3829).
     // Named turns still speak: they asked for us.
     const isFollowUp = this.wakeNameRequired && !gated.wakeName;
     let yieldedToOtherBot = false;
@@ -512,7 +512,7 @@ export class TeamSpeakSttTtsSpeakerSession {
         `sttProvider=${sttProvider}${sttConfidence} sttMsProvider=${Math.round(heard.ms)} ` +
         `speechProvider=${speech.speechProvider ?? this.params.synthesizer.id} ` +
         // No prompt/output token counts or cost here: neither reply path
-        // returns usage to the caller (PHA-3789 finding, see
+        // returns usage to the caller (#3789 finding, see
         // TOOL-CATALOG.md §4.6). requestedModel/Thinking are the ask, not
         // necessarily what the host actually ran.
         `requestedModel=${requestedModel} requestedThinking=${requestedThinking}${this.lastFuzzyHearing ? ` wakeHeardAs=${JSON.stringify(this.lastFuzzyHearing)}` : ""}`,
@@ -614,12 +614,12 @@ export function resolveSttTtsWakeNamePolicy(
 }
 
 /**
- * Caps whisper requests to what the server can actually run at once (PHA-3607).
+ * Caps whisper requests to what the server can actually run at once (#3607).
  *
  * whisper.cpp's server has no request-level parallelism — one process, one
  * mutex, one decode slot per bot (see the pool doc) — so letting every
  * concurrent speaker submit independently does not run them in parallel, it
- * only stacks each one behind a full `timeoutMs` wait apiece (the PHA-3597
+ * only stacks each one behind a full `timeoutMs` wait apiece (the #3597
  * decode/abort/resubmit livelock: several people talking at once queue up
  * requests that each eventually time out in turn instead of finishing sooner).
  *

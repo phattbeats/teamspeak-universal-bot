@@ -44,7 +44,7 @@ class MusicPlayer {
   }
   params;
   stream;
-  /** Resolved tracks waiting their turn (PHA-3635); consumed on natural finish. */
+  /** Resolved tracks waiting their turn (#3635); consumed on natural finish. */
   queue = [];
   gain;
   closed = false;
@@ -100,7 +100,7 @@ class MusicPlayer {
     this.startStream(track, Math.max(0, request.startDelayMs ?? 0));
     return track;
   }
-  /** Explicit-source play (PHA-3785). Delegates to `play()` once the target is resolved per source. */
+  /** Explicit-source play (#3785). Delegates to `play()` once the target is resolved per source. */
   async playSource(request) {
     if (this.closed) {
       throw new MusicError("The music player is shut down.");
@@ -413,7 +413,7 @@ class MusicPlayer {
       stream.child.stdout?.resume();
     }
   }
-  // --- queue browsing & transport (PHA-3785) ---------------------------------
+  // --- queue browsing & transport (#3785) ---------------------------------
   nowPlayingInfo() {
     const stream = this.stream;
     if (!stream) {

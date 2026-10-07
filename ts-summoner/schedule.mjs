@@ -1,4 +1,4 @@
-// PHA-3841: the schedule, with the special-nights calendar folded in.
+// #3841: the schedule, with the special-nights calendar folded in.
 //
 // Pure functions only (no I/O, no clock), so test/schedule.test.mjs can pin
 // every edge: midnight crossings, a calendar entry replacing a shift, the
@@ -109,7 +109,7 @@ export function shiftsFor(cfg, calendar, id, p) {
 /**
  * The shift `id` is on at `ts`, or null (calendar included, rare events not):
  *   { key, start, end, startTs, endTs, lateMin }
- * `jit(key)` (PHA-3839) returns { start, end } minutes to push the shift by;
+ * `jit(key)` (#3839) returns { start, end } minutes to push the shift by;
  * without it the schedule is exact. `key` names one shift on one date, so a
  * call-out or a jitter roll sticks to that shift.
  */

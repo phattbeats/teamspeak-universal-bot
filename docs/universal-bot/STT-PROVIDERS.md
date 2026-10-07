@@ -1,6 +1,6 @@
 # STT as a connector
 
-PHA-3790, the implementation of [TOOL-CATALOG.md](TOOL-CATALOG.md) §4.7.
+#3790, the implementation of [TOOL-CATALOG.md](TOOL-CATALOG.md) §4.7.
 
 ## What was wrong
 
@@ -53,7 +53,7 @@ Case-insensitive, with aliases:
 | `minimax-asr` | hosted | `minimax` |
 
 `whisper-local` is the default primary and talks to the shared whisper pool
-container (PHA-3598/3607). `minimax-asr` is the default secondary.
+container (#3598/3607). `minimax-asr` is the default secondary.
 
 Adding a provider is three things, none of them in the lane:
 

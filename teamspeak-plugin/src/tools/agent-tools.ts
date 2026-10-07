@@ -1,5 +1,5 @@
 /**
- * The Sexton's channel tools, as ordinary OpenClaw agent tools (PHA-3428 item 4).
+ * The Sexton's channel tools, as ordinary OpenClaw agent tools (#3428 item 4).
  *
  * `registry.ts` already implements `play_music`, `stop_music`, `set_volume`,
  * `what_did_i_miss`, `who_is_here` and `poke`, but only as *realtime provider*
@@ -35,7 +35,7 @@ import {
  * the builder so the two cannot drift; `package.json` repeats the same list.
  */
 /**
- * Every tool, moderation and villain included (PHA-3820: Lexton runs the
+ * Every tool, moderation and villain included (#3820: Lexton runs the
  * stt-tts lane, so until this his kick/move tools never reached the agent).
  * Whether an account may actually use one is decided at dispatch:
  * `moderation.*` flags + `allowGroups`, and `tools.villain.enabled`.

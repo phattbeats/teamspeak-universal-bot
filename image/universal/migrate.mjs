@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PHA-3791: one-time move from the per-bot containers (sexton, bexton, lexton,
+// #3791: one-time move from the per-bot containers (sexton, bexton, lexton,
 // guest) and the sidecars (ts-summoner, suno-api) to the one container.
 //
 // Run inside the new image, with the old appdata root and the new one mounted:
@@ -49,7 +49,7 @@ const cfg = structuredClone(old.sexton);
 delete cfg.gateway?.auth; // run-gateway writes a fresh token
 cfg.channels = { teamspeak: { accounts: {} } };
 cfg.bindings = (cfg.bindings || []).filter((b) => b?.match?.channel !== 'teamspeak');
-cfg.agents.defaults = { ...cfg.agents.defaults, ...old.guest.agents.defaults }; // PHA-3792 block streaming lives there
+cfg.agents.defaults = { ...cfg.agents.defaults, ...old.guest.agents.defaults }; // #3792 block streaming lives there
 
 for (const [container, ids] of Object.entries(HOMES)) {
   const src = old[container];

@@ -52,16 +52,16 @@ export type TeamSpeakVoiceRealtimeConfig = {
   requireWakeName?: boolean;
   /** Wake names that allow a response when the gate is active. Defaults to the routed agent name plus OpenClaw. */
   wakeNames?: string[];
-  /** Exact hearings whisper is known to produce for the first wake name, accepted with no edit budget (PHA-3605). */
+  /** Exact hearings whisper is known to produce for the first wake name, accepted with no edit budget (#3605). */
   wakeAliases?: string[];
-  /** The other bot's wake names: a hearing at least as close to one of these as to ours is declined (PHA-3605). */
+  /** The other bot's wake names: a hearing at least as close to one of these as to ours is declined (#3605). */
   excludeWakeNames?: string[];
   /** Agent profile bootstrap files to include in realtime instructions. Defaults to IDENTITY.md, USER.md, SOUL.md; set [] to disable. */
   bootstrapContextFiles?: TeamSpeakVoiceRealtimeBootstrapContextFile[];
   /**
    * Dead air allowed after our own speech before the conversation closes again,
-   * during which a follow-up needs no wake name. Default 15000 (PHA-3783);
-   * 0 makes the name the only way in (the pre-PHA-3783 behaviour).
+   * during which a follow-up needs no wake name. Default 15000 (#3783);
+   * 0 makes the name the only way in (the pre-#3783 behaviour).
    */
   followUpSilenceMs?: number;
   /** Allow `speaker_start` frames to interrupt active realtime playback. */
@@ -75,7 +75,7 @@ export type TeamSpeakVoiceRealtimeConfig = {
 };
 
 /**
- * `voice.streaming` — the stt-tts lane (PHA-3228).
+ * `voice.streaming` — the stt-tts lane (#3228).
  *
  * `voice-call` models `streaming` and `realtime` as mutually exclusive lanes
  * with a provider-keyed transcription block (`extensions/voice-call/src/config-migration.ts`);
@@ -83,7 +83,7 @@ export type TeamSpeakVoiceRealtimeConfig = {
  * of the two blocks is read, chosen by `voice.mode`.
  */
 /**
- * One STT provider slot (PHA-3790).
+ * One STT provider slot (#3790).
  *
  * The same shape serves both slots and every registered provider, so choosing a
  * different transcriber is a config edit rather than a code change — see
@@ -144,11 +144,11 @@ export type TeamSpeakVoiceStreamingSpeechConfig = {
   /** Provider voice id. Free-form; MiniMax accepts any system voice id. */
   voiceId?: string;
   /**
-   * PHA-3842: per-bot pitch in semitones (MiniMax: -12..12). Passed through
+   * #3842: per-bot pitch in semitones (MiniMax: -12..12). Passed through
    * in the provider block; unset keeps the provider's own default.
    */
   pitch?: number;
-  /** PHA-3842: per-bot speaking speed (MiniMax: 0.5..2). Unset = provider default. */
+  /** #3842: per-bot speaking speed (MiniMax: 0.5..2). Unset = provider default. */
   speed?: number;
   /** Synthesis timeout for one reply. Default: 20000ms. */
   timeoutMs?: number;
@@ -169,7 +169,7 @@ export type TeamSpeakVoiceStreamingSegmentationConfig = {
 
 export type TeamSpeakVoiceStreamingConfig = {
   transcription?: TeamSpeakVoiceStreamingTranscriptionConfig;
-  /** Optional hosted second opinion; absent by default. See PHA-3428 item 3. */
+  /** Optional hosted second opinion; absent by default. See #3428 item 3. */
   secondaryTranscription?: TeamSpeakVoiceStreamingSecondaryTranscriptionConfig;
   speech?: TeamSpeakVoiceStreamingSpeechConfig;
   segmentation?: TeamSpeakVoiceStreamingSegmentationConfig;
@@ -188,14 +188,14 @@ export type TeamSpeakVoiceConfig = {
    * Thinking level forced on every stt-tts voice turn ("off"|"low"|"medium"|
    * "high"), passed straight through as `AgentCommandOpts.thinking`. Voice
    * has no channel for a visible thinking trace and pays for it in dead air
-   * on the line, so the lane defaults this to "off" (PHA-3789) rather than
+   * on the line, so the lane defaults this to "off" (#3789) rather than
    * inheriting whatever the agent's `thinkingDefault` resolves to for other
    * channels. Set explicitly to override, including back to "inherit".
    */
   thinking?: string;
   /**
    * Stream the reply into TTS block by block as the model generates it
-   * (PHA-3792), through the host's `dispatchReplyWithBufferedBlockDispatcher`.
+   * (#3792), through the host's `dispatchReplyWithBufferedBlockDispatcher`.
    * Default true. `false` restores the whole-reply `runCommandFromIngress`
    * path: first audio waits for the complete answer, but the turn is one
    * ingress call with no per-turn config copy.
@@ -209,9 +209,9 @@ export type TeamSpeakVoiceConfig = {
   requireWakeName?: boolean;
   /** Wake names that allow a response when the gate is active. */
   wakeNames?: string[];
-  /** Exact hearings whisper is known to produce for the first wake name, accepted with no edit budget (PHA-3605). */
+  /** Exact hearings whisper is known to produce for the first wake name, accepted with no edit budget (#3605). */
   wakeAliases?: string[];
-  /** The other bot's wake names: a hearing at least as close to one of these as to ours is declined (PHA-3605). */
+  /** The other bot's wake names: a hearing at least as close to one of these as to ours is declined (#3605). */
   excludeWakeNames?: string[];
   /** Dead air after our own speech during which a follow-up needs no wake name. Default 0 (off). */
   followUpSilenceMs?: number;
@@ -224,7 +224,7 @@ export type TeamSpeakVoiceConfig = {
 };
 
 /**
- * `play_music` settings (PHA-3176).
+ * `play_music` settings (#3176).
  *
  * The pipeline is TS3AudioBot's, which is the one proven against a TeamSpeak
  * server: yt-dlp resolves a direct stream URL, ffmpeg decodes it to 48 kHz mono
@@ -233,7 +233,7 @@ export type TeamSpeakVoiceConfig = {
  * at them.
  */
 export type TeamSpeakMusicConfig = {
-  /** Enable `play_music` / `stop_music` / `set_volume` (default: false; PHA-3806 — fails closed for a foreign server). */
+  /** Enable `play_music` / `stop_music` / `set_volume` (default: false; #3806 — fails closed for a foreign server). */
   enabled?: boolean;
   /** yt-dlp executable. Default: "yt-dlp". */
   ytdlpPath?: string;
@@ -262,7 +262,7 @@ export type TeamSpeakMusicConfig = {
 };
 
 /**
- * The house band (PHA-3554): `compose_song` generates a track and plays it on
+ * The house band (#3554): `compose_song` generates a track and plays it on
  * the music lane after the band leader announces it.
  *
  * Off by default. This is Bexton's lane, not the Sexton's, and generation
@@ -309,7 +309,7 @@ export type TeamSpeakBandConfig = {
 };
 
 /**
- * Moderation tool gate (PHA-3786, TOOL-CATALOG.md §4.3): kick, ban, move
+ * Moderation tool gate (#3786, TOOL-CATALOG.md §4.3): kick, ban, move
  * others, mute, channel/server edit. Fails closed — an empty/absent
  * `allowGroups` disables every moderation tool regardless of the per-action
  * flags below, since there is nobody it would be safe to run them for.
@@ -335,7 +335,7 @@ export type TeamSpeakModerationConfig = {
   allowGroups?: string[];
 };
 
-/** Realtime voice tool settings (PHA-3176). */
+/** Realtime voice tool settings (#3176). */
 export type TeamSpeakToolsConfig = {
   /** Register the TeamSpeak realtime tools at all (default: true). */
   enabled?: boolean;
@@ -353,9 +353,9 @@ export type TeamSpeakToolsConfig = {
   band?: TeamSpeakBandConfig;
   moderation?: TeamSpeakModerationConfig;
   villain?: TeamSpeakVillainConfig;
-  /** The ts-summoner sidecar (PHA-3823): summon_bot / dismiss_bot / trash-talk crash-ins. */
+  /** The ts-summoner sidecar (#3823): summon_bot / dismiss_bot / trash-talk crash-ins. */
   summoner?: TeamSpeakSummonerConfig;
-  /** Entrance/exit lines on ts-summoner start/stop (PHA-3824). */
+  /** Entrance/exit lines on ts-summoner start/stop (#3824). */
   announce?: TeamSpeakAnnounceConfig;
 };
 
@@ -366,14 +366,14 @@ export type TeamSpeakAnnounceConfig = {
   requestFile?: string;
   /** Per-bot line pools. Default: $OPENCLAW_STATE_DIR/workspace/agents/<agent>/lines.json. */
   linesFile?: string;
-  /** Per-bot mood table (PHA-3840). Default: <workspace>/moods.json. */
+  /** Per-bot mood table (#3840). Default: <workspace>/moods.json. */
   moodsFile?: string;
   /** Where the rolled mood lands for the prompt. Default: <workspace>/mood/AGENTS.md. */
   moodPromptFile?: string;
 };
 
 /**
- * Lexton's villain tools (PHA-3820): `sentence`, `silence`, `summon`,
+ * Lexton's villain tools (#3820): `sentence`, `silence`, `summon`,
  * `dossier`. A separate switch from `moderation.edit`, which would also hand
  * the agent `edit_channel`/`delete_channel`/`edit_server`/group adds. These
  * run on the bot's own initiative, so there is no caller-group gate; the
@@ -426,7 +426,7 @@ export function areTeamSpeakToolsEnabled(config: TeamSpeakAccountConfig | undefi
 }
 
 /**
- * Fails closed (PHA-3806): music shells out to yt-dlp/ffmpeg and reaches the
+ * Fails closed (#3806): music shells out to yt-dlp/ffmpeg and reaches the
  * open internet on a server the operator may not own, so an unconfigured
  * install must not do that by default. Sexton/Bexton's own deploy sets
  * `tools.music.enabled: true` explicitly (`image/gateway/openclaw.seed.json`)
@@ -436,7 +436,7 @@ export function isTeamSpeakMusicEnabled(config: TeamSpeakAccountConfig | undefin
   return areTeamSpeakToolsEnabled(config) && config?.tools?.music?.enabled === true;
 }
 
-// --- the house band (PHA-3554) -----------------------------------------------
+// --- the house band (#3554) -----------------------------------------------
 
 export const DEFAULT_BAND_PROVIDER: TeamSpeakBandProvider = "minimax";
 // suno-api: a 2Captcha Turnstile solve (~10 s) plus Suno v6 rendering a pair of
@@ -566,7 +566,7 @@ export function isTeamSpeakVoiceEnabled(config: TeamSpeakAccountConfig | undefin
   return config?.voice?.enabled !== false;
 }
 
-// --- stt-tts lane (PHA-3228) -------------------------------------------------
+// --- stt-tts lane (#3228) -------------------------------------------------
 
 export const DEFAULT_WHISPER_URL = "http://whisper:8080/inference";
 export const DEFAULT_WHISPER_LANGUAGE = "en";
@@ -627,7 +627,7 @@ export function resolveTeamSpeakTranscriptionConfig(
 }
 
 /**
- * The SECONDARY transcriber (PHA-3428 item 3).
+ * The SECONDARY transcriber (#3428 item 3).
  *
  * Deliberately a separate block from `transcription` rather than a mode of it.
  * Escalation is a different decision from selection: the primary slot answers
@@ -773,8 +773,8 @@ export function resolveTeamSpeakSegmentationConfig(
 /**
  * The wake-gate knobs, read from `voice` first and `voice.realtime` second.
  *
- * PHA-3175 put these under `voice.realtime` because that was the only lane.
- * PHA-3228's config puts them at `voice` level, where they belong now that they
+ * #3175 put these under `voice.realtime` because that was the only lane.
+ * #3228's config puts them at `voice` level, where they belong now that they
  * govern both. Both spellings resolve so an existing deployment keeps working.
  */
 export function resolveTeamSpeakWakeConfig(
@@ -812,7 +812,7 @@ export function resolveTeamSpeakVoiceMode(
   return config?.voice?.mode ?? DEFAULT_VOICE_MODE;
 }
 
-/** Where the announcer looks for requests and lines (PHA-3824). */
+/** Where the announcer looks for requests and lines (#3824). */
 export function resolveAnnouncePaths(
   config: TeamSpeakAnnounceConfig | undefined,
   env: Record<string, string | undefined> = process.env,
@@ -828,7 +828,7 @@ export function resolveAnnouncePaths(
   };
 }
 
-/** Where the villain tools keep state and read the transcript (PHA-3820). */
+/** Where the villain tools keep state and read the transcript (#3820). */
 export function resolveVillainPaths(
   config: TeamSpeakVillainConfig | undefined,
   env: Record<string, string | undefined> = process.env,

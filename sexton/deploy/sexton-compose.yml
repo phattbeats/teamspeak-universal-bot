@@ -1,8 +1,8 @@
-# PHA-3173: run on the TS6 container's own Docker network and connect by
+# #3173: run on the TS6 container's own Docker network and connect by
 # container name (`teamspeak6-server:9987`), not `network_mode: host` /
 # `teamspeak.phatt.vip` — PHATT-RAID and the TS6 server share one public IP,
 # so routing out and back in over the public hostname hairpins and gets
-# flood-scored as if from the public internet (PHA-3099 finding #5). Running
+# flood-scored as if from the public internet (#3099 finding #5). Running
 # it that way returned `ConnectFailedBanned` on every retry; by container name
 # it connects first try.
 #
@@ -10,7 +10,7 @@
 # `--public-fallback` to the command; it ignores `-a` and dials
 # teamspeak.phatt.vip instead.
 #
-# PHA-3342: "everything running off of one docker container / one bot
+# #3342: "everything running off of one docker container / one bot
 # account" (Brandon) — the `plnt-ts-bridge` container is gone. Its mixer,
 # Opus codec, and public WebSocket server (`:9099`, `PROTOCOL.md`) now run
 # inside this container, on the same shared `tsclientlib::Connection` the
@@ -24,7 +24,7 @@
 services:
   sexton:
     image: phattbeats/sexton:latest
-    # PHA-3342: build context moved from the crate root (`sexton/`) to the
+    # #3342: build context moved from the crate root (`sexton/`) to the
     # repo root — the Sexton now has a workspace path dependency on
     # `bridge-proto` (`../bridge-proto`), which has to be inside the build
     # context for Docker to see it. See `sexton/Dockerfile`'s header comment.
@@ -37,7 +37,7 @@ services:
       - phattvip
     environment:
       - RUST_LOG=info
-    # PHA-3342: the audio bridge's public WebSocket (formerly ts-bridge's
+    # #3342: the audio bridge's public WebSocket (formerly ts-bridge's
     # `:9099`) — `expose`, not `ports`, so it reaches other containers on
     # `phattvip` (the realtime voice runtime) without leaving the host.
     expose:
@@ -59,7 +59,7 @@ services:
             --duck-gain 0.25
     # The runtime image is debian-slim: it has no `pgrep` (and no procps), so
     # the old `pgrep -f` check exited 127 every time and the container sat
-    # permanently unhealthy (PHA-3217). Read PID 1's argv instead — `-a` because
+    # permanently unhealthy (#3217). Read PID 1's argv instead — `-a` because
     # /proc/1/cmdline is NUL-separated and grep otherwise calls it binary.
     healthcheck:
       test: ["CMD", "grep", "-qa", "/usr/local/bin/sexton", "/proc/1/cmdline"]

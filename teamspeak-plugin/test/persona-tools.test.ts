@@ -97,7 +97,7 @@ describe("persona tools", () => {
     expect(cfg.channels.teamspeak.voice.wakeNames.sort()).toEqual(["Sexton", "sexton"]);
   });
 
-  it("one gateway, several bots: tools act on the turn's own account and agent (PHA-3791)", async () => {
+  it("one gateway, several bots: tools act on the turn's own account and agent (#3791)", async () => {
     runtimeState.cfg = {
       bindings: [
         { agentId: "sexton", match: { channel: "teamspeak", accountId: "sexton" } },

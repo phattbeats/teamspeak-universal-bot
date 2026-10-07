@@ -176,7 +176,7 @@ class TeamSpeakVoiceRuntime {
   state = { connected: false, channelId: 0, channelName: "" };
   muted = false;
   /**
-   * Sitting out (PHA-3428). Parked is deaf, not disconnected: THE_PLANT has one
+   * Sitting out (#3428). Parked is deaf, not disconnected: THE_PLANT has one
    * channel, so there is nowhere to walk off to and the bridge has no disconnect
    * frame. Inbound speech and conversational text are dropped, music stops, and
    * the only things still answered are `!vc join` / `join_voice`.
@@ -186,10 +186,10 @@ class TeamSpeakVoiceRuntime {
   channelTreeWaiters = [];
   selfClientId;
   chatTurnsInFlight = /* @__PURE__ */ new Set();
-  /** Other bots in the channel that are mid-burst right now (PHA-3829). */
+  /** Other bots in the channel that are mid-burst right now (#3829). */
   otherBotsSpeaking = /* @__PURE__ */ new Set();
   /**
-   * Lexton's villain tools (PHA-3820), off unless `tools.villain.enabled`.
+   * Lexton's villain tools (#3820), off unless `tools.villain.enabled`.
    * `start()` re-arms reverts a previous gateway left pending; they wait out a
    * grace period and retry until the bridge answers with a channel tree.
    */
@@ -219,7 +219,7 @@ class TeamSpeakVoiceRuntime {
   }
   /**
    * The same six tools as `toolRegistration`, in the shape the agent-tool face
-   * calls (PHA-3428 item 4). Undefined when tools are disabled for this
+   * calls (#3428 item 4). Undefined when tools are disabled for this
    * account, so the account simply never publishes any.
    */
   get toolAccess() {
@@ -285,7 +285,7 @@ class TeamSpeakVoiceRuntime {
       this.publishNowPlaying(this.music.nowPlaying);
     }
   }
-  /** The bot's `♪ <title>` description for the PLNT overlay (PHA-3857). */
+  /** The bot's `♪ <title>` description for the PLNT overlay (#3857). */
   publishNowPlaying(track) {
     const description = formatNowPlayingDescription(track);
     if (description === this.publishedDescription) {
@@ -296,7 +296,7 @@ class TeamSpeakVoiceRuntime {
   }
   /**
    * Ask the bridge for the full channel tree and wait for the answer
-   * (PHA-3784). Resolves to `[]` on timeout rather than rejecting — the
+   * (#3784). Resolves to `[]` on timeout rather than rejecting — the
    * tools that call this (`list_channels`, `where_is`, `move_to_channel`'s
    * `follow`) already treat an empty tree as "found nothing" and say so,
    * which is a better outcome for a voice turn than an unhandled rejection.
@@ -342,7 +342,7 @@ class TeamSpeakVoiceRuntime {
     });
   }
   /**
-   * The house band (PHA-3554). Needs the music lane to exist and the account
+   * The house band (#3554). Needs the music lane to exist and the account
    * to have opted in; a band that cannot start logs why once and the account
    * simply has no `compose_song`.
    */
@@ -376,7 +376,7 @@ class TeamSpeakVoiceRuntime {
     });
   }
   /**
-   * Entrance/exit lines (PHA-3824). Ready once the bridge has put us in the
+   * Entrance/exit lines (#3824). Ready once the bridge has put us in the
    * channel; an entrance written before the core started waits for that.
    */
   createAnnouncer() {
@@ -392,7 +392,7 @@ class TeamSpeakVoiceRuntime {
     });
   }
   /**
-   * PHA-3601: the room hears the announcement, or the in-character line when a
+   * #3601: the room hears the announcement, or the in-character line when a
    * song fails, but the agent itself was never told either happened — only the
    * room did. So the next time someone asked for the words or to hear it
    * again, the agent had nothing to check and improvised in character instead
@@ -454,10 +454,10 @@ class TeamSpeakVoiceRuntime {
    * Is this roster nickname the other bot?
    *
    * `excludeWakeNames` is already hand-populated with the other bot's exact
-   * TeamSpeak nickname for the wake gate (PHA-3605); a roster nickname never
+   * TeamSpeak nickname for the wake gate (#3605); a roster nickname never
    * collides with the non-nickname aliases also listed there ("band leader",
    * "maestro"), so reusing the same list to withhold a speaker session costs
-   * nothing extra to configure (PHA-3607).
+   * nothing extra to configure (#3607).
    */
   isExcludedNickname(nickname) {
     const excludeNames = resolveTeamSpeakWakeConfig(this.params.config).excludeWakeNames ?? [];
@@ -539,7 +539,7 @@ class TeamSpeakVoiceRuntime {
     }
   }
   /**
-   * Another bot started talking (PHA-3829). Two bots each holding a follow-up
+   * Another bot started talking (#3829). Two bots each holding a follow-up
    * window on the same person answered every line that person said, on top of
    * each other. Whoever speaks takes the room: every follow-up window here
    * closes, and a new answer needs our name again.
@@ -645,7 +645,7 @@ class TeamSpeakVoiceRuntime {
     }
   }
   /**
-   * Conversational text (PHA-3428).
+   * Conversational text (#3428).
    *
    * Only addressed messages get a turn: a PM is always addressed, channel text
    * only when it names the Sexton. Answering every line in a busy room would

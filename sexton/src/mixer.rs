@@ -70,7 +70,7 @@ impl Mixer {
 
     /// Queued voice samples, queued music samples, current duck envelope.
     /// Telemetry only — the send tick logs this so a silent channel can be
-    /// diagnosed without a debugger (PHA-3216).
+    /// diagnosed without a debugger (#3216).
     pub fn lanes(&self) -> (usize, usize, f32) {
         (self.voice.len(), self.music.len(), self.duck_current)
     }

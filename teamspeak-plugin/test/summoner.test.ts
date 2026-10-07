@@ -11,14 +11,14 @@ function fakeFetch(status: number, json: unknown, calls: Call[]): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
-describe("ts-summoner client (PHA-3823)", () => {
+describe("ts-summoner client (#3823)", () => {
   it("defaults to the phattvip sidecar and can be switched off", () => {
     expect(summonerUrl(undefined)).toBe("http://ts-summoner:8099");
     expect(summonerUrl({ url: "http://x:1/" })).toBe("http://x:1");
     expect(summonerUrl({ enabled: false })).toBeUndefined();
   });
 
-  it("knows which bot it is per account when several share a gateway (PHA-3791)", () => {
+  it("knows which bot it is per account when several share a gateway (#3791)", () => {
     expect(selfBotId({ self: "bexton" }, { SEXTON_AGENT_ID: "sexton" })).toBe("bexton");
     expect(selfBotId(undefined, { SEXTON_AGENT_ID: "lexton" })).toBe("lexton");
     expect(selfBotId(undefined, {})).toBe("sexton");

@@ -333,7 +333,7 @@ describe("MusicPlayer streaming", () => {
   });
 });
 
-describe("MusicPlayer queueing (PHA-3635)", () => {
+describe("MusicPlayer queueing (#3635)", () => {
   it("stacks an enqueued request behind what's already playing instead of interrupting it", async () => {
     const harness = createHarness();
     const first = await harness.player.play({ query: "first", enqueue: true });
@@ -408,7 +408,7 @@ describe("MusicPlayer queueing (PHA-3635)", () => {
   });
 });
 
-describe("MusicPlayer now-playing announcements (PHA-3857)", () => {
+describe("MusicPlayer now-playing announcements (#3857)", () => {
   it("announces each track as it starts and nothing once the lane goes quiet", async () => {
     const harness = createHarness({ prebufferMs: 20 });
     await harness.player.play({ query: "first" });
@@ -460,7 +460,7 @@ describe("MusicPlayer now-playing announcements (PHA-3857)", () => {
   });
 });
 
-describe("MusicPlayer files (PHA-3554)", () => {
+describe("MusicPlayer files (#3554)", () => {
   it("plays a local file without yt-dlp, without the reconnect flags, and holds the downbeat", async () => {
     const harness = createHarness({ prebufferMs: 40 });
     const track = await harness.player.play({
@@ -505,7 +505,7 @@ describe("MusicPlayer files (PHA-3554)", () => {
   });
 });
 
-describe("MusicPlayer queue browsing (PHA-3785)", () => {
+describe("MusicPlayer queue browsing (#3785)", () => {
   it("show_queue reflects previously-added tracks in order", async () => {
     const harness = createHarness();
     await harness.player.play({ query: "first", enqueue: true });
@@ -620,7 +620,7 @@ describe("MusicPlayer queue browsing (PHA-3785)", () => {
   });
 });
 
-describe("MusicPlayer search (PHA-3785)", () => {
+describe("MusicPlayer search (#3785)", () => {
   it("search_music returns candidates without auto-playing anything", async () => {
     const harness = createHarness({
       resolve: {
@@ -658,7 +658,7 @@ describe("MusicPlayer search (PHA-3785)", () => {
   });
 });
 
-describe("MusicPlayer playSource (PHA-3785)", () => {
+describe("MusicPlayer playSource (#3785)", () => {
   it("dispatches youtube by query through the normal search path", async () => {
     const harness = createHarness();
     const track = await harness.player.playSource({ source: "youtube", query: "smooth jazz" });
@@ -719,7 +719,7 @@ describe("MusicPlayer playSource (PHA-3785)", () => {
   });
 });
 
-describe("MusicPlayer transport: pause/resume/seek (PHA-3785)", () => {
+describe("MusicPlayer transport: pause/resume/seek (#3785)", () => {
   it("pause freezes pacing without killing ffmpeg", async () => {
     const harness = createHarness({ prebufferMs: 20 });
     await harness.player.play({ query: "smooth jazz" });

@@ -1,19 +1,19 @@
-//! The Sexton — persistent TeamSpeak channel chat logger (PHA-3099 / PHA-3173),
-//! and — as of PHA-3342 — the audio/voice bridge too.
+//! The Sexton — persistent TeamSpeak channel chat logger (#3099 / #3173),
+//! and — as of #3342 — the audio/voice bridge too.
 //!
-//! Behaviour (see PHA-3099 for the full spec):
+//! Behaviour (see #3099 for the full spec):
 //! 1. Catch-up PM to any client that joins/hops into the watched channel,
 //!    preceded — once per client, ever — by the welcome PM that says out
-//!    loud what the Sexton does (PHA-3305). The catch-up is delta-rendered
-//!    per uid and the delta position is persisted to disk (PHA-3573): a uid
+//!    loud what the Sexton does (#3305). The catch-up is delta-rendered
+//!    per uid and the delta position is persisted to disk (#3573): a uid
 //!    that has already seen everything gets no PM at all, and a bot restart
 //!    does not re-blast the whole window the way an in-memory rate limit did.
 //! 2. Full markdown log on disk, one file per channel per day.
 //!
-//! PHA-3424 removed the per-message channel description rewrite (PHA-3173) and
+//! #3424 removed the per-message channel description rewrite (#3173) and
 //! the on-connect push that went with it: every edit fired a channel-edit
 //! notification sound in TS6, and the catch-up PM and disk log already cover
-//! the same ground. PHA-3217's on-connect rehydration of the message ring
+//! the same ground. #3217's on-connect rehydration of the message ring
 //! stays — it feeds the catch-up PM, not just the old description.
 //!
 //! HARD RULE: only real user-authored text messages sent to the watched channel
@@ -21,11 +21,11 @@
 //! pokes, channel edits, server messages and the bot's own messages are never
 //! logged.
 //!
-//! ## PHA-3342: one container, one bot account
+//! ## #3342: one container, one bot account
 //!
 //! Brandon flagged two bot slots in the channel roster (`Sexton` for text,
 //! `Sexton-Bridge` for audio) and asked for "everything running off of one
-//! docker container / one bot account". PHA-3341 already collapsed the two
+//! docker container / one bot account". #3341 already collapsed the two
 //! `tsclientlib::Connection`s into one, fronted by a Unix-socket IPC
 //! (`bridge-proto`) to a still-separate `ts-bridge` container. This change
 //! removes that second container: the audio sidecar's mixer, Opus codec,
@@ -79,25 +79,25 @@ use audio::AudioState;
 use mixer::Mixer;
 
 /// First-contact PM: sent once per client, ever, immediately before their first
-/// catch-up (PHA-3305). Not the catch-up PM — see `catchup_text_from`.
+/// catch-up (#3305). Not the catch-up PM — see `catchup_text_from`.
 ///
-/// One line, by Brandon's call on PHA-3428 item 5. The staged wording this
+/// One line, by Brandon's call on #3428 item 5. The staged wording this
 /// replaces explained the log and trailed a stage 2 that would describe the
 /// voice path; both are gone. Anything added back here is a promise the Sexton
 /// has to keep, so the bar for a second sentence is a behaviour that already
 /// ships — in particular, nothing may claim a transcript stays on the box while
-/// a hosted STT sits anywhere in the path (the PHA-3228 constraint, restated as
+/// a hosted STT sits anywhere in the path (the #3228 constraint, restated as
 /// a wording rule).
 const WELCOME_PM: &str = "The Sexton keeps this hall.";
-/// Sent instead of a catch-up when nothing was said since the last one (PHA-3830).
+/// Sent instead of a catch-up when nothing was said since the last one (#3830).
 const QUIET_PM: &str = "All quiet since you left.";
 /// How many messages the catch-up PM includes, and the cap on how much of a
 /// delta it will ever show — a uid who has been away for a week still gets
-/// the last `CATCHUP_PM_COUNT`, not the whole gap (PHA-3573).
+/// the last `CATCHUP_PM_COUNT`, not the whole gap (#3573).
 const CATCHUP_PM_COUNT: usize = 15;
 /// Where the welcomed-client list lives, inside the channel's log directory.
 const WELCOMED_FILE: &str = ".welcomed";
-/// Where the per-uid catch-up delta index lives (PHA-3573), alongside
+/// Where the per-uid catch-up delta index lives (#3573), alongside
 /// `WELCOMED_FILE`.
 const CAUGHT_UP_FILE: &str = ".caught_up";
 /// How many messages we keep in memory (comfortably covers the catch-up PM
@@ -118,7 +118,7 @@ const CHANNEL_TREE_TIMEOUT: Duration = Duration::from_secs(15);
 /// room.
 const STARTUP_GRACE: Duration = Duration::from_secs(5);
 /// How long to keep retrying `clientupdate client_nickname=<configured>`
-/// after the server assigns us a suffixed nickname at connect time (PHA-3426).
+/// after the server assigns us a suffixed nickname at connect time (#3426).
 /// A stale identity's session is reaped by the server on its own schedule
 /// (observed up to several minutes — see the ts-bridge deploy traps note);
 /// this window is generous so a normal restart self-heals without a human
@@ -185,13 +185,13 @@ struct Args {
     /// Suppress the catch-up recap PM entirely; the one-time welcome PM
     /// still fires. For a second bot instance sitting in the same channel as
     /// the primary Sexton (Bexton) — without this, a joiner gets the same
-    /// recap twice, once from each bot (PHA-3573). Also settable with the
+    /// recap twice, once from each bot (#3573). Also settable with the
     /// `SEXTON_NO_CATCHUP` env var (any of `1`/`true`/`yes`, case-insensitive)
     /// so a deploy script can flip it without touching the command line.
     #[arg(long, default_value_t = false)]
     no_catchup: bool,
 
-    /// PHA-3342: bind address for the audio/voice bridge's WebSocket server
+    /// #3342: bind address for the audio/voice bridge's WebSocket server
     /// (`PROTOCOL.md`) — the realtime voice runtime and `bridge-test` are
     /// its only consumers. Formerly `ts-bridge`'s `WS_BIND` env var, now a
     /// flag on the one binary that owns both lanes. Never expose this
@@ -199,15 +199,15 @@ struct Args {
     #[arg(long, default_value = "0.0.0.0:9099")]
     ws_bind: String,
 
-    /// PHA-3342: duck-envelope floor (0..1) applied to the music lane
+    /// #3342: duck-envelope floor (0..1) applied to the music lane
     /// while the voice lane has queued samples or any human is talking.
     /// Formerly `ts-bridge`'s `DUCK_GAIN` env var. Spec: reach the floor
     /// within 50 ms, recover to full gain within 800 ms (see `mixer.rs`).
     #[arg(long, default_value_t = 0.25)]
     duck_gain: f32,
 
-    /// PHA-3342: optional webhook URL for the `say_text` fallback TTS hook
-    /// (PHA-3228). Formerly `ts-bridge`'s `TTS_WEBHOOK_URL` env var. Not
+    /// #3342: optional webhook URL for the `say_text` fallback TTS hook
+    /// (#3228). Formerly `ts-bridge`'s `TTS_WEBHOOK_URL` env var. Not
     /// wired up yet — a `say_text` frame is logged and otherwise ignored
     /// either way; push `voice_audio` directly in the meantime.
     #[arg(long, default_value = "")]
@@ -224,7 +224,7 @@ struct LoggedMessage {
 impl LoggedMessage {
     /// The one rendering of a message. The catch-up PM and the on-disk log
     /// both go through this, so `parse_log_line` can read the log back without
-    /// a second serialisation format (PHA-3217).
+    /// a second serialisation format (#3217).
     fn render_line(&self) -> String {
         format!("{}  {}: {}\n", self.time_label, self.nickname, self.text)
     }
@@ -268,7 +268,7 @@ struct ChannelState {
     /// TeamSpeak uid (stable across reconnects and restarts) and persisted to
     /// disk.
     welcomed: HashSet<String>,
-    /// Per-uid catch-up delta index (PHA-3573): `history.len()` at the uid's
+    /// Per-uid catch-up delta index (#3573): `history.len()` at the uid's
     /// last catch-up, persisted to disk alongside `welcomed`. A uid absent
     /// from this map has never been caught up (equivalent to `0`). See
     /// `catchup_text_from` for how a stale or clamped value degrades — never
@@ -281,7 +281,7 @@ struct ChannelState {
     /// session-bound key; `handle_event`'s generic `PropertyChanged` arm
     /// retries everyone here on the next event.
     pending_catchup: HashSet<ClientId>,
-    /// PHA-3573: suppress the catch-up recap for this bot instance (the
+    /// #3573: suppress the catch-up recap for this bot instance (the
     /// welcome PM still fires). Set from `--no-catchup` / `SEXTON_NO_CATCHUP`.
     no_catchup: bool,
     log_dir: PathBuf,
@@ -332,7 +332,7 @@ impl ChannelState {
     }
 
     /// Seed the in-memory ring from the on-disk log so a restart does not blank
-    /// the catch-up PM (PHA-3217). The ring is memory-only, so without this the
+    /// the catch-up PM (#3217). The ring is memory-only, so without this the
     /// first joiner after a restart gets an empty catch-up for a channel the
     /// markdown log still has the day's messages for.
     ///
@@ -386,7 +386,7 @@ impl ChannelState {
         self.log_dir.join(&self.channel_name).join(WELCOMED_FILE)
     }
 
-    /// Read back who has already been welcomed (PHA-3305). Without this every
+    /// Read back who has already been welcomed (#3305). Without this every
     /// container restart re-introduces the Sexton to everyone who walks in, and
     /// "once" quietly becomes "once per deploy".
     ///
@@ -451,7 +451,7 @@ impl ChannelState {
         self.log_dir.join(&self.channel_name).join(CAUGHT_UP_FILE)
     }
 
-    /// Read back each uid's catch-up delta position (PHA-3573). Fail-open by
+    /// Read back each uid's catch-up delta position (#3573). Fail-open by
     /// contract, like `load_welcomed_from_disk`: a missing or unreadable
     /// index costs everyone one full recap, never a failed connect.
     fn load_caught_up_from_disk(&mut self) {
@@ -521,7 +521,7 @@ impl ChannelState {
     /// `start` (a prior `history.len()`, `0` for a uid never caught up),
     /// capped at the last `CATCHUP_PM_COUNT` regardless of how large the gap
     /// is. Returns `None` when there is nothing new to send — the caller
-    /// sends no PM at all rather than an empty one (PHA-3573).
+    /// sends no PM at all rather than an empty one (#3573).
     ///
     /// `history` is rebuilt fresh from the on-disk log on every restart
     /// (never persisted itself, see `seed_history_from_disk`), so a `start`
@@ -564,7 +564,7 @@ impl ChannelState {
 }
 
 /// Past this a URL stops being readable in a one-line summary, so it collapses
-/// to its domain instead (PHA-3425).
+/// to its domain instead (#3425).
 const MAX_URL_LEN: usize = 80;
 
 /// An opaque whitespace-delimited run longer than this is not something a
@@ -640,7 +640,7 @@ fn attachment_label(src: &str, assume_image: bool) -> String {
 /// Turn one TS6 `ts.file.*` attachment object into a short placeholder.
 ///
 /// Ground truth, captured live 2026-09-12 from a real image sent in
-/// `General Shit` (PHA-3425 step 1) — TS6 does **not** use BBCode for
+/// `General Shit` (#3425 step 1) — TS6 does **not** use BBCode for
 /// attachments, it inlines a JSON object as the message body:
 ///
 /// ```text
@@ -876,7 +876,7 @@ fn squash_bare_tokens(input: &str) -> String {
 /// The single choke point for turning a raw TS6 message into something a
 /// summary, a log line or the voice lane can read: tags resolved, attachments
 /// and images reduced to short placeholders, long links reduced to their
-/// domain, and the whole thing guaranteed to be one line (PHA-3425).
+/// domain, and the whole thing guaranteed to be one line (#3425).
 fn sanitize_message(input: &str) -> String {
     // Newlines first — a summary line has to stay a single line.
     let flattened = input.replace(['\r', '\n', '\t'], " ");
@@ -931,9 +931,9 @@ async fn main() -> Result<()> {
         Some(args.tts_webhook_url.clone())
     };
 
-    // PHA-3342: the Mixer, the bridge event/command channels, and the WS
+    // #3342: the Mixer, the bridge event/command channels, and the WS
     // snapshot all outlive every TS reconnect attempt — same lesson
-    // ts-bridge's PHA-3216 taught (a mixer tied to the connection attempt
+    // ts-bridge's #3216 taught (a mixer tied to the connection attempt
     // loses its queued audio and its duck envelope on every reconnect).
     // `run_once` gets them by reference/clone on each attempt and rebuilds
     // only the per-connection `AudioState` (opus encoders, jitter buffers)
@@ -984,7 +984,7 @@ async fn run_once(
 ) -> Result<()> {
     let identity = if args.identity.is_empty() {
         let id = Identity::create();
-        // PHA-3554: print the identity in the "<counter>V<key>" form that
+        // #3554: print the identity in the "<counter>V<key>" form that
         // `--identity` / `Identity::new_from_str` reads back, so a first boot
         // with no identity file can actually be pinned. Before this the
         // warning said "pin this" and printed nothing to pin; Bexton's first
@@ -1019,7 +1019,7 @@ async fn run_once(
         None => return Err(anyhow!("stream ended before first book events")),
     }
 
-    // TS6 patch (PHA-3099 finding #6): unlike TS3, tsclientlib's handshake
+    // TS6 patch (#3099 finding #6): unlike TS3, tsclientlib's handshake
     // against TS6 does not push the channel list or subscribe to all channels
     // unprompted — both must be requested explicitly, or the channel tree
     // stays empty and no text/move events arrive outside our own channel.
@@ -1074,7 +1074,7 @@ async fn run_once(
 
     info!(?channel_id, own = ?own_client_id, clients_present = preexisting.len(), "connected; channel resolved");
 
-    // PHA-3426: the server accepts a login whose requested nickname is still
+    // #3426: the server accepts a login whose requested nickname is still
     // held by a not-yet-reaped ghost session, but silently suffixes it
     // ("Sexton" -> "Sexton1") instead of refusing the connection — see the
     // ts-bridge deploy traps note on reused TS_IDENTITY. Detect that here and
@@ -1146,15 +1146,15 @@ async fn run_once(
     );
 
     // Rehydrate the ring from disk so a restart still has history to catch
-    // joiners up with (PHA-3217). The description is gone, but the catch-up PM
+    // joiners up with (#3217). The description is gone, but the catch-up PM
     // reads the same ring, so dropping this would silently make the first PM
     // after every restart empty.
     state.seed_history_from_disk();
     // And who has already been introduced to the Sexton, so a restart does not
-    // re-welcome the room (PHA-3305).
+    // re-welcome the room (#3305).
     state.load_welcomed_from_disk();
     // And each uid's catch-up delta position, so a restart does not re-blast
-    // the whole window either (PHA-3573).
+    // the whole window either (#3573).
     state.load_caught_up_from_disk();
 
     // Kick off the avatar upload (if configured). We track the handle and
@@ -1178,7 +1178,7 @@ async fn run_once(
         run_on_connected_hook(&args.on_connected);
     }
 
-    // PHA-3342: the audio lane's per-connection state (opus encoders,
+    // #3342: the audio lane's per-connection state (opus encoders,
     // per-speaker jitter buffers) — fresh every `run_once` attempt, same as
     // `state` above. See `audio.rs` for why this can't meaningfully survive
     // a reconnect.
@@ -1194,14 +1194,14 @@ async fn run_once(
     // branch while whisper pegs the box — silently retires the missed ticks,
     // and the queue then drains slower than real time forever: the listener's
     // jitter buffer underruns and conceals the gaps, which is what made the
-    // voice warble and stutter (PHA-3428, Brandon 2026-09-13). `Burst` pays
+    // voice warble and stutter (#3428, Brandon 2026-09-13). `Burst` pays
     // the backlog off in a catch-up run so the average frame rate stays 50/s;
     // the bunched packets land inside the receiver's jitter buffer instead of
     // starving it.
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
 
     // The text lane used to just `.await` `con.events().next()` in a bare
-    // loop. PHA-3342 adds two more wakeups against the same connection: the
+    // loop. #3342 adds two more wakeups against the same connection: the
     // 20 ms audio tick and inbound `BridgeCommand`s from the WS bridge
     // clients. `Connection::events()` hands out a stream that mutably
     // borrows `con` for as long as it lives, and `select!` keeps every
@@ -1244,7 +1244,7 @@ async fn run_once(
                     audio_state.on_audio_packet(mixer, event_tx, audio_pkt).await;
                 }
                 Some(Ok(StreamItem::BookEvents(events))) => {
-                    // PHA-3342: forward text messages to bridge subscribers
+                    // #3342: forward text messages to bridge subscribers
                     // exactly as the old ts_client.rs did, before the
                     // existing text-lane handler below (which logs/PMs the
                     // same events) runs. Two passes over the same `&events`
@@ -1259,7 +1259,7 @@ async fn run_once(
                                 MessageTarget::Client(_) => "client",
                                 MessageTarget::Poke(_) => "poke",
                             };
-                            // PHA-3425 step 1: the one place the untouched TS6
+                            // #3425 step 1: the one place the untouched TS6
                             // payload is visible. Run with
                             // `RUST_LOG=sexton=debug` to capture the real
                             // shapes for an inline image, a file attachment and
@@ -1409,7 +1409,7 @@ fn handle_event(
             maybe_send_catchup(con, state, own_client_id, client_id);
         }
         // Any other property change is a nudge to retry whoever is still
-        // waiting on their uid (PHA-3573) — tsclientlib does not always have
+        // waiting on their uid (#3573) — tsclientlib does not always have
         // it populated by the time the join/move event above fires.
         Event::PropertyChanged { .. } => {
             retry_pending_catchups(con, state, own_client_id);
@@ -1447,7 +1447,7 @@ fn maybe_send_catchup(
         return;
     }
 
-    // PHA-3573: the uid is the only key both the welcome and the catch-up
+    // #3573: the uid is the only key both the welcome and the catch-up
     // delta index trust. If the server has not handed tsclientlib one for
     // this client yet, defer instead of falling back to a session-bound key
     // that would orphan the index on every reconnect — `retry_pending_catchups`
@@ -1462,9 +1462,9 @@ fn maybe_send_catchup(
     };
     state.pending_catchup.remove(&client_id);
 
-    // The announced notice (PHA-3305): before this client's *first* catch-up,
+    // The announced notice (#3305): before this client's *first* catch-up,
     // and only ever before the first, say what the Sexton is doing.
-    // PHA-3818: a persona bot that isn't the Sexton (Lexton) must not greet
+    // #3818: a persona bot that isn't the Sexton (Lexton) must not greet
     // joiners with "The Sexton keeps this hall." SEXTON_NO_WELCOME drops the
     // welcome PM entirely, same env-flag convention as SEXTON_NO_CATCHUP.
     if !state.welcomed.contains(&uid) && !env_flag("SEXTON_NO_WELCOME") {
@@ -1480,7 +1480,7 @@ fn maybe_send_catchup(
         }
     }
 
-    // PHA-3573: a second bot instance in the same channel (Bexton) still
+    // #3573: a second bot instance in the same channel (Bexton) still
     // sends the welcome above, but never the recap — otherwise a joiner gets
     // the same recap twice, once from each bot.
     if state.no_catchup {
@@ -1505,7 +1505,7 @@ fn maybe_send_catchup(
         // normalising the stored position in case it predates a log
         // rotation that shrank `history.len()`.
         //
-        // PHA-3830: a returning uid still gets one line, so silence doesn't
+        // #3830: a returning uid still gets one line, so silence doesn't
         // read as a broken bot. A never-caught-up uid on an empty log already
         // got the welcome above and has nothing to hear "since" anything.
         None => {
@@ -1526,7 +1526,7 @@ fn maybe_send_catchup(
 }
 
 /// Retry catch-ups deferred because the server had not yet told us the
-/// client's uid (PHA-3573). Cheap when `pending_catchup` is empty, which is
+/// client's uid (#3573). Cheap when `pending_catchup` is empty, which is
 /// the overwhelmingly common case.
 fn retry_pending_catchups(con: &mut Connection, state: &mut ChannelState, own_client_id: ClientId) {
     if state.pending_catchup.is_empty() {
@@ -1539,7 +1539,7 @@ fn retry_pending_catchups(con: &mut Connection, state: &mut ChannelState, own_cl
 }
 
 /// Retry `clientupdate client_nickname=<want>` until the server accepts it
-/// or `NICKNAME_RECLAIM_TIMEOUT` elapses (PHA-3426). Unlike the initial
+/// or `NICKNAME_RECLAIM_TIMEOUT` elapses (#3426). Unlike the initial
 /// login — which silently suffixes a taken nickname instead of refusing the
 /// connection — an explicit `clientupdate` while the name is still held
 /// comes back as a `CommandError`, which is what we're polling away here.
@@ -1616,7 +1616,7 @@ fn send_pm(con: &mut Connection, client_id: ClientId, text: &str) -> Result<Mess
 
 /// Apply one inbound `BridgeCommand` from a WS bridge client. Mirrors the
 /// command handling the old `ts-bridge/src/ts_client.rs` did against its
-/// own connection — PHA-3342 just moved it onto the Sexton's shared one.
+/// own connection — #3342 just moved it onto the Sexton's shared one.
 ///
 /// `Join`/`Poke`/`SendText` did not already have sexton-side equivalents:
 /// the text lane's `send_pm` is PM-only (`client.send_textmessage`, no
@@ -1641,7 +1641,7 @@ async fn handle_bridge_command(
         // `ws_server`'s `dispatch` already handles `say_text` as a
         // log-only stub before it would ever become a `BridgeCommand` —
         // this arm exists so the match stays exhaustive if that changes
-        // (e.g. once PHA-3228's TTS webhook is actually wired up).
+        // (e.g. once #3228's TTS webhook is actually wired up).
         BridgeCommand::SayText { text } => {
             warn!(%text, "say_text received but the TTS webhook client isn't wired up yet — push voice_audio directly for now");
         }
@@ -1696,7 +1696,7 @@ async fn handle_bridge_command(
             }
         }
 
-        // --- moderation (PHA-3786) ------------------------------------------
+        // --- moderation (#3786) ------------------------------------------
         BridgeCommand::ClientKick { client_id, from_server, reason } => {
             let reason_kind = if from_server { Reason::KickServer } else { Reason::KickChannel };
             let cmd = OutClientKickMessage::new(&mut std::iter::once(bridge_proto_client_kick_part(
@@ -1945,7 +1945,7 @@ async fn handle_bridge_command(
             }
         }
         BridgeCommand::SetDescription { description } => {
-            // PHA-3857: `clientupdate` has no description field; the TS3
+            // #3857: `clientupdate` has no description field; the TS3
             // client sets its own via `clientedit` on its own clid, which the
             // server gates on `b_client_modify_own_description`. A permission
             // refusal comes back async as a command error, not from `send`.
@@ -1965,7 +1965,7 @@ async fn handle_bridge_command(
 
 /// `OutClientKickPart` borrows its `reason_message`, so this stays a
 /// standalone helper rather than inlining into the match arm above — keeps
-/// the borrow scoped to one expression per PHA-3786 kick call.
+/// the borrow scoped to one expression per #3786 kick call.
 fn bridge_proto_client_kick_part(
     client_id: u16,
     reason: Reason,
@@ -2123,18 +2123,18 @@ mod tests {
         ChannelState::new(ChannelId(0), channel.to_string(), dir.to_path_buf(), HashSet::new(), false)
     }
 
-    /// The welcome PM is one line, by Brandon's call on PHA-3428 item 5. The
+    /// The welcome PM is one line, by Brandon's call on #3428 item 5. The
     /// staging guards below outlive the staged wording: they exist so a
     /// well-meaning edit cannot quietly add a promise the Sexton does not keep.
     #[test]
     fn the_welcome_pm_is_stage_one_and_carries_nothing_from_stage_two() {
         assert_eq!(WELCOME_PM, "The Sexton keeps this hall.");
 
-        // PHA-3424 removed the rolling channel description; the welcome must
+        // #3424 removed the rolling channel description; the welcome must
         // not keep pointing people at it.
         assert!(!WELCOME_PM.contains("description"), "welcome still points at the description");
 
-        // PHA-3228 has not landed: nothing here may promise voice, or that the
+        // #3228 has not landed: nothing here may promise voice, or that the
         // voice never leaves the box.
         for stage_two in ["out loud", "listening", "voice", "say my name"] {
             assert!(!WELCOME_PM.contains(stage_two), "stage-2 wording {stage_two:?} in the welcome");
@@ -2181,7 +2181,7 @@ mod tests {
     }
 
     /// `start` at (or past) the current history length means the uid has
-    /// already seen everything: no PM at all, not an empty one (PHA-3573,
+    /// already seen everything: no PM at all, not an empty one (#3573,
     /// replacing the old in-memory rate limit's job).
     #[test]
     fn catchup_text_from_with_full_coverage_is_empty() {
@@ -2226,7 +2226,7 @@ mod tests {
         assert!(!text.contains("message 024"), "must not include more than the last 15");
     }
 
-    /// Regression target for PHA-3573: the whole point of persisting the
+    /// Regression target for #3573: the whole point of persisting the
     /// index is that a bot restart does not forget a uid's position and
     /// re-blast the window, the way the in-memory-only rate limit used to.
     #[test]
@@ -2420,7 +2420,7 @@ mod tests {
 
     #[test]
     fn plain_formatting_still_reduces_to_its_text() {
-        // The pre-PHA-3425 behaviour these changes must not regress.
+        // The pre-#3425 behaviour these changes must not regress.
         assert_eq!(sanitize_message("[b]bold[/b] and [color=#fff]red[/color]"), "bold and red");
         assert_eq!(sanitize_message("no tags at all"), "no tags at all");
         assert_eq!(sanitize_message("unclosed [bracket"), "unclosed [bracket");

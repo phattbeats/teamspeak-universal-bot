@@ -1,5 +1,5 @@
 /**
- * Song generators for the house band (PHA-3554).
+ * Song generators for the house band (#3554).
  *
  * One interface, three shapes, because on 2026-09-17 there is no single
  * obvious backend:

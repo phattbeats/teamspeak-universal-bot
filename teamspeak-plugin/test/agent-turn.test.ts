@@ -1,5 +1,5 @@
 /**
- * The voice agent turn's two host entry points (PHA-3792).
+ * The voice agent turn's two host entry points (#3792).
  *
  * The streaming path is asserted on what it hands the host (the finalized
  * context, the forced block-streaming switch, the per-turn config copy) and

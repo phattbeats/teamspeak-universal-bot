@@ -26,7 +26,7 @@ export type SpeakerSessionManagerParams = {
   selfClientId?: (() => TeamSpeakClientId | undefined) | undefined;
   /**
    * Withhold a speaker session for a roster entry — the other bot sharing the
-   * channel, most often (PHA-3607: each bot was independently transcribing the
+   * channel, most often (#3607: each bot was independently transcribing the
    * other's TTS audio on every utterance, doubling whisper load for zero
    * benefit; whisper has no cooperative cancellation, so that decode always ran
    * to completion). The entry still joins the roster and fires the usual

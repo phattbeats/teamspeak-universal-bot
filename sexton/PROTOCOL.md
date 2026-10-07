@@ -1,8 +1,8 @@
 # Sexton audio/voice bridge WebSocket protocol
 
-**PHA-3342**: this used to be `ts-bridge/PROTOCOL.md`, served by a separate
+**#3342**: this used to be `ts-bridge/PROTOCOL.md`, served by a separate
 `plnt-ts-bridge` container. That container is gone — Brandon's ask was one
-docker container, one bot account (PHA-3341/PHA-3342) — and this WebSocket
+docker container, one bot account (#3341/#3342) — and this WebSocket
 server now runs inside the Sexton binary itself, on the same port. Nothing
 below changed for an external consumer: same frames, same port, same
 behaviour. Only the host process did.
@@ -31,13 +31,13 @@ Message types the bridge sends (`out`):
 | 0x04 | `roster`       | `[{"clientId":u16,"nickname":string,"muted":bool,"away":bool}]` | —                  |
 | 0x05 | `text_message` | `{"clientId":u16,"nickname":string,"text":string,"target":"channel"\|"server"\|"client"\|"poke"}` | — |
 | 0x06 | `state`        | `{"connected":bool,"channelId":u64,"channelName":string,"ownClientId":u16?}` | —      |
-| 0x07 | `moderation_result` | `{"action":string,"ok":bool,"detail":string}` (PHA-3786, answer to every moderation command below) | — |
+| 0x07 | `moderation_result` | `{"action":string,"ok":bool,"detail":string}` (#3786, answer to every moderation command below) | — |
 
-`roster`'s `RosterEntry` also grew a `serverGroups` field (PHA-3786):
+`roster`'s `RosterEntry` also grew a `serverGroups` field (#3786):
 `{"clientId":u16,"nickname":string,"muted":bool,"away":bool,"serverGroups":[string]}`.
 The moderation tool gate (`tools.moderation.allowGroups`) lives on the plugin
 side, not here — the Sexton just reports group membership on the wire.
-| 0x08 | `channel_tree` | `[{"channelId":u64,"name":string,"occupants":[{"clientId":u16,"nickname":string,"muted":bool,"away":bool}]}]` (PHA-3784, answer to `list_channels`) | — |
+| 0x08 | `channel_tree` | `[{"channelId":u64,"name":string,"occupants":[{"clientId":u16,"nickname":string,"muted":bool,"away":bool}]}]` (#3784, answer to `list_channels`) | — |
 
 Message types the bridge accepts (`in`):
 
@@ -52,19 +52,19 @@ Message types the bridge accepts (`in`):
 | 0x87 | `mute`        | `{"muted":bool}` (stops/resumes outbound audio; does not touch the TS mute flag) | — |
 | 0x88 | `poke`        | `{"clientId":u16,"text":string}`                  | —                    |
 | 0x89 | `send_text`   | `{"target":"channel"\|"server"\|u16,"text":string}` (numeric string/number targets a client PM) | — |
-| 0x8A | `client_kick` | `{"clientId":u16,"fromServer":bool,"reason":string?}` (PHA-3786) | — |
-| 0x8B | `ban_client`  | `{"clientId":u16,"durationSecs":u64?,"reason":string?}` (PHA-3786; no `durationSecs` = permanent) | — |
-| 0x8C | `ban_del`     | `{"banId":u32}` (PHA-3786) | — |
-| 0x8D | `ban_list`    | `{}` (PHA-3786: requests the ban list; the server's response is not parsed yet, see `moderation_result`'s detail) | — |
-| 0x8E | `client_move` | `{"clientId":u16,"channelId":u64}` (PHA-3786: move another client — distinct from `join`, which moves the bot itself) | — |
-| 0x8F | `client_edit_mute` | `{"clientId":u16,"muted":bool}` (PHA-3786: implemented via talk-power revocation, not a true client-side mute) | — |
-| 0x90 | `channel_edit` | `{"channelId":u64,"name":string?,"topic":string?}` (PHA-3786) | — |
-| 0x91 | `channel_create` | `{"name":string,"parentId":u64?}` (PHA-3786) | — |
-| 0x92 | `channel_delete` | `{"channelId":u64,"force":bool}` (PHA-3786) | — |
-| 0x93 | `server_edit` | `{"name":string?,"welcomeMessage":string?}` (PHA-3786) | — |
-| 0x94 | `server_group_add_client` | `{"serverGroupId":u64,"clientId":u16}` (PHA-3786) | — |
-| 0x95 | `list_channels` | `{}` (PHA-3784: ask for the full channel tree; answered async with `channel_tree` 0x08, no request id) | — |
-| 0x96 | `set_description` | `{"description":string}` (PHA-3857: the bot's own client description, `""` clears it; the music player publishes `♪ <title>` for the PLNT overlay. Needs `b_client_modify_own_description`; no reply frame) | — |
+| 0x8A | `client_kick` | `{"clientId":u16,"fromServer":bool,"reason":string?}` (#3786) | — |
+| 0x8B | `ban_client`  | `{"clientId":u16,"durationSecs":u64?,"reason":string?}` (#3786; no `durationSecs` = permanent) | — |
+| 0x8C | `ban_del`     | `{"banId":u32}` (#3786) | — |
+| 0x8D | `ban_list`    | `{}` (#3786: requests the ban list; the server's response is not parsed yet, see `moderation_result`'s detail) | — |
+| 0x8E | `client_move` | `{"clientId":u16,"channelId":u64}` (#3786: move another client — distinct from `join`, which moves the bot itself) | — |
+| 0x8F | `client_edit_mute` | `{"clientId":u16,"muted":bool}` (#3786: implemented via talk-power revocation, not a true client-side mute) | — |
+| 0x90 | `channel_edit` | `{"channelId":u64,"name":string?,"topic":string?}` (#3786) | — |
+| 0x91 | `channel_create` | `{"name":string,"parentId":u64?}` (#3786) | — |
+| 0x92 | `channel_delete` | `{"channelId":u64,"force":bool}` (#3786) | — |
+| 0x93 | `server_edit` | `{"name":string?,"welcomeMessage":string?}` (#3786) | — |
+| 0x94 | `server_group_add_client` | `{"serverGroupId":u64,"clientId":u16}` (#3786) | — |
+| 0x95 | `list_channels` | `{}` (#3784: ask for the full channel tree; answered async with `channel_tree` 0x08, no request id) | — |
+| 0x96 | `set_description` | `{"description":string}` (#3857: the bot's own client description, `""` clears it; the music player publishes `♪ <title>` for the PLNT overlay. Needs `b_client_modify_own_description`; no reply frame) | — |
 
 Every 0x8A-0x94 command answers with `moderation_result` (0x07). None of them
 enforce authorization themselves — the Sexton trusts whatever command it is

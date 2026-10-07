@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stage the teamspeak plugin on the Gateway host for a managed `--link` install
-# (PHA-3326). No custom image, no build step: the plugin ships TypeScript
+# (#3326). No custom image, no build step: the plugin ships TypeScript
 # directly and `openclaw plugins install --link` is exempt from the
 # built-runtime-entry check that a plain `install <path>`/npm/npm-pack install
 # would fail without a compiled dist/. This is the whole point of the switch
@@ -12,7 +12,7 @@
 # compat gate before it gets to SDK resolution) and 2026.9.2 (resolves; see
 # INSTALL-PHATT-RAID.md).
 #
-# Also verified (2026-09-07, post PHA-3220 repo split): `openclaw plugins
+# Also verified (2026-09-07, post #3220 repo split): `openclaw plugins
 # install git:https://.../openclaw-teamspeak-plugin.git` hits the exact same
 # built-runtime-entry wall as npm/npm-pack, even with the manifest now at repo
 # root -- this package has no dist/ (package.json#openclaw.build.bundledDist

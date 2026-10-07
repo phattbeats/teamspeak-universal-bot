@@ -1,4 +1,4 @@
-// PHA-3607: the coalescing proxy, tested in isolation with two fake whisper
+// #3607: the coalescing proxy, tested in isolation with two fake whisper
 // backends. Run with `node --test whisper/coalescing-proxy.test.mjs` -- no
 // deps beyond Node itself, matching the rest of this directory (plain sh +
 // binaries, no package.json).
@@ -155,7 +155,7 @@ test("does not coalesce the same clip asked for with different decode options", 
   });
 });
 
-test("a decode slower than the window is still shared while in flight (PHA-3921)", async (t) => {
+test("a decode slower than the window is still shared while in flight (#3921)", async (t) => {
   await withProxy(t, { windowMs: 20, delayMs: 120 }, async ({ proxyPort, backends }) => {
     const first = post(proxyPort, { clientId: 7 });
     await sleep(60);

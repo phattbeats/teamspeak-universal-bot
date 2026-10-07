@@ -1,5 +1,5 @@
 #!/bin/bash
-# PHA-3228: prove the STT sidecar answers, and measure what it costs.
+# #3228: prove the STT sidecar answers, and measure what it costs.
 #
 # The lane's definition of done is a latency budget ("hears the last messages
 # within two seconds"), so this prints the round trip rather than just a pass:

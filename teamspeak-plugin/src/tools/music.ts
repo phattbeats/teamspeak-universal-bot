@@ -1,7 +1,7 @@
 /**
  * The music lane: yt-dlp -> ffmpeg -> the bridge's `music_audio` frames.
  *
- * This is TS3AudioBot's pipeline (PHA-3099 finding 8), which is the one proven
+ * This is TS3AudioBot's pipeline (#3099 finding 8), which is the one proven
  * against a TeamSpeak server, with the Opus encode left to the bridge:
  *
  *   yt-dlp -f bestaudio/best --no-playlist   -> direct stream URL + title
@@ -21,14 +21,14 @@
  * Ducking is not implemented here: the bridge drops the music lane to
  * `duckGain` on its own whenever voice is queued or a human is speaking.
  *
- * Song-request queueing (PHA-3635) lives here too, one level up from the
+ * Song-request queueing (#3635) lives here too, one level up from the
  * bridge's frame queue above: `play({ enqueue: true })` stacks a track behind
  * whatever is playing instead of replacing it, and the next one starts itself
  * when the current track's ffmpeg drains. A plain `play()` (no `enqueue`,
  * e.g. the band leader taking the stage) still interrupts immediately and
  * drops anything queued — that is a deliberate restart, not a skip.
  *
- * Queue browsing and transport (PHA-3785) extend the same `queue` array and
+ * Queue browsing and transport (#3785) extend the same `queue` array and
  * the same `ActiveStream`, rather than standing up a second queue:
  *
  *  - **`skip` is not `stop`.** `stop()` (the `stop_music` tool) clears the
@@ -135,7 +135,7 @@ export type MusicPlayRequest = {
   query?: string;
   url?: string;
   /**
-   * A local audio file (PHA-3554: the house band's generated track). Skips
+   * A local audio file (#3554: the house band's generated track). Skips
    * yt-dlp entirely; ffmpeg reads the path.
    */
   file?: string;
@@ -149,7 +149,7 @@ export type MusicPlayRequest = {
   startDelayMs?: number;
   /**
    * Stack behind whatever is already playing instead of replacing it
-   * (PHA-3635). Ignored when nothing is playing and the queue is empty —
+   * (#3635). Ignored when nothing is playing and the queue is empty —
    * the request just starts. A caller that wants the old interrupt
    * behaviour (the band leader taking the stage) simply omits this.
    */
@@ -167,7 +167,7 @@ export type MusicController = {
   readonly volume: number;
   readonly paused: boolean;
   play(request: MusicPlayRequest): Promise<MusicTrack>;
-  /** Explicit-source play (PHA-3785): youtube/soundcloud/bandcamp/direct-url/local/band-library. */
+  /** Explicit-source play (#3785): youtube/soundcloud/bandcamp/direct-url/local/band-library. */
   playSource(request: MusicPlaySourceRequest): Promise<MusicTrack>;
   stop(reason: string): boolean;
   setVolume(volume: number): number;
@@ -230,7 +230,7 @@ export type MusicPlayerParams = {
   log?: ((message: string) => void) | undefined;
   /**
    * Called with the track whenever one starts, and with `undefined` once the
-   * lane goes quiet (PHA-3857: the bot's `♪` description for the PLNT
+   * lane goes quiet (#3857: the bot's `♪` description for the PLNT
    * overlay). A replace or queue advance goes straight to the next track
    * without an `undefined` in between; a `seek()` restart repeats the track.
    */
@@ -243,7 +243,7 @@ export class MusicError extends Error {}
 const MAX_DESCRIPTION_CHARS = 200;
 
 /**
- * The bot's client description for a track (PHA-3857): `♪ <title>`, which the
+ * The bot's client description for a track (#3857): `♪ <title>`, which the
  * PLNT overlay reads as the bot's now-playing line. yt-dlp titles usually
  * carry the artist already ("Artist - Song"); nothing else names one.
  */
@@ -299,7 +299,7 @@ type ActiveStream = {
 
 export class MusicPlayer implements MusicController {
   private stream: ActiveStream | undefined;
-  /** Resolved tracks waiting their turn (PHA-3635); consumed on natural finish. */
+  /** Resolved tracks waiting their turn (#3635); consumed on natural finish. */
   private queue: MusicTrack[] = [];
   private gain: number;
   private closed = false;
@@ -377,7 +377,7 @@ export class MusicPlayer implements MusicController {
     return track;
   }
 
-  /** Explicit-source play (PHA-3785). Delegates to `play()` once the target is resolved per source. */
+  /** Explicit-source play (#3785). Delegates to `play()` once the target is resolved per source. */
   async playSource(request: MusicPlaySourceRequest): Promise<MusicTrack> {
     if (this.closed) {
       throw new MusicError("The music player is shut down.");
@@ -439,7 +439,7 @@ export class MusicPlayer implements MusicController {
       }
       case "band-library":
         // No backing catalog/API for the house band's own recordings exists in
-        // this repo yet (PHA-3785 scope note) — fail clearly instead of
+        // this repo yet (#3785 scope note) — fail clearly instead of
         // fabricating a listing.
         throw new MusicError(
           "The band-library source is not available yet: there is no backing catalog wired up for it.",
@@ -735,7 +735,7 @@ export class MusicPlayer implements MusicController {
     }
   }
 
-  // --- queue browsing & transport (PHA-3785) ---------------------------------
+  // --- queue browsing & transport (#3785) ---------------------------------
 
   nowPlayingInfo(): MusicNowPlaying | undefined {
     const stream = this.stream;

@@ -1,4 +1,4 @@
-# Insights dashboard (PHA-3963)
+# Insights dashboard (#3963)
 
 A web dashboard for the TeamSpeak server, built into the one container. It shows
 when the server is busy, who posts and talks the most, who spends the most time

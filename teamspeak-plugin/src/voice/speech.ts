@@ -1,5 +1,5 @@
 /**
- * Reply text -> 48 kHz mono PCM16 for the bridge's `voice_audio` lane (PHA-3228).
+ * Reply text -> 48 kHz mono PCM16 for the bridge's `voice_audio` lane (#3228).
  *
  * Nothing here talks to MiniMax. `extensions/minimax` already registers a real
  * `speechProviders` entry with its own auth, base-url, and directive handling,
@@ -253,7 +253,7 @@ export function buildTtsOverride(config: ResolvedTeamSpeakSpeechConfig): {
       [config.provider]: {
         model: config.model,
         ...(config.voiceId ? { voiceId: config.voiceId } : {}),
-        // PHA-3842: MiniMax reads pitch/speed from this same block and
+        // #3842: MiniMax reads pitch/speed from this same block and
         // range-checks them itself (an out-of-range value is a logged warning).
         ...(config.pitch !== undefined ? { pitch: config.pitch } : {}),
         ...(config.speed !== undefined ? { speed: config.speed } : {}),
@@ -277,7 +277,7 @@ const SENTENCE_SPLIT_RE = /(?<=[.!?])\s+(?=\S)/;
 /**
  * Split a reply into per-sentence pieces so the stt-tts lane can synthesize
  * and play them as a pipeline instead of one T2A call for the whole reply
- * (PHA-3607: "streaming TTS", the ~7s -> ~4s first-audio path).
+ * (#3607: "streaming TTS", the ~7s -> ~4s first-audio path).
  *
  * There is no host SDK support for token-level streaming synthesis — `tts`
  * only ever returns a finished file (see the module doc above) — so this is

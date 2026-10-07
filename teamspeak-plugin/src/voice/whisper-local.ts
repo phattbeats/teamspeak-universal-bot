@@ -1,19 +1,19 @@
 /**
- * Local speech-to-text over the whisper.cpp HTTP server (PHA-3228).
+ * Local speech-to-text over the whisper.cpp HTTP server (#3228).
  *
  * OpenClaw registers four realtime transcription providers — deepgram, openai,
  * elevenlabs, mistral — and every one is metered and hosted. This lane's
  * constraint is the opposite on both axes: $0 marginal cost, and speaker audio
  * that never leaves the house, which is a promise the channel notice makes out
  * loud. So the transcriber is a whisper.cpp sidecar on the TS6 Docker network
- * and this file is its client. Since PHA-3598/3607 that sidecar is the shared
+ * and this file is its client. Since #3598/3607 that sidecar is the shared
  * `whisper` pool container, one server per bot.
  *
- * Scope note: PHA-3228 explicitly allows a teamspeak-local module here instead
+ * Scope note: #3228 explicitly allows a teamspeak-local module here instead
  * of a general `realtimeTranscriptionProviders` entry, because the SDK's
  * provider contract is a *streaming* one (`connect`/`sendAudio`/`close`) and
  * whisper.cpp's server is request/response over finished segments. The seam is
- * the `SttProvider` contract in `stt-provider.ts` (PHA-3790): lifting this to a
+ * the `SttProvider` contract in `stt-provider.ts` (#3790): lifting this to a
  * real host provider later means implementing that interface elsewhere, not
  * touching the lane.
  *
@@ -51,7 +51,7 @@ export type WhisperFetch = (
   init: { method: string; body: FormData; signal: AbortSignal; headers?: Record<string, string> },
 ) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
-/** Header the coalescing whisper proxy keys on (PHA-3607). */
+/** Header the coalescing whisper proxy keys on (#3607). */
 export const SPEAKER_CLIENT_ID_HEADER = "x-speaker-client-id";
 
 export type LocalWhisperTranscriberParams = {

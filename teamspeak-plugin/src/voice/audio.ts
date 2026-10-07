@@ -33,7 +33,7 @@ export function convertRealtimePcm24kToBridgePcm48kMono(pcm24kMono: Buffer): Buf
   return resamplePcm(pcm24kMono, REALTIME_SAMPLE_RATE, BRIDGE_SAMPLE_RATE);
 }
 
-/** Speaker audio from the bridge -> local whisper input (PHA-3228). */
+/** Speaker audio from the bridge -> local whisper input (#3228). */
 export function convertBridgePcm48kMonoToSttPcm16k(pcm48kMono: Buffer): Buffer {
   if (pcm48kMono.length < 2) {
     return Buffer.alloc(0);

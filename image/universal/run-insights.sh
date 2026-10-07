@@ -1,5 +1,5 @@
 #!/bin/sh
-# PHA-3963: the insights dashboard (who's on, when, what they said, what the
+# #3963: the insights dashboard (who's on, when, what they said, what the
 # bots got out of them). The summoner records into /config/insights/insights.db;
 # this serves it on :8097 behind basic auth (/config/insights/auth.txt) and pulls
 # the gateway's transcripts in. INSIGHTS_ENABLED=0 idles it.

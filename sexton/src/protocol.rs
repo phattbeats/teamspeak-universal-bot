@@ -1,10 +1,10 @@
 //! WebSocket wire protocol for the Sexton's audio/voice bridge clients.
 //!
-//! **PHA-3341** moved the *internal* bridge IPC (`BridgeEvent`,
+//! **#3341** moved the *internal* bridge IPC (`BridgeEvent`,
 //! `BridgeCommand`, `Snapshot`, the roster/state shapes) into the
 //! `bridge-proto` crate so the Sexton (tsclientlib owner) and the then
 //! separate `ts-bridge` process could share types without one depending on
-//! the other. **PHA-3342** removed the second process — the WS server and
+//! the other. **#3342** removed the second process — the WS server and
 //! the mixer that used to live in `ts-bridge` now run inside this binary,
 //! wired directly to the Sexton's own connection event loop (see
 //! `audio.rs`) — but the WebSocket frame envelope here is byte-for-byte
@@ -27,9 +27,9 @@ pub const TYPE_SPEAKER_STOP: u8 = 0x03;
 pub const TYPE_ROSTER: u8 = 0x04;
 pub const TYPE_TEXT_MESSAGE: u8 = 0x05;
 pub const TYPE_STATE: u8 = 0x06;
-/// PHA-3786: result of a moderation command.
+/// #3786: result of a moderation command.
 pub const TYPE_MODERATION_RESULT: u8 = 0x07;
-/// PHA-3784: answer to `list_channels`.
+/// #3784: answer to `list_channels`.
 pub const TYPE_CHANNEL_TREE: u8 = 0x08;
 
 pub const TYPE_VOICE_AUDIO: u8 = 0x81;
@@ -42,7 +42,7 @@ pub const TYPE_MUTE: u8 = 0x87;
 pub const TYPE_POKE: u8 = 0x88;
 pub const TYPE_SEND_TEXT: u8 = 0x89;
 
-// --- moderation (PHA-3786) --------------------------------------------------
+// --- moderation (#3786) --------------------------------------------------
 pub const TYPE_CLIENT_KICK: u8 = 0x8A;
 pub const TYPE_BAN_CLIENT: u8 = 0x8B;
 pub const TYPE_BAN_DEL: u8 = 0x8C;
@@ -55,10 +55,10 @@ pub const TYPE_CHANNEL_DELETE: u8 = 0x92;
 pub const TYPE_SERVER_EDIT: u8 = 0x93;
 pub const TYPE_SERVER_GROUP_ADD_CLIENT: u8 = 0x94;
 
-/// PHA-3784: ask for the full channel tree (answered with `TYPE_CHANNEL_TREE`).
+/// #3784: ask for the full channel tree (answered with `TYPE_CHANNEL_TREE`).
 pub const TYPE_LIST_CHANNELS: u8 = 0x95;
 
-/// PHA-3857: set the bot's own client description (music now-playing).
+/// #3857: set the bot's own client description (music now-playing).
 pub const TYPE_SET_DESCRIPTION: u8 = 0x96;
 
 /// A decoded inbound frame, header-parsed but payload left raw. Same shape
@@ -143,7 +143,7 @@ pub struct TextMessageHeader {
     pub target: &'static str,
 }
 
-/// PHA-3786: outbound answer to any moderation command.
+/// #3786: outbound answer to any moderation command.
 #[derive(Serialize)]
 pub struct ModerationResultHeader {
     pub action: &'static str,
@@ -200,7 +200,7 @@ pub struct SendTextHeader {
     pub text: String,
 }
 
-// --- moderation (PHA-3786) --------------------------------------------------
+// --- moderation (#3786) --------------------------------------------------
 
 #[derive(Deserialize)]
 pub struct ClientKickHeader {
@@ -278,7 +278,7 @@ pub struct ServerGroupAddClientHeader {
     pub client_id: u16,
 }
 
-/// PHA-3857: `set_description` — the bot's own description; `""` clears it.
+/// #3857: `set_description` — the bot's own description; `""` clears it.
 #[derive(Deserialize)]
 pub struct SetDescriptionHeader {
     pub description: String,

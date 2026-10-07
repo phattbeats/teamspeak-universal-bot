@@ -1,4 +1,4 @@
-// PHA-3963: the dashboard's numbers, as plain functions over the insights db.
+// #3963: the dashboard's numbers, as plain functions over the insights db.
 // Data is small (a few people, a few thousand rows a month), so the grouping
 // that needs local time (hour of day, weekday, calendar day) is done in JS.
 

@@ -1,5 +1,5 @@
 /**
- * The local STT client (PHA-3228).
+ * The local STT client (#3228).
  *
  * The assertions worth having here are the ones that would otherwise only fail
  * on a live channel: that the audio reaches whisper as a 16 kHz WAV it can
@@ -74,7 +74,7 @@ describe("LocalWhisperTranscriber", () => {
     expect(calls[0]?.form.get("language")).toBe("en");
   });
 
-  it("sends the speaker's clientId as a header for a coalescing proxy to key on (PHA-3607)", async () => {
+  it("sends the speaker's clientId as a header for a coalescing proxy to key on (#3607)", async () => {
     const { fetchFn, calls } = stubFetch(JSON.stringify({ text: "hey" }));
     const transcriber = new LocalWhisperTranscriber({ config: CONFIG, url: URL, fetchFn });
 

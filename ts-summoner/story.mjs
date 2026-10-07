@@ -1,4 +1,4 @@
-// PHA-3841: which two-bot scene a shift change gets, and the rare-event dice.
+// #3841: which two-bot scene a shift change gets, and the rare-event dice.
 // Pure functions; the summoner does the I/O. Tested in test/story.test.mjs.
 
 /**

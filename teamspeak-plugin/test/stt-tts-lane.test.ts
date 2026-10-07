@@ -1,7 +1,7 @@
 /**
- * The stt-tts lane end to end over the mock bridge (PHA-3228).
+ * The stt-tts lane end to end over the mock bridge (#3228).
  *
- * Same harness PHA-3175 used: recorded frames in, bridge frames out, no
+ * Same harness #3175 used: recorded frames in, bridge frames out, no
  * TeamSpeak server and no provider. What is being proved here is the lane's
  * contract rather than its plumbing —
  *
@@ -99,13 +99,13 @@ function createHarness(params: {
   transcripts?: string[];
   reply?: string;
   /**
-   * A streaming turn (PHA-3792): each entry is delivered through `onBlock`,
+   * A streaming turn (#3792): each entry is delivered through `onBlock`,
    * then the turn parks on `streamGate` before resolving with the joined text
    * -- the model is "still generating" until the test releases it.
    */
   stream?: string[];
   streamGate?: Promise<void>;
-  /** Per-turn hold before a plain reply returns, by turn index (PHA-3829). */
+  /** Per-turn hold before a plain reply returns, by turn index (#3829). */
   replyGates?: Array<Promise<void> | undefined>;
 } = {}): Harness {
   const config = params.config ?? baseConfig();
@@ -364,7 +364,7 @@ describe("stt-tts lane over the mock bridge", () => {
     expect(harness.logs.some((line) => line.includes("firstAudioMs="))).toBe(true);
   });
 
-  it("pipelines a multi-sentence reply as separate synthesis calls, not one (PHA-3607)", async () => {
+  it("pipelines a multi-sentence reply as separate synthesis calls, not one (#3607)", async () => {
     const chatty = createHarness({
       reply:
         "This is the first full sentence of the reply. Here comes a second full sentence about the plan.",
@@ -392,7 +392,7 @@ describe("stt-tts lane over the mock bridge", () => {
     expect(chatty.logs.some((line) => line.includes("ttsChunks=2/2"))).toBe(true);
   });
 
-  it("starts speaking the first block while the agent turn is still running (PHA-3792)", async () => {
+  it("starts speaking the first block while the agent turn is still running (#3792)", async () => {
     let finishGenerating: () => void = () => undefined;
     const streaming = createHarness({
       stream: ["The first block is a whole sentence.", "The second block is another one."],
@@ -427,7 +427,7 @@ describe("stt-tts lane over the mock bridge", () => {
     expect(line).toMatch(/firstBlockMs=\d+/);
   });
 
-  it("transcribes the next utterance while the previous answer is still synthesizing (PHA-3789)", async () => {
+  it("transcribes the next utterance while the previous answer is still synthesizing (#3789)", async () => {
     const busy = createHarness({ transcripts: ["first thing", "second thing"] });
     joinRoom(busy, [PHATT]);
     let release: () => void = () => undefined;
@@ -552,7 +552,7 @@ describe("stt-tts lane construction", () => {
       deps: { createSynthesizer: () => new FakeSynthesizer() },
     });
 
-  it("refuses a hosted primary until the persona opts in, then builds it (PHA-3790)", () => {
+  it("refuses a hosted primary until the persona opts in, then builds it (#3790)", () => {
     const refused = laneFromConfig(
       { mode: "stt-tts", streaming: { transcription: { provider: "minimax", apiKey: "k" } } },
     );
@@ -628,7 +628,7 @@ describe("stt-tts lane construction", () => {
     ).toEqual(["Sexton"]);
   });
 
-  it("reads wake config from voice, and still honours the PHA-3175 spelling", () => {
+  it("reads wake config from voice, and still honours the #3175 spelling", () => {
     expect(
       resolveTeamSpeakWakeNames({
         config: baseConfig({ voice: { mode: "stt-tts", realtime: { wakeNames: ["Verger"] } } }),
@@ -658,7 +658,7 @@ describe("stt-tts lane construction", () => {
   });
 });
 
-describe("sharing the room with other bots (PHA-3829)", () => {
+describe("sharing the room with other bots (#3829)", () => {
   const BEXTON = 20;
   const withBexton = baseConfig({
     voice: {

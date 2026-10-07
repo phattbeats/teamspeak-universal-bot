@@ -1,5 +1,5 @@
 /**
- * Acceptance: "barge-in clears the queue" (PHA-3175).
+ * Acceptance: "barge-in clears the queue" (#3175).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RoomPlaybackQueue, type RoomPlaybackSink } from "../src/voice/room-playback.js";

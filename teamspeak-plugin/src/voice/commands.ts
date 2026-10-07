@@ -11,7 +11,7 @@ import type { TeamSpeakClientId, TextMessageHeader } from "../bridge/protocol.js
 export type TeamSpeakCommand =
   | { kind: "vc-join"; channel?: string }
   | { kind: "vc-leave" }
-  /** Clock a bot out through ts-summoner (PHA-3823). No name = this bot. */
+  /** Clock a bot out through ts-summoner (#3823). No name = this bot. */
   | { kind: "vc-dismiss"; bot?: string }
   | { kind: "vc-mute"; muted: boolean }
   | { kind: "status" };

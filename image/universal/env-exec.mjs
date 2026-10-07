@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PHA-3791: run a command with a docker-style env file: KEY=VALUE per line,
+// #3791: run a command with a docker-style env file: KEY=VALUE per line,
 // taken literally. Not `. file` in sh: the Suno cookie is full of `;` and `$`,
 // which a shell would split and expand (docker --env-file never did).
 //   node env-exec.mjs <env-file> <command> [args...]

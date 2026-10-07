@@ -1,8 +1,8 @@
-// PHA-3818: Lexton randomly DMs someone on the server with one ominous line.
+// #3818: Lexton randomly DMs someone on the server with one ominous line.
 // Every MENACE_MIN..MENACE_MAX minutes: read the whole-server channel tree off
 // the core's bridge, pick a random human (never a bot, never Emily or
 // miss_shade), have the lexton agent write the line, and PM it via 0x89.
-// Runs as supervisor program `menace-<bot>` (PHA-3791: generated per bot by
+// Runs as supervisor program `menace-<bot>` (#3791: generated per bot by
 // /opt/universal/stack.mjs, which also passes the bridge and agent below).
 const { execFile } = require("child_process");
 const WebSocket = require("/opt/openclaw-teamspeak-plugin/node_modules/ws");

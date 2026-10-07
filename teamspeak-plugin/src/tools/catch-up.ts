@@ -3,7 +3,7 @@
  *
  * The logger bot (sexton/src/main.rs) writes one line per user message to
  * `<logDir>/<channel>/YYYY-MM-DD.md` as `HH:MM  nickname: message`, local time,
- * and nothing else — no joins, no mutes, no system text (PHA-3099's hard rule).
+ * and nothing else — no joins, no mutes, no system text (#3099's hard rule).
  * So the catch-up is a read of that file, not a second history: whatever the
  * room sees in the channel description is what the Sexton reads aloud.
  *

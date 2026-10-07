@@ -1,5 +1,5 @@
 /**
- * Lexton's villain tools (PHA-3820). The part that matters most is that every
+ * Lexton's villain tools (#3820). The part that matters most is that every
  * server change undoes itself, including across a gateway restart, and never
  * yanks someone who has since moved on. Timers are driven by hand.
  */
