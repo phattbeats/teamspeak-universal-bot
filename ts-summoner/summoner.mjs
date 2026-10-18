@@ -1338,6 +1338,19 @@ http.createServer((req, res) => {
     const out = id === 'end' ? endEventByHand(kind) : startEventByHand(kind, qs.get('who'));
     return send(out.ok ? 200 : 409, out);
   }
+  // #3963: the dashboard saved new shifts; take them without a restart (a restart would bounce whoever is on).
+  if (req.method === 'POST' && verb === 'reload') {
+    try {
+      const fresh = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+      const changed = [];
+      for (const [bid, b] of Object.entries(cfg.bots)) {
+        const next = fresh.bots?.[bid]?.shifts;
+        if (Array.isArray(next) && JSON.stringify(next) !== JSON.stringify(b.shifts)) { b.shifts = next; changed.push(bid); }
+      }
+      if (changed.length) log(`reload: new shifts for ${changed.join(', ')}`);
+      return send(200, { reloaded: changed });
+    } catch (e) { return send(500, { error: e.message }); }
+  }
   if (req.method === 'POST' && verb === 'heard') {
     const by = new URL(req.url, 'http://x').searchParams.get('by') || '';
     let body = '';
@@ -1345,7 +1358,7 @@ http.createServer((req, res) => {
     req.on('end', () => { rec?.heard(by, body); send(200, { summoned: onHeard(by, body) }); });
     return;
   }
-  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /heard?by=<speaker> | POST /event/<takeover|bender|guest|banter>[?who=<guest>|<a>+<b>] | POST /event/end?kind=<takeover|bender|guest>' });
+  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /reload (re-read shifts) | POST /heard?by=<speaker> | POST /event/<takeover|bender|guest|banter>[?who=<guest>|<a>+<b>] | POST /event/end?kind=<takeover|bender|guest>' });
 }).listen(cfg.httpPort, () => log(`http on :${cfg.httpPort}`));
 
 setInterval(() => reconcile().catch((e) => log('reconcile', e.message)), cfg.reconcileSec * 1000);

@@ -79,6 +79,22 @@ input[type=search], select { background: var(--surface-1); color: var(--text-pri
 button.plain { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer; }
 .empty { color: var(--muted); padding: 24px 0; text-align: center; }
 [hidden] { display: none !important; }
+.ctl-bots { margin-bottom: 14px; }
+.ctl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 18px; }
+.ctl-row { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 13px; }
+.ctl-row .t { color: var(--muted); font-size: 12px; }
+.ctl-row input[type=checkbox] { margin-top: 3px; }
+.warn { color: #b45309; font-size: 12px; }
+@media (prefers-color-scheme: dark) { .warn { color: #f59e0b; } }
+.ctl-actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+button.primary { background: var(--series-1); color: #fff; border: 0; border-radius: 6px; padding: 7px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+button.primary:disabled { opacity: .5; cursor: default; }
+.msg { font-size: 13px; color: var(--text-secondary); }
+.msg.err { color: #b91c1c; } @media (prefers-color-scheme: dark) { .msg.err { color: #f87171; } }
+textarea.persona { width: 100%; min-height: 360px; background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+.shift { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--grid); }
+.shift .days label { display: inline-flex; align-items: center; gap: 2px; margin-right: 6px; font-size: 12px; color: var(--text-secondary); }
+input[type=time] { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font: inherit; }
 @media (max-width: 640px) { .log-row { grid-template-columns: 1fr; gap: 2px; } .grid2 { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -96,6 +112,9 @@ button.plain { background: var(--surface-1); color: var(--text-primary); border:
     <button role="tab" data-tab="people" aria-selected="false">People</button>
     <button role="tab" data-tab="bots" aria-selected="false">Bots</button>
     <button role="tab" data-tab="log" aria-selected="false">Log</button>
+    <button role="tab" data-tab="tools" aria-selected="false">Tools &amp; skills</button>
+    <button role="tab" data-tab="persona" aria-selected="false">Personas</button>
+    <button role="tab" data-tab="schedule" aria-selected="false">Schedule</button>
   </nav>
 
   <section id="tab-overview">
@@ -136,6 +155,21 @@ button.plain { background: var(--surface-1); color: var(--text-primary); border:
       <div class="card"><h2>What people ask the bots for</h2><p class="sub" id="asks-sub"></p><div id="asks"></div><details class="tbl"><summary>Show as table</summary><div id="asks-table"></div></details></div>
       <div class="card"><h2>What the bots start, and who answers</h2><p class="sub" id="events-sub"></p><div id="events"></div></div>
     </div>
+  </section>
+
+  <section id="tab-tools" hidden>
+    <div class="seg ctl-bots" id="tools-bots" role="group" aria-label="Bot"></div>
+    <div id="tools-body"></div>
+  </section>
+
+  <section id="tab-persona" hidden>
+    <div class="seg ctl-bots" id="persona-bots" role="group" aria-label="Bot"></div>
+    <div id="persona-body"></div>
+  </section>
+
+  <section id="tab-schedule" hidden>
+    <p class="sub">Shifts are the weekly baseline, in <span id="sched-tz"></span> time. Special nights in the calendar (Friday lounge, Halloween…) and the daily start/end jitter still apply on top. Saved shifts go live without restarting anyone.</p>
+    <div id="schedule-body"></div>
   </section>
 
   <section id="tab-log" hidden>
@@ -351,7 +385,128 @@ async function loadLog(more = false) {
 
 // ---- wiring
 let tab = 'overview';
+// ---- control pages (tools, personas, schedule): loaded on tab switch only, never on a timer, so edits are not wiped
+const CONTROL = ['tools', 'persona', 'schedule'];
+const ctl = { bot: {}, tools: null, persona: null, files: {}, schedule: null };
+async function send(method, path, body) {
+  const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'dashboard' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `${r.status}`);
+  return j;
+}
+const say = (id, text, err) => { const m = $(id); if (m) { m.textContent = text; m.className = err ? 'msg err' : 'msg'; } };
+function botPicker(id, ids, cur, onPick, names = {}) {
+  const el = $(id);
+  el.innerHTML = ids.map((b) => `<button data-b="${esc(b)}" aria-pressed="${b === cur}">${esc(names[b] || b)}</button>`).join('');
+  el.onclick = (ev) => { const b = ev.target.closest('button'); if (b) onPick(b.dataset.b); };
+}
+async function loadControl() {
+  try {
+    if (tab === 'tools') { ctl.tools = await api('api/control/tools'); const ids = Object.keys(ctl.tools.bots); ctl.bot.tools ??= ids[0]; renderTools(); }
+    if (tab === 'persona') { ctl.persona = await api('api/control/persona'); const ids = Object.keys(ctl.persona); ctl.bot.persona ??= ids[0]; ctl.file ??= {}; renderPersona(); }
+    if (tab === 'schedule') { ctl.schedule = await api('api/control/schedule'); renderSchedule(); }
+  } catch (e) { console.error(e); }
+}
+
+function renderTools() {
+  const t = ctl.tools, id = ctl.bot.tools, b = t.bots[id];
+  botPicker('#tools-bots', Object.keys(t.bots), id, (x) => { ctl.bot.tools = x; renderTools(); });
+  const stateSel = (name, v) => `<select data-core="${esc(name)}"><option value="default"${v === 'default' ? ' selected' : ''}>Default</option><option value="on"${v === 'on' ? ' selected' : ''}>On</option><option value="off"${v === 'off' ? ' selected' : ''}>Off</option></select>`;
+  const allSkills = b.skills === null;
+  $('#tools-body').innerHTML = `
+    <div class="card"><h2>Agent tools</h2><p class="sub">Core OpenClaw tools. Off wins over On; Default leaves it to the gateway.</p>
+      ${t.core.map((c) => `<div class="ctl-row">${stateSel(c.name, b.core[c.name])}<div><b>${esc(c.name)}</b><div class="t">${esc(c.note)}</div></div></div>`).join('')}
+    </div>
+    <div class="card"><h2>Voice &amp; room tools</h2><p class="sub">Switches for the TeamSpeak plugin's tool groups.</p>
+      <div class="ctl-grid">${t.groups.map((g) => `<label class="ctl-row"><input type="checkbox" data-group="${esc(g.id)}"${b.groups[g.id] ? ' checked' : ''}><div><b>${esc(g.label)}</b>${g.sensitive ? ' <span class="warn">needs an allowed server group</span>' : ''}<div class="t">${g.tools.map(esc).join(', ')}</div></div></label>`).join('')}</div>
+      <p class="sub" style="margin-top:10px">Moderation only works for people in: ${b.moderationGroups.length ? b.moderationGroups.map(esc).join(', ') : '<i>nobody (no group set)</i>'}. Always on: ${t.always.map(esc).join(', ')}.</p>
+    </div>
+    <div class="card"><h2>Skills</h2><p class="sub">Which skills this bot's agent can use.</p>
+      <label class="ctl-row"><input type="checkbox" id="skills-all"${allSkills ? ' checked' : ''}><div><b>No allow-list</b> <span class="warn">every installed skill is available</span></div></label>
+      <div class="ctl-grid" id="skill-list"${allSkills ? ' style="opacity:.45"' : ''}>${t.skills.map((s) => `<label class="ctl-row"><input type="checkbox" data-skill="${esc(s.name)}"${(b.skills ?? []).includes(s.name) ? ' checked' : ''}${allSkills ? ' disabled' : ''}><div><b>${esc(s.name)}</b><div class="t">${esc((s.description || '').slice(0, 140))}</div></div></label>`).join('') || '<div class="empty">No skills found on disk.</div>'}</div>
+    </div>
+    <div class="ctl-actions"><button class="primary" id="tools-save">Save ${esc(id)}</button><span class="msg" id="tools-msg"></span></div>`;
+  $('#skills-all').onchange = (ev) => { for (const c of document.querySelectorAll('[data-skill]')) c.disabled = ev.target.checked; $('#skill-list').style.opacity = ev.target.checked ? .45 : 1; };
+  $('#tools-save').onclick = async () => {
+    const patch = {
+      core: Object.fromEntries([...document.querySelectorAll('[data-core]')].map((e) => [e.dataset.core, e.value])),
+      groups: Object.fromEntries([...document.querySelectorAll('[data-group]')].map((e) => [e.dataset.group, e.checked])),
+      skills: $('#skills-all').checked ? null : [...document.querySelectorAll('[data-skill]:checked')].map((e) => e.dataset.skill),
+    };
+    try { await send('PUT', `api/control/tools/${encodeURIComponent(id)}`, patch); say('#tools-msg', 'Saved to the gateway config. The gateway applies it when it reloads its config.'); t.bots[id] = (await api('api/control/tools')).bots[id]; }
+    catch (e) { say('#tools-msg', e.message, true); }
+  };
+}
+
+async function renderPersona() {
+  const ids = Object.keys(ctl.persona), id = ctl.bot.persona, files = ctl.persona[id] ?? [];
+  botPicker('#persona-bots', ids, id, (x) => { ctl.bot.persona = x; renderPersona(); });
+  const file = files.some((f) => f.name === ctl.file[id]) ? ctl.file[id] : (files.find((f) => f.name === 'SOUL.md') ?? files[0])?.name;
+  ctl.file[id] = file;
+  if (!file) { $('#persona-body').innerHTML = '<div class="empty">No persona files for this bot yet.</div>'; return; }
+  const doc = await api(`api/control/persona/${encodeURIComponent(id)}/${encodeURIComponent(file)}`);
+  $('#persona-body').innerHTML = `
+    <div class="filters"><label>File <select id="persona-file">${files.map((f) => `<option${f.name === file ? ' selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>
+      <label>History <select id="persona-hist"><option value="">current</option>${doc.history.map((h) => `<option>${esc(h)}</option>`).join('')}</select></label>
+      <span class="muted">AGENTS.md = instructions · SOUL.md = personality · IDENTITY.md = who it is · lines.json / moods.json = entrance lines and moods</span></div>
+    <textarea class="persona" id="persona-text" spellcheck="false">${esc(doc.text)}</textarea>
+    <div class="ctl-actions"><button class="primary" id="persona-save">Save ${esc(file)}</button><span class="msg" id="persona-msg">Each save keeps the previous version under History. The agent reads the file on its next turn.</span></div>`;
+  $('#persona-file').onchange = (ev) => { ctl.file[id] = ev.target.value; renderPersona(); };
+  $('#persona-hist').onchange = async (ev) => {
+    const v = ev.target.value;
+    $('#persona-text').value = v ? (await api(`api/control/persona/${encodeURIComponent(id)}/${encodeURIComponent(file)}/history/${encodeURIComponent(v)}`)).text : doc.text;
+    say('#persona-msg', v ? `Showing the ${v.split('.').pop()} version. Save to restore it.` : '');
+  };
+  $('#persona-save').onclick = async () => {
+    try { await send('PUT', `api/control/persona/${encodeURIComponent(id)}/${encodeURIComponent(file)}`, { text: $('#persona-text').value }); await renderPersona(); say('#persona-msg', 'Saved. The previous version is in History.'); }
+    catch (e) { say('#persona-msg', e.message, true); }
+  };
+}
+
+const DAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+function shiftRow(s) {
+  const days = s.days ?? [0, 1, 2, 3, 4, 5, 6];
+  const end = s.end === '24:00' ? '00:00' : s.end;
+  return `<div class="shift"><span class="days">${DAYS.map((d, i) => `<label><input type="checkbox" data-day="${i}"${days.includes(i) ? ' checked' : ''}>${d}</label>`).join('')}</span>
+    <label>from <input type="time" data-start value="${esc(s.start)}"></label><label>to <input type="time" data-end value="${esc(end)}"></label>
+    <button class="plain" data-del>Remove</button></div>`;
+}
+function readShifts(card) {
+  return [...card.querySelectorAll('.shift')].map((r) => {
+    const days = [...r.querySelectorAll('[data-day]:checked')].map((e) => Number(e.dataset.day));
+    const end = r.querySelector('[data-end]').value;
+    return { start: r.querySelector('[data-start]').value, end: end === '00:00' ? '24:00' : end, days };
+  });
+}
+function renderSchedule() {
+  const sc = ctl.schedule;
+  $('#sched-tz').textContent = sc.tz;
+  $('#schedule-body').innerHTML = Object.entries(sc.bots).map(([id, b]) => {
+    const l = b.live;
+    const st = !sc.summoner ? '<span class="warn">summoner not reachable</span>' : l ? `${l.running ? '<span class="dot"></span>in the room' : 'off duty'} · ${l.onShift ? 'on shift' : 'not scheduled now'}${l.shift ? ` (${esc(l.shift.start?.slice(11, 16) ?? '')}–${esc(l.shift.end?.slice(11, 16) ?? '')} UTC)` : ''}${l.override ? ' · manual override' : ''}` : '';
+    return `<div class="card" data-bot="${esc(id)}"><div class="card-head"><div><h2>${esc(b.nick)}${b.guest ? ' <span class="muted">(guest, visits only)</span>' : ''}</h2><p class="sub">${st}</p></div>
+      <div style="display:flex;gap:8px"><button class="plain" data-act="summon">Summon now</button><button class="plain" data-act="dismiss">Dismiss now</button></div></div>
+      <div class="shifts">${b.shifts.length ? b.shifts.map(shiftRow).join('') : '<div class="muted" style="padding:6px 0">No shifts: never on duty by schedule.</div>'}</div>
+      <div class="ctl-actions"><button class="plain" data-add>Add shift</button><button class="primary" data-save>Save ${esc(b.nick)}</button><span class="msg"></span></div></div>`;
+  }).join('');
+}
+$('#schedule-body').addEventListener('click', async (ev) => {
+  const card = ev.target.closest('.card[data-bot]'); if (!card) return;
+  const id = card.dataset.bot, msg = card.querySelector('.msg');
+  const set = (t, err) => { msg.textContent = t; msg.className = err ? 'msg err' : 'msg'; };
+  if (ev.target.closest('[data-del]')) ev.target.closest('.shift').remove();
+  else if (ev.target.closest('[data-add]')) card.querySelector('.shifts').insertAdjacentHTML('beforeend', shiftRow({ start: '20:00', end: '23:00' }));
+  else if (ev.target.closest('[data-save]')) {
+    try { const r = await send('PUT', `api/control/schedule/${encodeURIComponent(id)}`, { shifts: readShifts(card) }); set(r.reload?.error ? `Saved, but the summoner did not reload: ${r.reload.error}` : 'Saved and live.', !!r.reload?.error); }
+    catch (e) { set(e.message, true); }
+  } else if (ev.target.dataset.act) {
+    try { await send('POST', `api/control/schedule/${encodeURIComponent(id)}/${ev.target.dataset.act}`); set(`${ev.target.dataset.act} sent.`); setTimeout(async () => { if (tab === 'schedule') { ctl.schedule = await api('api/control/schedule'); } }, 4000); }
+    catch (e) { set(e.message, true); }
+  }
+});
+
 async function refresh() {
+  if (CONTROL.includes(tab)) return;
   try {
     if (tab === 'overview') { data.overview = await api(`api/overview?days=${days}`); renderOverview(); }
     if (tab === 'people') { data.people = await api(`api/people?days=${days}`); renderPeople(); }
@@ -375,7 +530,7 @@ document.querySelector('nav.tabs').addEventListener('click', (ev) => {
   tab = b.dataset.tab;
   for (const x of document.querySelectorAll('nav.tabs button')) x.setAttribute('aria-selected', String(x === b));
   for (const s of document.querySelectorAll('section[id^="tab-"]')) s.hidden = s.id !== `tab-${tab}`;
-  refresh();
+  if (CONTROL.includes(tab)) loadControl(); else refresh();
 });
 let deb;
 for (const el of document.querySelectorAll('#log-filters input')) el.addEventListener(el.type === 'checkbox' ? 'change' : 'input', () => { clearTimeout(deb); deb = setTimeout(() => loadLog(), 250); });

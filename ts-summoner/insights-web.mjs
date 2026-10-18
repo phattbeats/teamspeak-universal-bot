@@ -7,6 +7,7 @@
 //   GET /api/people?days=N     per person: voice, talk, chat, heard, bot turns
 //   GET /api/bots?days=N       per bot + what drives engagement
 //   GET /api/log?types=&q=&nick=&before=&limit=   the everything-log
+//   /api/control/...           tools+skills, persona files, shifts (control.mjs); writes need X-Requested-With
 //
 // Every route sits behind HTTP basic auth: this is everyone's chat and speech.
 // The credentials are /config/insights/auth.txt (`user:password`), generated
@@ -18,6 +19,10 @@ import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { applyTurnOps, getMeta, openDb, parseRoomLog, setMeta, turnOps } from './insights.mjs';
 import { bots, logPage, overview, people } from './insights-stats.mjs';
+import {
+  applyTools, cleanShifts, personaFiles, personaHistory, readHistory, readJson, readPersona, readTools, scanSkills,
+  writeAtomic, writePersona, writeShifts,
+} from './control.mjs';
 
 const log = (...a) => console.log(new Date().toISOString(), 'insights:', ...a);
 const env = process.env;
@@ -37,6 +42,13 @@ const HIDE = (ic.hideNicks ?? ['^PHA\\d', '^pha\\d', 'Probe$', 'Test(er)?$', '^L
   .map((r) => new RegExp(r, 'i'));
 const hide = (nick) => !nick || BOT_NICKS.has(String(nick).toLowerCase()) || HIDE.some((r) => r.test(nick));
 const PAGE = new URL('./insights/index.html', import.meta.url);
+
+const CONFIG_DIR = env.UNIVERSAL_CONFIG_DIR || '/config';
+const OPENCLAW_JSON = env.OPENCLAW_CONFIG_PATH || `${OPENCLAW}/openclaw.json`;
+const WORKSPACES = `${OPENCLAW}/workspace/agents`;
+const SUMMONER_EDITABLE = `${CONFIG_DIR}/summoner/config.json`;
+const SKILL_DIRS = (env.CONTROL_SKILL_DIRS || `${OPENCLAW}/plugin-skills:${OPENCLAW}/skills:${OPENCLAW}/workspace/skills:/usr/local/lib/node_modules/openclaw/skills`).split(':');
+const SUMMONER_URL = `http://127.0.0.1:${cfg.httpPort || 8099}`;
 
 const db = openDb(DB_PATH);
 
@@ -129,6 +141,89 @@ function prune() {
   }
 }
 
+// --------------------------------------------------------------- control --
+
+const botIds = () => Object.keys(cfg.bots ?? {});
+const need = (id) => { if (!botIds().includes(id)) throw Object.assign(new Error(`unknown bot ${id}`), { code: 404 }); return id; };
+const personaDir = (id) => `${WORKSPACES}/${need(id)}`;
+
+async function readBody(req) {
+  let body = '';
+  for await (const c of req) { body += c; if (body.length > 400_000) throw Object.assign(new Error('body too large'), { code: 413 }); }
+  try { return JSON.parse(body || '{}'); } catch { throw Object.assign(new Error('body is not JSON'), { code: 400 }); }
+}
+
+async function summoner(path, method = 'GET') {
+  const r = await fetch(`${SUMMONER_URL}${path}`, { method, signal: AbortSignal.timeout(5000) });
+  return r.json();
+}
+
+/** Read-modify-write openclaw.json; the gateway picks the change up from disk. */
+function editOpenclaw(fn) {
+  const raw = readFileSync(OPENCLAW_JSON, 'utf8');
+  const next = fn(JSON.parse(raw));
+  writeAtomic(`${OPENCLAW_JSON}.ctl-bak`, raw, 0o600);
+  writeAtomic(OPENCLAW_JSON, `${JSON.stringify(next, null, 2)}\n`, 0o600);
+}
+
+async function control(req, url, send) {
+  const parts = url.pathname.split('/').slice(3).map(decodeURIComponent); // after /api/control
+  const [area, id, file, sub, version] = parts;
+  const write = req.method !== 'GET';
+  if (write && !req.headers['x-requested-with']) return send(403, { error: 'missing X-Requested-With' });
+  const skills = () => scanSkills(SKILL_DIRS);
+
+  if (area === 'tools') {
+    if (!id) return send(200, readTools(readJson(OPENCLAW_JSON, {}), botIds(), skills()));
+    if (req.method !== 'PUT') return send(405, { error: 'PUT only' });
+    need(id);
+    const patch = await readBody(req);
+    editOpenclaw((c) => applyTools(c, id, patch, skills()));
+    log(`control: tools for ${id}: ${JSON.stringify(patch)}`);
+    return send(200, readTools(readJson(OPENCLAW_JSON, {}), botIds(), skills()).bots[id]);
+  }
+  if (area === 'persona') {
+    if (!id) return send(200, Object.fromEntries(botIds().map((b) => [b, personaFiles(personaDir(b))])));
+    const dir = personaDir(id);
+    if (!file) return send(200, personaFiles(dir));
+    if (sub === 'history') {
+      return send(200, version ? { text: readHistory(dir, file, version) } : personaHistory(dir, file));
+    }
+    if (req.method === 'PUT') {
+      const { text } = await readBody(req);
+      const backup = writePersona(dir, file, text);
+      log(`control: persona ${id}/${file} saved (backup ${backup})`);
+      return send(200, { ok: true, backup });
+    }
+    return send(200, { text: readPersona(dir, file), history: personaHistory(dir, file) });
+  }
+  if (area === 'schedule') {
+    if (!id) {
+      const status = await summoner('/status').catch(() => null);
+      const eff = readJson(env.SUMMONER_CONFIG || '/run/universal/summoner.json', cfg);
+      return send(200, {
+        tz: TZ, summoner: !!status,
+        bots: Object.fromEntries(botIds().map((b) => [b, {
+          nick: eff.bots[b].nick, shifts: eff.bots[b].shifts ?? [], guest: !!eff.bots[b].guest,
+          live: status?.bots?.[b] ?? null,
+        }])),
+      });
+    }
+    need(id);
+    if (file === 'summon' || file === 'dismiss') return send(200, await summoner(`/${file}/${id}?by=dashboard`, 'POST'));
+    if (req.method !== 'PUT') return send(405, { error: 'PUT only' });
+    const shifts = cleanShifts((await readBody(req)).shifts);
+    const merged = env.SUMMONER_CONFIG || '/run/universal/summoner.json';
+    const wrote = writeShifts(SUMMONER_EDITABLE, id, shifts);
+    writeShifts(merged, id, shifts);
+    if (!wrote) return send(409, { error: `${SUMMONER_EDITABLE} has no entry for ${id}` });
+    const reload = await summoner('/reload', 'POST').catch((e) => ({ error: e.message }));
+    log(`control: shifts for ${id}: ${JSON.stringify(shifts)} (reload: ${JSON.stringify(reload)})`);
+    return send(200, { shifts, reload });
+  }
+  return send(404, { error: 'not found' });
+}
+
 // ------------------------------------------------------------------ http --
 
 function range(qs) {
@@ -138,7 +233,7 @@ function range(qs) {
   return { from, to: now + 60_000, tz: TZ, now, hide };
 }
 
-http.createServer((req, res) => {
+http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://x');
   const send = (code, body, type = 'application/json') => {
     res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' });
@@ -164,11 +259,14 @@ http.createServer((req, res) => {
           limit: Number(qs.get('limit')) || 200,
         }));
       }
-      default: return send(404, { error: 'not found' });
+      default:
+        if (url.pathname.startsWith('/api/control/')) return await control(req, url, send);
+        return send(404, { error: 'not found' });
     }
   } catch (e) {
     log(`${url.pathname}: ${e.message}`);
-    return send(500, { error: e.message });
+    const code = e.code && e.code >= 400 && e.code < 500 ? e.code : e instanceof SyntaxError || /^(unknown|bad|shift|not an|file too|refusing|text must|villain|band|skills|days)/.test(e.message) ? 400 : 500;
+    return send(code, { error: e.message });
   }
 }).listen(PORT, () => log(`dashboard on :${PORT}, db ${DB_PATH}`));
 
