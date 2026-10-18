@@ -55,3 +55,27 @@ Switches:
 - `INSIGHTS_ENABLED=0` idles the dashboard.
 - `"insights": {"enabled": false}` in the summoner config stops the recording.
 - `INSIGHTS_PUBLISH=` (empty) on `image/deploy.sh` keeps the port unpublished.
+
+## Control pages (tools & skills, personas, schedule)
+
+The same login also opens three pages that change how the bots run. They edit
+the files the bots already read; there is no second copy.
+
+| Page | Edits | When it takes effect |
+|---|---|---|
+| Tools & skills | `openclaw.json`: `agents.entries.<bot>.tools` (allow/deny), `.skills`, and `channels.teamspeak.accounts.<bot>.tools` (music, band, villain, moderation switches) | when the gateway reloads its config |
+| Personas | `workspace/agents/<bot>/*.md`, `lines.json`, `moods.json` | the agent reads them on its next turn |
+| Schedule | `bots.<bot>.shifts` in `/config/summoner/config.json` and the merged `/run/universal/summoner.json` | at once: the summoner's `POST /reload` re-reads shifts, no restart |
+
+- Every save keeps the previous version: `openclaw.json.ctl-bak`,
+  `<bot>/.ctl-history/<file>.<timestamp>` (last 20, restorable from the page),
+  `config.json.ctl-bak`.
+- Writes need an `X-Requested-With` header (the page sends it) on top of basic auth.
+- Moderation switches only work for the groups in `allowGroups`; the page shows
+  them but does not edit them. The page cannot turn on band or villain tools for a
+  bot whose pack never configured them.
+- Saved shifts are the weekly baseline. The calendar (special nights) and the
+  daily start/end jitter still apply on top.
+- Skills are listed from `CONTROL_SKILL_DIRS` (default: the gateway's
+  `plugin-skills`, `skills`, workspace `skills`, and OpenClaw's bundled skills),
+  plus any skill a bot already names.
