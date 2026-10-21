@@ -191,6 +191,15 @@ struct Args {
     #[arg(long, default_value_t = false)]
     no_catchup: bool,
 
+    /// #4372: the voice kill switch at the core. Inbound voice packets are
+    /// dropped before the Opus decode, so no `SpeakerStart`/`SpeakerAudio`
+    /// ever reaches the gateway and the core idles at ~0% CPU. Text, roster
+    /// and every bridge command still work. Also settable with
+    /// `SEXTON_NO_AUDIO` (`1`/`true`/`yes`), which is what `run-sexton`
+    /// maps from the stack's `UNIVERSAL_VOICE=0`.
+    #[arg(long, default_value_t = false)]
+    no_audio: bool,
+
     /// #3342: bind address for the audio/voice bridge's WebSocket server
     /// (`PROTOCOL.md`) — the realtime voice runtime and `bridge-test` are
     /// its only consumers. Formerly `ts-bridge`'s `WS_BIND` env var, now a
@@ -1183,6 +1192,10 @@ async fn run_once(
     // `state` above. See `audio.rs` for why this can't meaningfully survive
     // a reconnect.
     let mut audio_state = AudioState::new()?;
+    let no_audio = args.no_audio || env_flag("SEXTON_NO_AUDIO");
+    if no_audio {
+        info!("SEXTON_NO_AUDIO / --no-audio set: inbound voice is not decoded or forwarded (#4372)");
+    }
     let mut last_roster_sig: Option<u64> = None;
     let mut last_channel_id: Option<u64> = None;
     audio::emit_state_and_roster(&mut con, event_tx, snapshot, &mut last_roster_sig, &mut last_channel_id).await;
@@ -1241,7 +1254,11 @@ async fn run_once(
             }
             Wake::Event(ev) => match ev {
                 Some(Ok(StreamItem::Audio(audio_pkt))) => {
-                    audio_state.on_audio_packet(mixer, event_tx, audio_pkt).await;
+                    // #4372: voice off at the core. The packet is dropped
+                    // here, before `handle_packet` would decode it.
+                    if !no_audio {
+                        audio_state.on_audio_packet(mixer, event_tx, audio_pkt).await;
+                    }
                 }
                 Some(Ok(StreamItem::BookEvents(events))) => {
                     // #3342: forward text messages to bridge subscribers

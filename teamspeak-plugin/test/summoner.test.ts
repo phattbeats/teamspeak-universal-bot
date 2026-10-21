@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseTeamSpeakCommand } from "../src/voice/commands.js";
-import { forwardHeard, selfBotId, summonerAction, summonerUrl } from "../src/tools/summoner.js";
+import { forwardHeard, selfBotId, summonerAction, summonerUrl, voiceModeAction } from "../src/tools/summoner.js";
 
 type Call = { url: string; body?: unknown };
 
@@ -57,5 +57,29 @@ describe("!vc dismiss", () => {
   it("dismisses this bot with no name, another with one", () => {
     expect(parseTeamSpeakCommand(msg("!vc dismiss"))).toMatchObject({ ok: true, parsed: { command: { kind: "vc-dismiss" } } });
     expect(parseTeamSpeakCommand(msg("!vc dismiss bexton"))).toMatchObject({ ok: true, parsed: { command: { kind: "vc-dismiss", bot: "bexton" } } });
+  });
+});
+
+describe("set_voice_mode -> POST /voice/<mode> (#4372)", () => {
+  it("posts off and on with the caller, and words the result for a person to say", async () => {
+    const calls: Call[] = [];
+    const off = await voiceModeAction(undefined, "off", "sexton for Brandon", fakeFetch(200, { voice: "off", changed: true }, calls));
+    expect(calls[0]?.url).toBe("http://ts-summoner:8099/voice/off?by=sexton%20for%20Brandon");
+    expect(off).toMatchObject({ ok: true, voice: "off" });
+    expect(String(off.note)).toMatch(/Text chat still works/u);
+
+    const already = await voiceModeAction(undefined, "off", "x", fakeFetch(200, { voice: "off", changed: false }, calls));
+    expect(String(already.note)).toMatch(/already off/u);
+
+    const on = await voiceModeAction({ url: "http://127.0.0.1:8099" }, "on", "x", fakeFetch(200, { voice: "on", changed: true }, calls));
+    expect(calls[2]?.url).toBe("http://127.0.0.1:8099/voice/on?by=x");
+    expect(on).toMatchObject({ ok: true, voice: "on" });
+    expect(String(on.note)).toMatch(/twenty seconds/u);
+  });
+
+  it("fails soft when the summoner is off or unreachable", async () => {
+    const calls: Call[] = [];
+    expect((await voiceModeAction({ enabled: false }, "off", "x")).ok).toBe(false);
+    expect((await voiceModeAction(undefined, "off", "x", fakeFetch(501, { error: "no" }, calls))).ok).toBe(false);
   });
 });

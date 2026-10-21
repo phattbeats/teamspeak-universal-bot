@@ -420,6 +420,29 @@ A couple of times a night, two regulars have a longer bit with each other: eight
 - **Who:** a pair that's already in the room together is 3x as likely. If one side is off shift, it can **drop in** for the bit (`dropIn`). It joins quietly, says its lines, and the summoner stops it again. That's how Lexton and the Sexton get banter outside midnight. A bot that's called out, on a bender, summoned, or dismissed never drops in. A pair that already played tonight waits while another pair can go.
 - **By hand:** `POST /event/banter` (any pair that can play now) or `POST /event/banter?who=lexton+sexton`. Plays are listed in `/status → events.banter`.
 
+## 5d. The voice kill switch (#4372)
+
+Two more routes on the summoner's HTTP API (`:8099`, in-container only).
+They are the live form of "disable all voice and whisper": the bots stay in
+the channel and keep answering text, nothing listens, nothing speaks.
+
+| route | does |
+| --- | --- |
+| `POST /voice/off[?by=<who>]` | writes `/config/.voice-off`, `supervisorctl stop whisper`. Every gateway account polls the file and goes text-only (no speaker sessions, inbound audio dropped, no TTS) within ~2 s. Returns `{voice:"off", changed, whisper, by}`; `changed:false` = it was already off (whisper is still told to stop). |
+| `POST /voice/on[?by=<who>]` | removes the file, `supervisorctl start whisper` (model load ~20 s, then wake-word turns work again). `{voice:"on", changed, ...}`. |
+| `GET /status` | now carries `voice: "on" \| "off"` (`"unknown"` in the old per-container layout, where the routes answer 501). |
+
+```sh
+docker exec teamspeak-universal-bot curl -s -X POST 'localhost:8099/voice/off?by=brandon'
+docker exec teamspeak-universal-bot curl -s -X POST 'localhost:8099/voice/on?by=brandon'
+```
+
+The bots call the same routes through the `set_voice_mode` tool ("Sexton, go
+quiet"). The file is the state: it survives a container restart, and
+`UNIVERSAL_VOICE=0` in the container env writes it at boot (and also starts
+the cores with `--no-audio`, which this switch cannot do live). Full table of
+the three layers: `image/README.md` → Voice off.
+
 ## 6. Deploy
 
 Summoner (PHATT-RAID):
@@ -458,6 +481,7 @@ leave existing keys alone, because Brandon hand-edits them. Keep the file
 | wrong hours | `/status → bots.<id>.shiftsToday` (today's shifts after the calendar) |
 | calendar edit ignored | `docker logs ts-summoner \| grep calendar.json`: a JSON error keeps the last good copy |
 | takeover stuck | `/status → events.takeover.active`; `POST /event/end?kind=takeover` |
+| bots deaf and mute, whisper EXITED | `/status → voice` is `off`: someone said "go quiet" or the container booted with `UNIVERSAL_VOICE=0`. `POST /voice/on` (#4372) |
 | Sexton stuck in jail after a crash | the next reconcile after `until` releases him; or move him by hand (Lexton's `move_client`, or the TS client) |
 | what the bot actually said | `docker logs <bot> \| grep "teamspeak announce"` |
 

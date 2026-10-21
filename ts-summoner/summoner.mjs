@@ -46,6 +46,7 @@ import {
 } from './guests.mjs';
 import { banterChance, banterConfig, banterKey, banterOpen, isStreaming, pickBanter } from './banter.mjs';
 import { Recorder } from './insights.mjs';
+import { createVoiceSwitch } from './voice.mjs';
 
 const CONFIG_PATH = process.env.SUMMONER_CONFIG || '/app/config.json';
 const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
@@ -327,6 +328,16 @@ async function exec(bot, cmd, timeoutMs) {
 }
 const program = (bot) => bot.program ?? 'sexton';
 const offDutyFile = (bot) => `${bot.dir ?? '/config'}/.off-duty`;
+
+// #4372: the voice kill switch (POST /voice/off|on, GET /status -> voice).
+// Only the one-container stack has a local whisper program to stop; in the
+// per-container layout the switch is refused (501) rather than half-done.
+const voiceSwitch = LOCAL ? createVoiceSwitch({
+  offFile: cfg.voice?.offFile ?? '/config/.voice-off',
+  program: cfg.voice?.whisperProgram ?? 'whisper',
+  exec: (cmd) => execLocal(cmd, 60_000),
+  log,
+}) : null;
 
 // The core is `[program:sexton]` in every bot container. The marker file tells
 // sexton-healthcheck the bot is off duty, not broken.
@@ -1298,6 +1309,7 @@ function status() {
   const today = local(now, cfg.tz);
   return {
     now: new Date(now).toISOString(), room: { ...room, clients: undefined },
+    voice: voiceSwitch ? voiceSwitch.state() : 'unknown', // #4372
     events: {
       takeover: { ...events.takeover, lastAt: iso(events.takeover.lastAt) },
       bender: { ...events.bender, lastAt: iso(events.bender.lastAt) },
@@ -1338,6 +1350,14 @@ http.createServer((req, res) => {
     const out = id === 'end' ? endEventByHand(kind) : startEventByHand(kind, qs.get('who'));
     return send(out.ok ? 200 : 409, out);
   }
+  // #4372: the voice kill switch. POST /voice/off | /voice/on[?by=<who>]
+  if (req.method === 'POST' && verb === 'voice') {
+    if (!voiceSwitch) return send(501, { error: 'the voice switch needs the one-container stack (cfg.local)' });
+    if (id !== 'on' && id !== 'off') return send(404, { error: 'POST /voice/on | POST /voice/off' });
+    const by = new URL(req.url, 'http://x').searchParams.get('by') || 'api';
+    voiceSwitch[id](by).then((out) => send(200, out)).catch((e) => send(500, { error: e.message }));
+    return;
+  }
   // #3963: the dashboard saved new shifts; take them without a restart (a restart would bounce whoever is on).
   if (req.method === 'POST' && verb === 'reload') {
     try {
@@ -1358,7 +1378,7 @@ http.createServer((req, res) => {
     req.on('end', () => { rec?.heard(by, body); send(200, { summoned: onHeard(by, body) }); });
     return;
   }
-  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /reload (re-read shifts) | POST /heard?by=<speaker> | POST /event/<takeover|bender|guest|banter>[?who=<guest>|<a>+<b>] | POST /event/end?kind=<takeover|bender|guest>' });
+  send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /voice/<on|off>[?by=] | POST /reload (re-read shifts) | POST /heard?by=<speaker> | POST /event/<takeover|bender|guest|banter>[?who=<guest>|<a>+<b>] | POST /event/end?kind=<takeover|bender|guest>' });
 }).listen(cfg.httpPort, () => log(`http on :${cfg.httpPort}`));
 
 setInterval(() => reconcile().catch((e) => log('reconcile', e.message)), cfg.reconcileSec * 1000);

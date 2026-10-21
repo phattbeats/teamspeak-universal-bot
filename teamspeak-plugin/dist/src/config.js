@@ -209,7 +209,15 @@ function nonNegativeMs(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 function resolveTeamSpeakVoiceMode(config) {
-  return config?.voice?.mode ?? DEFAULT_VOICE_MODE;
+  const voice = config?.voice;
+  if (voice?.mode === "off" || voice?.listen === false) {
+    return "off";
+  }
+  return voice?.mode ?? DEFAULT_VOICE_MODE;
+}
+function resolveTeamSpeakVoiceOffFile(config) {
+  const file = config?.voice?.offFile?.trim();
+  return file ? file : void 0;
 }
 function resolveAnnouncePaths(config, env = process.env) {
   const stateDir = env.OPENCLAW_STATE_DIR?.trim() || "/config/openclaw";
@@ -275,6 +283,7 @@ export {
   resolveTeamSpeakSpeechConfig,
   resolveTeamSpeakTranscriptionConfig,
   resolveTeamSpeakVoiceMode,
+  resolveTeamSpeakVoiceOffFile,
   resolveTeamSpeakWakeConfig,
   resolveVillainPaths
 };

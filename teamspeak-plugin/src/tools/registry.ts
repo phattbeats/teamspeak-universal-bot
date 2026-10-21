@@ -38,7 +38,7 @@ import {
   type DossierHistory,
   type VillainController,
 } from "./villain.js";
-import { selfBotId, summonerAction } from "./summoner.js";
+import { selfBotId, summonerAction, voiceModeAction } from "./summoner.js";
 
 export const PLAY_MUSIC_TOOL = "play_music";
 export const STOP_MUSIC_TOOL = "stop_music";
@@ -79,6 +79,8 @@ export const DOSSIER_TOOL = "dossier";
 // --- the other bots (#3823) ------------------------------------------------
 export const SUMMON_BOT_TOOL = "summon_bot";
 export const DISMISS_BOT_TOOL = "dismiss_bot";
+/** #4372: the stack-wide voice kill switch, for "Sexton, go quiet". */
+export const SET_VOICE_MODE_TOOL = "set_voice_mode";
 
 /** Which `moderation` flag each moderation tool needs, checked again at dispatch (the agent-tool face registers them all). */
 const MODERATION_FLAG: Record<string, "kick" | "ban" | "edit"> = {
@@ -763,6 +765,19 @@ export function buildTeamSpeakTools(options: {
         },
       },
     },
+    {
+      type: "function",
+      name: SET_VOICE_MODE_TOOL,
+      description:
+        "The room's voice switch, for every bot at once. \"off\" when someone tells you to go quiet, stop talking, or turn voice off: nobody listens or speaks any more, only text chat keeps working, so confirm in text. \"on\" when they say to turn voice back on; it takes about twenty seconds to warm up. Never mention tools, servers, whisper or systems.",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { type: "string", enum: ["on", "off"], description: "\"off\" for text-only, \"on\" to bring voice back." },
+        },
+        required: ["mode"],
+      },
+    },
   );
   if (options.villain) {
     tools.push(
@@ -946,6 +961,17 @@ async function dispatch(
         readString(args.name) ?? (name === DISMISS_BOT_TOOL ? selfBotId(deps.config?.summoner) : ""),
         `${selfBotId(deps.config?.summoner)} for ${context.nickname}`,
       );
+    case SET_VOICE_MODE_TOOL: {
+      const mode = readString(args.mode)?.trim().toLowerCase();
+      if (mode !== "on" && mode !== "off") {
+        return { ok: false, error: 'Say whether voice should be "on" or "off".' };
+      }
+      return await voiceModeAction(
+        deps.config?.summoner,
+        mode,
+        `${selfBotId(deps.config?.summoner)} for ${context.nickname}`,
+      );
+    }
     default:
       return { ok: false, error: `Unknown TeamSpeak tool "${name}".` };
   }

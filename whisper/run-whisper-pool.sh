@@ -13,7 +13,24 @@
 # point their transcriber URL at this port, not at a worker port directly;
 # set WHISPER_COALESCE_ENABLED=0 to go back to pinning each bot to its own
 # worker (the pre-#3607 behavior) without editing this script.
+#
+# #4372: the voice kill switch. UNIVERSAL_VOICE=0 (container env) or the live
+# file /config/.voice-off (ts-summoner's POST /voice/off) means no whisper at
+# all: exit 0 right away, which supervisord's `autorestart=unexpected` +
+# `exitcodes=0` reads as "done, stay down". `POST /voice/on` removes the file
+# and starts the program again. The gateway's accounts watch the same file.
 set -eu
+: "${UNIVERSAL_VOICE:=1}"
+: "${UNIVERSAL_VOICE_OFF_FILE:=/config/.voice-off}"
+case "$(printf '%s' "$UNIVERSAL_VOICE" | tr '[:upper:]' '[:lower:]')" in
+  0 | false | no | off)
+    echo "run-whisper-pool: voice off (UNIVERSAL_VOICE=$UNIVERSAL_VOICE); no whisper workers"
+    exit 0 ;;
+esac
+if [ -e "$UNIVERSAL_VOICE_OFF_FILE" ]; then
+  echo "run-whisper-pool: voice off ($UNIVERSAL_VOICE_OFF_FILE exists); no whisper workers"
+  exit 0
+fi
 : "${WHISPER_MODEL_PATH:=/opt/whisper/models/ggml-base.en.bin}"
 : "${WHISPER_VAD_MODEL:=/opt/whisper/models/ggml-silero-v5.1.2.bin}"
 : "${WHISPER_PROXY_SCRIPT:=/opt/whisper/coalescing-proxy.mjs}"
@@ -24,7 +41,10 @@ set -eu
 : "${WHISPER_VAD:=1}"
 : "${WHISPER_COALESCE_ENABLED:=1}"
 : "${WHISPER_COALESCE_PORT:=$((WHISPER_BASE_PORT + WHISPER_WORKERS))}"
-[ -s "$WHISPER_MODEL_PATH" ] || { echo "no model at $WHISPER_MODEL_PATH" >&2; exit 1; }
+# startsecs=0 on the program (so the exit 0 above counts as a clean exit, not
+# a failed start), which also means supervisord gives a crash no backoff of
+# its own; the sleeps before every exit 1 are that backoff.
+[ -s "$WHISPER_MODEL_PATH" ] || { echo "no model at $WHISPER_MODEL_PATH" >&2; sleep 10; exit 1; }
 VAD_ARGS=""
 if [ "$WHISPER_VAD" = "1" ] && [ -s "$WHISPER_VAD_MODEL" ]; then
   VAD_ARGS="--vad --vad-model $WHISPER_VAD_MODEL --vad-threshold ${WHISPER_VAD_THRESHOLD:-0.5} --vad-min-speech-duration-ms 250 --vad-min-silence-duration-ms 100 --vad-speech-pad-ms 60"
@@ -49,8 +69,10 @@ if [ "$WHISPER_COALESCE_ENABLED" = "1" ]; then
     node "$WHISPER_PROXY_SCRIPT" &
   pids="$pids $!"
 fi
-trap 'kill $pids 2>/dev/null' TERM INT
+# A stop from supervisord (POST /voice/off) is a clean exit, not a crash.
+trap 'kill $pids 2>/dev/null; exit 0' TERM INT
 # If any worker (or the proxy) dies, exit non-zero so supervisord (#3791:
 # the pool is program `whisper` in the one container) relaunches the pool.
 wait -n
+sleep 5
 exit 1

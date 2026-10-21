@@ -116,6 +116,17 @@ voice block can be copied across unchanged.
 }
 ```
 
+## Voice off (#4372)
+
+`voice.mode: "off"` (or `voice.listen: false`) is the third lane and does no
+voice at all: the bridge connects, the roster, the `!vc`/`!sexton` commands,
+the text turn and every tool work, no speaker session is ever opened and no
+transcriber or TTS is built. `voice.offFile` names a file (the stack's
+`/config/.voice-off`) that flips a running stt-tts or realtime lane into the
+same state while it exists and back when it goes, polled every 2 s. That is
+what the summoner's `POST /voice/off|on` and the `set_voice_mode` tool drive;
+see `image/README.md` → Voice off.
+
 ## The stt-tts lane
 
 `voice.mode: "stt-tts"` is the second lane (#3228). It exists because the

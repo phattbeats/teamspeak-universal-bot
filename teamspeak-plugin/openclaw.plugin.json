@@ -107,7 +107,8 @@
       "summon",
       "dossier",
       "summon_bot",
-      "dismiss_bot"
+      "dismiss_bot",
+      "set_voice_mode"
     ]
   }
 }

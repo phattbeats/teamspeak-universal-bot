@@ -18,7 +18,12 @@ import {
   type ResolvedSttProviderConfig,
 } from "./voice/stt-provider.js";
 
-export type TeamSpeakVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
+/**
+ * `"off"` (#4372): text-only. The bridge still connects for roster, chat and
+ * the tools, but no speaker session is ever opened, so nothing is transcribed
+ * and nothing is spoken. `voice.listen: false` is an alias for the same thing.
+ */
+export type TeamSpeakVoiceMode = "off" | "stt-tts" | "agent-proxy" | "bidi";
 
 export type TeamSpeakVoiceRealtimeToolPolicy = "safe-read-only" | "owner" | "none";
 
@@ -178,8 +183,18 @@ export type TeamSpeakVoiceStreamingConfig = {
 export type TeamSpeakVoiceConfig = {
   /** Enable TeamSpeak voice conversations (default: true). */
   enabled?: boolean;
-  /** Voice conversation mode. Default: agent-proxy. */
+  /** Voice conversation mode. Default: agent-proxy. `"off"` = text-only (#4372). */
   mode?: TeamSpeakVoiceMode;
+  /** `false` is an alias for `mode: "off"` (#4372): stay in the channel, answer text, never listen or speak. */
+  listen?: boolean;
+  /**
+   * The stack-wide voice kill switch (#4372). While this file exists the
+   * runtime behaves as `mode: "off"` without a restart, and when it goes
+   * away the configured mode comes back. Wiring: stack.mjs sets it to
+   * `/config/.voice-off` on every account; ts-summoner's `POST /voice/off`
+   * writes it. Unset = no live switch.
+   */
+  offFile?: string;
   /** Route voice turns through an existing OpenClaw TeamSpeak conversation. */
   agentSession?: TeamSpeakVoiceAgentSessionConfig;
   /** Optional LLM model override for TeamSpeak voice responses. */
@@ -809,7 +824,19 @@ function nonNegativeMs(value: number | undefined, fallback: number): number {
 export function resolveTeamSpeakVoiceMode(
   config: TeamSpeakAccountConfig | undefined,
 ): TeamSpeakVoiceMode {
-  return config?.voice?.mode ?? DEFAULT_VOICE_MODE;
+  const voice = config?.voice;
+  if (voice?.mode === "off" || voice?.listen === false) {
+    return "off";
+  }
+  return voice?.mode ?? DEFAULT_VOICE_MODE;
+}
+
+/** The live voice kill-switch file (#4372), if the account has one. */
+export function resolveTeamSpeakVoiceOffFile(
+  config: TeamSpeakAccountConfig | undefined,
+): string | undefined {
+  const file = config?.voice?.offFile?.trim();
+  return file ? file : undefined;
 }
 
 /** Where the announcer looks for requests and lines (#3824). */
