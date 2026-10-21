@@ -30,6 +30,11 @@ set -eu
 # mapping it to a flag here keeps it visible in the logged command line below,
 # same as every other knob this wrapper owns.
 : "${SEXTON_NO_CATCHUP:=0}"
+# #4372: UNIVERSAL_VOICE=0 at the stack level. The core then neither decodes
+# inbound Opus nor forwards PCM to the gateway, so it idles at ~0% CPU. Text,
+# roster and every bridge command still work. Boot-time only (a flag): the
+# live /voice/on|off switch covers whisper and the gateway, not the cores.
+: "${SEXTON_NO_AUDIO:=0}"
 
 # #3842 G1: in the shared `guest` container the face changes per visit.
 # guest-switch.mjs writes the visiting persona's nick and avatar here; it wins
@@ -80,6 +85,9 @@ fi
 case "$SEXTON_NO_CATCHUP" in
   1 | true | True | TRUE | yes | Yes | YES) set -- "$@" --no-catchup ;;
 esac
+case "$SEXTON_NO_AUDIO" in
+  1 | true | True | TRUE | yes | Yes | YES) set -- "$@" --no-audio ;;
+esac
 
-echo "run-sexton: $SEXTON_NICK -> $SEXTON_ADDR:$SEXTON_PORT channel='$SEXTON_CHANNEL' ws=$SEXTON_WS_BIND no_catchup=$SEXTON_NO_CATCHUP"
+echo "run-sexton: $SEXTON_NICK -> $SEXTON_ADDR:$SEXTON_PORT channel='$SEXTON_CHANNEL' ws=$SEXTON_WS_BIND no_catchup=$SEXTON_NO_CATCHUP no_audio=$SEXTON_NO_AUDIO"
 exec /usr/local/bin/sexton "$@"

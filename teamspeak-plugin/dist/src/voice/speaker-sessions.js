@@ -73,6 +73,25 @@ class SpeakerSessionManager {
     }
     this.roster = /* @__PURE__ */ new Map();
   }
+  /**
+   * Voice off (#4372): close every speaker session but keep the roster, so
+   * `who_is_here` and the human count still answer and nobody "joins" again
+   * when voice comes back. `resumeSessions` reopens one per roster entry the
+   * `shouldOpenSession` gate allows.
+   */
+  suspendSessions(reason) {
+    for (const clientId of Array.from(this.sessions.keys())) {
+      this.closeSession(clientId, reason);
+    }
+  }
+  resumeSessions() {
+    if (this.closed) {
+      return;
+    }
+    for (const entry of this.roster.values()) {
+      this.openSession(entry);
+    }
+  }
   close(reason) {
     this.closed = true;
     this.closeAll(reason);

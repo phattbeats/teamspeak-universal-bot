@@ -370,7 +370,7 @@ RUN cd /opt/suno-api \
 COPY ts-summoner/summoner.mjs ts-summoner/schedule.mjs ts-summoner/story.mjs \
      ts-summoner/variety.mjs ts-summoner/guests.mjs ts-summoner/banter.mjs \
      ts-summoner/insights.mjs ts-summoner/insights-stats.mjs ts-summoner/insights-web.mjs \
-     ts-summoner/control.mjs \
+     ts-summoner/control.mjs ts-summoner/voice.mjs \
      ts-summoner/config.json                                   /opt/ts-summoner/
 COPY ts-summoner/insights/                                     /opt/ts-summoner/insights/
 COPY ts-summoner/live/                                         /opt/ts-summoner/live/

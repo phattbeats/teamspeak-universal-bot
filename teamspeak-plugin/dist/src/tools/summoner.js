@@ -70,9 +70,34 @@ function forwardHeard(config, text, by, log, fetchFn = fetch) {
     }
   }).catch(() => void 0);
 }
+async function voiceModeAction(config, mode, by, fetchFn = fetch) {
+  const base = summonerUrl(config);
+  if (!base) {
+    return { ok: false, error: "The voice switch is out of reach right now." };
+  }
+  try {
+    const { status, json } = await post(base, `/voice/${mode}?by=${encodeURIComponent(by)}`, void 0, fetchFn);
+    if (status >= 300) {
+      return { ok: false, error: "Couldn't reach the voice switch just now." };
+    }
+    const changed = json.changed !== false;
+    return mode === "off" ? {
+      ok: true,
+      voice: "off",
+      note: changed ? "Voice is off for every bot: nobody listens or speaks until it is switched back on. Text chat still works, so say so in text." : "Voice was already off."
+    } : {
+      ok: true,
+      voice: "on",
+      note: changed ? "Voice is coming back for every bot; the ears take about twenty seconds to warm up." : "Voice was already on."
+    };
+  } catch {
+    return { ok: false, error: "Couldn't reach the voice switch just now." };
+  }
+}
 export {
   forwardHeard,
   selfBotId,
   summonerAction,
-  summonerUrl
+  summonerUrl,
+  voiceModeAction
 };

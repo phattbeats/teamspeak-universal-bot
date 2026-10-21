@@ -320,6 +320,7 @@ describe("TeamSpeakVoiceRuntime realtime tools", () => {
       "send_text",
       "summon_bot",
       "dismiss_bot",
+      "set_voice_mode",
     ]);
     runtime.stop();
   });

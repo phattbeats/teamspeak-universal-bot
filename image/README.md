@@ -20,7 +20,7 @@ image/gateway/                 the gateway's seed config and core patches
 | --- | --- | --- |
 | `core-<id>` | one Rust core per bot: its TeamSpeak identity, nick, avatar, bridge socket on `127.0.0.1:91xx` | the `sexton`/`bexton`/`lexton`/`guest` containers |
 | `gateway` | ONE OpenClaw gateway: agent + `channels.teamspeak.accounts.<id>` + binding per bot | one gateway per container |
-| `whisper` | 2 whisper.cpp workers + the coalescing proxy on :8082 (#3921) | the `whisper` container |
+| `whisper` | 2 whisper.cpp workers + the coalescing proxy on :8082 (#3921); down entirely while voice is off (#4372) | the `whisper` container |
 | `pot` | bgutil POT provider for yt-dlp | per container |
 | `suno-api` | gcui-art/suno-api + `suno-api/phattbeats.patch`, chromium, on :3000 | the `suno-api` container |
 | `summoner` | ts-summoner: shifts, summons, scenes, guests; starts/stops `core-<id>` | the `ts-summoner` container |
@@ -32,11 +32,45 @@ image/gateway/                 the gateway's seed config and core patches
 | --- | --- |
 | `config/bots.json` | which bots run; bridge ports (assigned once, never move); `identity` sharing (the guests share one); `menace`, `noCatchup`, `noWelcome`, `autostart`, `nick`, `env` |
 | `config/bots/<id>/` | `sexton-id.txt` (the TeamSpeak identity), `.announce`, `.off-duty`, band songs, villain state |
+| `config/.voice-off` | the voice kill switch (#4372): exists = voice off for the whole stack; `POST /voice/off\|on` on the summoner writes/removes it |
 | `config/openclaw/` | the gateway's `openclaw.json`, agents (transcripts), workspaces |
 | `config/summoner/` | `config.json` (shifts etc., editable), `live/`, `state/`, `query-pass.txt` |
 | `config/suno-api.env` | Suno cookie, 2Captcha key, proxy (0600) |
 | `config/personas/<id>/` | optional: a pack added or overridden without a rebuild |
 | `logs/<id>/` | each core's room log |
+
+## Voice off (#4372): text-only mode, zero STT/TTS CPU
+
+Brandon: "need a way to disable all voice and whisper. needed in times where
+we dont want the bots talking, as well as saving CPU." One switch, three
+layers; the bots stay in the channel and still answer text either way.
+
+| layer | off means | how |
+| --- | --- | --- |
+| stack | no `whisper-server` processes at all (`run-whisper-pool` exits 0; `[program:whisper]` is `autorestart=unexpected`, `exitcodes=0`; the healthcheck reports `whisper: off (voice off)` and stays healthy) | `UNIVERSAL_VOICE=0` in the container env, or the file `/config/.voice-off` |
+| gateway | every account goes `voice.mode: "off"`: the bridge stays connected for roster, chat and tools, inbound audio frames are dropped before any transcriber, nothing is synthesized, no `voice_audio` leaves | the same file, polled every 2 s (`voice.offFile`, wired by `stack.mjs`); or pin one account with `voice.mode: "off"` / `voice.listen: false` |
+| core | `sexton --no-audio` (`SEXTON_NO_AUDIO=1`): inbound Opus is dropped before decode, nothing forwarded, ~0% CPU | boot-time only: `stack.mjs` sets it on every core when `UNIVERSAL_VOICE=0` |
+
+**Live, no restart:**
+
+```sh
+docker exec teamspeak-universal-bot curl -s -X POST localhost:8099/voice/off   # {"voice":"off","changed":true,...}
+docker exec teamspeak-universal-bot curl -s -X POST localhost:8099/voice/on    # whisper reloads its model, ~20 s
+docker exec teamspeak-universal-bot curl -s localhost:8099/status | grep -o '"voice":"[a-z]*"'
+```
+
+Or say it: "Sexton, go quiet" / "turn voice back on" is the `set_voice_mode`
+agent tool, which calls the same two routes (it works from text chat too,
+which is how you turn voice back on when nobody is listening). `!sexton
+status` shows `voice off — text only` while it is off.
+
+What stays off across a restart: the file. `UNIVERSAL_VOICE=0` writes it at
+boot, and only `POST /voice/on` (or deleting it) removes it, so a container
+that was switched off by hand comes back off. The cores' `--no-audio` is a
+flag, not live: with the env switch on they idle; with the HTTP switch only,
+each core still decodes (~0.5% CPU per bot) while whisper and the gateway
+are off. `supervisorctl start whisper` with the file still there exits 0
+again, by design.
 
 ## Adding a bot
 
@@ -85,7 +119,7 @@ image/gateway/            the in-container OpenClaw gateway's seed config + note
 | --- | --- | --- |
 | Sexton bot | `sexton` container | the `sexton` binary |
 | audio bridge (#3174) | `ts-bridge` container | same binary — folded in by #3342 |
-| whisper.cpp + `ggml-base.en.bin` (#3228) | `whisper` container, model on a host mount | `/opt/whisper`, weights **baked into the image** — and since #3598 run as the shared `whisper` pool container again (same image, `whisper/deploy.sh`), with the in-container copy left down (`WHISPER_ENABLED=0`) |
+| whisper.cpp + `ggml-base.en.bin` (#3228) | `whisper` container, model on a host mount | `/opt/whisper`, weights **baked into the image** — since #3791 the `whisper` supervisor program in this container; down entirely under the voice switch (`UNIVERSAL_VOICE=0`, #4372) |
 | ffmpeg, yt-dlp (#3176) | nowhere — never installed | `/usr/local/bin`, on PATH for the plugin |
 | bgutil POT provider | nowhere | `/opt/bgutil-pot`, served on `:4416` |
 | OpenClaw gateway + `teamspeak` plugin | the main `OpenClaw` container, plugin source in its own repo | the base image, plugin baked in from [`teamspeak-plugin/`](../teamspeak-plugin/) (#3580) at `/opt/openclaw-teamspeak-plugin` |
@@ -133,7 +167,7 @@ things different, all env:
 | `SEXTON_EXCLUDE_WAKE_NAMES` | `Bexton,band leader,maestro` (never answer the other bot's name) | `Sexton,Henchman` |
 | `SEXTON_BAND_ENABLED` | `0` | `1` — writes `tools.band` into the channel block, reusing the TTS block's MiniMax key |
 | `SEXTON_WHISPER_URL` | `http://whisper:8082/inference` | `http://whisper:8082/inference` — both bots share the pool's coalescing proxy (#3607), which fans one decode out to both when they segment the same utterance and otherwise round-robins across the two workers; first-boot only, the mounted `openclaw.json` wins afterwards |
-| `WHISPER_ENABLED` | `0` | `0` — the in-container whisper-server stays down while the pool is the transcriber |
+| `UNIVERSAL_VOICE` | `1` | `1` — `0` is the voice kill switch (#4372): no whisper, text-only accounts, cores with `--no-audio`. (Replaces `WHISPER_ENABLED`, which nothing has read since #3791.) |
 
 ### The shared whisper pool (#3598)
 

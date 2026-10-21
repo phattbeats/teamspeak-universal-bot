@@ -25,7 +25,11 @@ import {
   type ResolvedTeamSpeakAccount,
 } from "./accounts.js";
 import { createWebSocketBridgeSocket } from "./bridge/ws-socket.js";
-import { isTeamSpeakVoiceEnabled, resolveTeamSpeakVoiceMode } from "./config.js";
+import {
+  isTeamSpeakVoiceEnabled,
+  resolveTeamSpeakVoiceMode,
+  resolveTeamSpeakVoiceOffFile,
+} from "./config.js";
 import { getOptionalTeamSpeakRuntime } from "./runtime.js";
 import { TeamSpeakRealtimeSpeakerSession } from "./voice/realtime-speaker-session.js";
 import { createTeamSpeakTextTurn } from "./text-turn.js";
@@ -61,6 +65,9 @@ export function startTeamSpeakVoiceRuntime(params: {
   stopTeamSpeakVoiceRuntime(account.accountId);
 
   const mode = resolveTeamSpeakVoiceMode(account.config);
+  if (mode === "off") {
+    return startTeamSpeakTextOnlyRuntime(params);
+  }
   if (mode === "stt-tts") {
     return startTeamSpeakSttTtsRuntime(params);
   }
@@ -86,6 +93,7 @@ export function startTeamSpeakVoiceRuntime(params: {
       ? { minBargeInAudioEndMs: realtimeConfig.minBargeInAudioEndMs }
       : {}),
     ...(params.onConnectionChange ? { onConnectionChange: params.onConnectionChange } : {}),
+    voiceOffFile: resolveTeamSpeakVoiceOffFile(account.config),
     log: (message) => logger.info(message),
     createSpeakerSession: (client, playback, tools) =>
       new TeamSpeakRealtimeSpeakerSession({
@@ -174,6 +182,7 @@ function startTeamSpeakSttTtsRuntime(params: {
     config: account.config,
     createSocket: createWebSocketBridgeSocket,
     ...(params.onConnectionChange ? { onConnectionChange: params.onConnectionChange } : {}),
+    voiceOffFile: resolveTeamSpeakVoiceOffFile(account.config),
     providerId: () => `${lane.lane.transcriberId}+${lane.lane.speechProviderId}`,
     onChatMessage: createTeamSpeakTextTurn({
       agent: hostRuntime.agent,
@@ -186,6 +195,61 @@ function startTeamSpeakSttTtsRuntime(params: {
     createSpeakerSession: (client, playback) => lane.lane.createSpeakerSession(client, playback),
     // The band leader's announcement goes through the lane's own TTS (#3554).
     synthesize: (text) => lane.lane.synthesizer.synthesize(text),
+  });
+  runtimes.set(account.accountId, runtime);
+  runtime.start();
+  return runtime;
+}
+
+/**
+ * Text-only (#4372): `voice.mode: "off"` / `voice.listen: false`.
+ *
+ * The same runtime as the two voice lanes with nothing behind
+ * `createSpeakerSession`: the bridge connects, the roster and the chat lane
+ * and every tool work, and no transcriber or TTS is ever built, so a room
+ * with voice off costs no STT/TTS CPU at all. Brandon (PHA-3783): "need a
+ * way to disable all voice and whisper ... times where we dont want the bots
+ * talking, as well as saving CPU." The old `voice.enabled=false` returned
+ * before the bridge connected, which took the text chat down with it.
+ */
+function startTeamSpeakTextOnlyRuntime(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedTeamSpeakAccount;
+  agentId: string;
+  sessionKey?: string | undefined;
+  onConnectionChange?: ((connected: boolean) => void) | undefined;
+}): TeamSpeakVoiceRuntime {
+  const { account } = params;
+  const hostRuntime = getOptionalTeamSpeakRuntime();
+  if (!hostRuntime) {
+    logger.warn(
+      `teamspeak: voice.mode=off for ${account.accountId} without the host plugin runtime; chat commands only, no agent text turns`,
+    );
+  }
+  const runtime = new TeamSpeakVoiceRuntime({
+    accountId: account.accountId,
+    config: account.config,
+    createSocket: createWebSocketBridgeSocket,
+    ...(params.onConnectionChange ? { onConnectionChange: params.onConnectionChange } : {}),
+    voiceOff: true,
+    providerId: () => "off",
+    ...(hostRuntime
+      ? {
+          onChatMessage: createTeamSpeakTextTurn({
+            agent: hostRuntime.agent,
+            accountId: account.accountId,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey ?? `teamspeak:${account.accountId}`,
+            log: (message) => logger.info(message),
+          }),
+        }
+      : {}),
+    log: (message) => logger.info(message),
+    createSpeakerSession: (client) => {
+      throw new Error(
+        `teamspeak: voice is off for ${account.accountId}; no speaker session for clientId=${client.clientId}`,
+      );
+    },
   });
   runtimes.set(account.accountId, runtime);
   runtime.start();

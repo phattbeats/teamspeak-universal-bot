@@ -5,6 +5,7 @@
  * the channel reaches it over HTTP on the phattvip network:
  *
  *   POST /summon/<bot>?by=  POST /dismiss/<bot>?by=  POST /heard?by= (body: transcript)
+ *   POST /voice/off?by=     POST /voice/on?by=      (#4372: the stack-wide voice kill switch)
  *
  * `<bot>` may be any name in the summoner's config (`lex`, `luthor`, `bex`),
  * so the word lists and the trash-talk cooldown live in one place: there.
@@ -138,4 +139,46 @@ export function forwardHeard(
       }
     })
     .catch(() => undefined);
+}
+
+/**
+ * The stack-wide voice kill switch (#4372): `set_voice_mode`. The summoner
+ * writes `/config/.voice-off`, stops the whisper pool and every bot's runtime
+ * goes text-only within a couple of seconds; "on" reverses it (whisper takes
+ * ~20 s to load its model again). Worded for the agent to relay.
+ */
+export async function voiceModeAction(
+  config: TeamSpeakSummonerConfig | undefined,
+  mode: "on" | "off",
+  by: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<SummonerResult> {
+  const base = summonerUrl(config);
+  if (!base) {
+    return { ok: false, error: "The voice switch is out of reach right now." };
+  }
+  try {
+    const { status, json } = await post(base, `/voice/${mode}?by=${encodeURIComponent(by)}`, undefined, fetchFn);
+    if (status >= 300) {
+      return { ok: false, error: "Couldn't reach the voice switch just now." };
+    }
+    const changed = json.changed !== false;
+    return mode === "off"
+      ? {
+          ok: true,
+          voice: "off",
+          note: changed
+            ? "Voice is off for every bot: nobody listens or speaks until it is switched back on. Text chat still works, so say so in text."
+            : "Voice was already off.",
+        }
+      : {
+          ok: true,
+          voice: "on",
+          note: changed
+            ? "Voice is coming back for every bot; the ears take about twenty seconds to warm up."
+            : "Voice was already on.",
+        };
+  } catch {
+    return { ok: false, error: "Couldn't reach the voice switch just now." };
+  }
 }

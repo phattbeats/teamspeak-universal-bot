@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { TeamSpeakBridgeClient } from "../bridge/client.js";
 import {
   areTeamSpeakToolsEnabled,
@@ -39,11 +40,14 @@ import {
   SpeakerSessionManager
 } from "./speaker-sessions.js";
 const DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
+const DEFAULT_VOICE_OFF_POLL_MS = 2e3;
 const CHANNEL_TREE_TIMEOUT_MS = 4e3;
 const AGENT_TOOL_ITEM_ID = "teamspeak-agent-turn";
 class TeamSpeakVoiceRuntime {
   constructor(params) {
     this.params = params;
+    this.voiceOffPinned = params.voiceOff === true;
+    this.voiceOff = this.voiceOffPinned;
     this.playback = new RoomPlaybackQueue({
       sink: {
         writeVoiceAudio: (pcm) => this.bridge.sendVoiceAudio(pcm),
@@ -55,7 +59,7 @@ class TeamSpeakVoiceRuntime {
     this.sessions = new SpeakerSessionManager({
       createSession: (client) => this.params.createSpeakerSession(client, this.playback, this.tools),
       selfClientId: () => this.selfClientId,
-      shouldOpenSession: (client) => !this.isExcludedNickname(client.nickname),
+      shouldOpenSession: (client) => !this.voiceOff && !this.isExcludedNickname(client.nickname),
       onRosterEvent: (event) => this.handleRosterEvent(event),
       onSessionError: (clientId, error) => this.params.log?.(
         `teamspeak voice: speaker session error clientId=${clientId}: ${error.message}`
@@ -97,7 +101,7 @@ class TeamSpeakVoiceRuntime {
           this.sessions.applyRoster(roster);
         },
         onSpeakerStart: (clientId) => {
-          if (this.parked) {
+          if (this.parked || this.voiceOff) {
             return;
           }
           this.handleSpeakerStart(clientId);
@@ -106,14 +110,14 @@ class TeamSpeakVoiceRuntime {
           if (this.otherBotsSpeaking.delete(clientId)) {
             this.playback.otherBotSpeaking = this.otherBotsSpeaking.size > 0;
           }
-          if (this.parked) {
+          if (this.parked || this.voiceOff) {
             return;
           }
           const session = this.sessions.get(clientId);
           session?.handleSpeakerStop?.();
         },
         onSpeakerAudio: (header, pcm) => {
-          if (this.parked) {
+          if (this.parked || this.voiceOff) {
             return;
           }
           const session = this.sessions.get(header.clientId);
@@ -182,6 +186,15 @@ class TeamSpeakVoiceRuntime {
    * the only things still answered are `!vc join` / `join_voice`.
    */
   parked = false;
+  /**
+   * Voice off (#4372): deaf and mute, but present. Unlike parked, chat still
+   * gets a turn and the tools still run; only audio in and speech out stop.
+   * `voiceOffPinned` is the config's own `mode: "off"`, which the live file
+   * cannot switch back on.
+   */
+  voiceOff;
+  voiceOffPinned;
+  voiceOffTimer;
   lastRoster = [];
   channelTreeWaiters = [];
   selfClientId;
@@ -248,10 +261,15 @@ class TeamSpeakVoiceRuntime {
     }
     this.bridge.connect();
     this.announcer?.start();
+    this.startVoiceOffWatch();
   }
   stop() {
     if (this.access) {
       unregisterTeamSpeakToolAccess(this.params.accountId, this.access);
+    }
+    if (this.voiceOffTimer) {
+      clearInterval(this.voiceOffTimer);
+      this.voiceOffTimer = void 0;
     }
     this.announcer?.stop();
     this.band?.close();
@@ -421,7 +439,7 @@ class TeamSpeakVoiceRuntime {
    */
   createRoomSpeaker(synthesize, owner) {
     return async (text) => {
-      if (this.parked) {
+      if (this.parked || this.voiceOff) {
         return void 0;
       }
       const speech = await synthesize(text);
@@ -468,6 +486,55 @@ class TeamSpeakVoiceRuntime {
   get isParked() {
     return this.parked;
   }
+  /** True while voice is off (#4372): no listening, no speaking, text still answered. */
+  get isVoiceOff() {
+    return this.voiceOff;
+  }
+  /**
+   * Flip voice off or on (#4372). Off closes every speaker session (so no
+   * segment is ever closed and no transcription requested), cuts whatever is
+   * mid-playback and stops the music. On reopens a session per roster entry.
+   * A config-pinned off (`voice.mode: "off"`) stays off whatever asks.
+   */
+  setVoiceOff(off, reason) {
+    if (this.voiceOffPinned && !off) {
+      return;
+    }
+    if (this.voiceOff === off) {
+      return;
+    }
+    this.voiceOff = off;
+    if (off) {
+      this.sessions.suspendSessions(`voice-off:${reason}`);
+      this.playback.handleBargeIn("voice-off", { force: true });
+      this.music?.stop(`voice-off:${reason}`);
+    } else if (!this.parked) {
+      this.sessions.resumeSessions();
+    }
+    this.params.log?.(
+      `teamspeak voice: voice ${off ? "off" : "on"} reason=${reason} channel=${this.state.channelName}`
+    );
+  }
+  /** Poll the kill-switch file; the first read happens right away. */
+  startVoiceOffWatch() {
+    const file = this.params.voiceOffFile;
+    if (!file || this.voiceOffPinned || this.voiceOffTimer) {
+      return;
+    }
+    const exists = this.params.fileExists ?? existsSync;
+    const check = () => {
+      let off = false;
+      try {
+        off = exists(file);
+      } catch {
+        off = false;
+      }
+      this.setVoiceOff(off, `file:${file}`);
+    };
+    check();
+    this.voiceOffTimer = setInterval(check, this.params.voiceOffPollMs ?? DEFAULT_VOICE_OFF_POLL_MS);
+    this.voiceOffTimer.unref?.();
+  }
   /**
    * Sit out, or come back.
    *
@@ -485,6 +552,9 @@ class TeamSpeakVoiceRuntime {
       this.music?.stop(reason);
     } else {
       this.sessions.applyRoster(this.lastRoster);
+      if (!this.voiceOff) {
+        this.sessions.resumeSessions();
+      }
     }
     this.params.log?.(
       `teamspeak voice: ${parked ? "parked" : "unparked"} reason=${reason} channel=${this.state.channelName}`
@@ -506,6 +576,7 @@ class TeamSpeakVoiceRuntime {
       bargeInEnabled: session?.bargeInEnabled ?? false,
       muted: this.muted,
       parked: this.parked,
+      voiceOff: this.voiceOff,
       playbackActive: this.playback.isActive(),
       ...this.music ? { music: describeMusic(this.music) } : {}
     };

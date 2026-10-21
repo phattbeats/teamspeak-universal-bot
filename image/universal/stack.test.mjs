@@ -11,11 +11,13 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..', '..');
 
-function stack(root, mode) {
+function stack(root, mode, extraEnv = {}) {
   return execFileSync('node', [join(here, 'stack.mjs'), mode], {
     encoding: 'utf8',
     env: {
       ...process.env,
+      UNIVERSAL_VOICE: '1',
+      ...extraEnv,
       UNIVERSAL_CONFIG_DIR: `${root}/config`,
       UNIVERSAL_RUN_DIR: `${root}/run`,
       UNIVERSAL_PERSONA_ROOT: join(repo, 'personas'),
@@ -114,4 +116,38 @@ test('gateway: a bot switched off in bots.json keeps its account, disabled', () 
   assert.equal(cfg.channels.teamspeak.accounts.trixie.enabled, false);
   assert.equal(cfg.channels.teamspeak.accounts.sexton.enabled, undefined);
   assert.ok(!cfg.bindings.some((b) => b.agentId === 'trixie'));
+});
+
+// #4372: the voice kill switch at the stack level.
+test('voice: every account and the summoner are wired to the one kill-switch file; cores keep their audio', () => {
+  const root = fresh();
+  stack(root, 'supervisor');
+  stack(root, 'gateway');
+  const cfg = json(`${root}/config/openclaw/openclaw.json`);
+  for (const a of Object.values(cfg.channels.teamspeak.accounts)) assert.equal(a.voice.offFile, `${root}/config/.voice-off`);
+  assert.equal(cfg.channels.teamspeak.accounts.sexton.voice.mode, 'stt-tts'); // the seed's, untouched
+  assert.deepEqual(json(`${root}/run/summoner.json`).voice, { offFile: `${root}/config/.voice-off`, whisperProgram: 'whisper' });
+  assert.ok(!existsSync(`${root}/config/.voice-off`));
+  assert.doesNotMatch(readFileSync(`${root}/run/bots.conf`, 'utf8'), /SEXTON_NO_AUDIO/);
+});
+
+test('voice: UNIVERSAL_VOICE=0 writes the kill-switch file and starts every core with no audio', () => {
+  const root = fresh();
+  const out = stack(root, 'supervisor', { UNIVERSAL_VOICE: '0' });
+  assert.match(out, /voice OFF/);
+  assert.ok(existsSync(`${root}/config/.voice-off`));
+  const conf = readFileSync(`${root}/run/bots.conf`, 'utf8');
+  const cores = conf.match(/\[program:core-/g).length;
+  assert.equal(conf.match(/SEXTON_NO_AUDIO="1"/g).length, cores);
+  // A pinned account stays pinned; the switch never rewrites voice.mode.
+  stack(root, 'gateway', { UNIVERSAL_VOICE: '0' });
+  const cfg = json(`${root}/config/openclaw/openclaw.json`);
+  cfg.channels.teamspeak.accounts.lexton.voice.mode = 'off';
+  writeFileSync(`${root}/config/openclaw/openclaw.json`, JSON.stringify(cfg));
+  stack(root, 'gateway', { UNIVERSAL_VOICE: '1' });
+  const again = json(`${root}/config/openclaw/openclaw.json`).channels.teamspeak.accounts;
+  assert.equal(again.lexton.voice.mode, 'off');
+  assert.equal(again.lexton.voice.offFile, `${root}/config/.voice-off`);
+  // The file outlives the env switch: voice stays off until POST /voice/on.
+  assert.match(stack(root, 'supervisor', { UNIVERSAL_VOICE: '1' }), /voice OFF .*exists/);
 });

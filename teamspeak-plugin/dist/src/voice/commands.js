@@ -83,7 +83,7 @@ function formatStatusReply(snapshot) {
   return [
     `Sexton \u2014 ${snapshot.bridgeConnected ? "connected" : "disconnected"}${snapshot.channelName ? ` to ${snapshot.channelName}` : ""}`,
     `voice: ${snapshot.voiceMode}${snapshot.providerId ? ` via ${snapshot.providerId}` : ""}${snapshot.muted ? " (muted)" : ""}`,
-    snapshot.parked ? `sitting out \u2014 not listening (${snapshot.humanParticipants} in channel); !vc join brings me back` : `listening to ${snapshot.speakerSessions} of ${snapshot.humanParticipants} in channel`,
+    snapshot.parked ? `sitting out \u2014 not listening (${snapshot.humanParticipants} in channel); !vc join brings me back` : snapshot.voiceOff ? `voice off \u2014 text only (${snapshot.humanParticipants} in channel)` : `listening to ${snapshot.speakerSessions} of ${snapshot.humanParticipants} in channel`,
     `wake name ${snapshot.wakeNameRequired ? `required (${snapshot.wakeNames.join(", ") || "none configured"})` : "not required"}`,
     `barge-in ${snapshot.bargeInEnabled ? "on" : "off"}, playback ${snapshot.playbackActive ? "active" : "idle"}`,
     ...snapshot.music ? [`music: ${snapshot.music}`] : []

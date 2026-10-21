@@ -150,6 +150,8 @@ export type StatusSnapshot = {
   muted: boolean;
   /** Sitting out: deaf on both lanes until `!vc join`. */
   parked?: boolean | undefined;
+  /** Voice off (#4372): text-only, no listening or speaking. */
+  voiceOff?: boolean | undefined;
   playbackActive: boolean;
   /** Music lane summary, omitted when the music tools are disabled. */
   music?: string | undefined;
@@ -162,7 +164,9 @@ export function formatStatusReply(snapshot: StatusSnapshot): string {
     `voice: ${snapshot.voiceMode}${snapshot.providerId ? ` via ${snapshot.providerId}` : ""}${snapshot.muted ? " (muted)" : ""}`,
     snapshot.parked
       ? `sitting out — not listening (${snapshot.humanParticipants} in channel); !vc join brings me back`
-      : `listening to ${snapshot.speakerSessions} of ${snapshot.humanParticipants} in channel`,
+      : snapshot.voiceOff
+        ? `voice off — text only (${snapshot.humanParticipants} in channel)`
+        : `listening to ${snapshot.speakerSessions} of ${snapshot.humanParticipants} in channel`,
     `wake name ${snapshot.wakeNameRequired ? `required (${snapshot.wakeNames.join(", ") || "none configured"})` : "not required"}`,
     `barge-in ${snapshot.bargeInEnabled ? "on" : "off"}, playback ${snapshot.playbackActive ? "active" : "idle"}`,
     ...(snapshot.music ? [`music: ${snapshot.music}`] : []),
