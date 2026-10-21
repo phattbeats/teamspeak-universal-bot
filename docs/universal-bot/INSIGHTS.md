@@ -56,13 +56,14 @@ Switches:
 - `"insights": {"enabled": false}` in the summoner config stops the recording.
 - `INSIGHTS_PUBLISH=` (empty) on `image/deploy.sh` keeps the port unpublished.
 
-## Control pages (tools & skills, personas, schedule)
+## Control pages (bots, tools & skills, personas, schedule)
 
-The same login also opens three pages that change how the bots run. They edit
+The same login also opens four pages that change how the bots run. They edit
 the files the bots already read; there is no second copy.
 
 | Page | Edits | When it takes effect |
 |---|---|---|
+| Bots (#4374) | `/config/bots.json`: enable/disable, nick, channel, identity, port, flags, env; add a bot from a pack; remove. Per-bot and stack-wide voice switches. See [ADMIN-DASHBOARD.md](ADMIN-DASHBOARD.md) | at once: `stack.mjs rewire` + `supervisorctl update` restarts only the bot you changed; survives a container restart |
 | Tools & skills | `openclaw.json`: `agents.entries.<bot>.tools` (allow/deny), `.skills`, and `channels.teamspeak.accounts.<bot>.tools` (music, band, villain, moderation switches) | when the gateway reloads its config |
 | Personas | `workspace/agents/<bot>/*.md`, `lines.json`, `moods.json` | the agent reads them on its next turn |
 | Schedule | `bots.<bot>.shifts` in `/config/summoner/config.json` and the merged `/run/universal/summoner.json` | at once: the summoner's `POST /reload` re-reads shifts, no restart |

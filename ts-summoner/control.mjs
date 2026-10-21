@@ -6,7 +6,8 @@
 //   tools + skills  /config/openclaw/openclaw.json   agents.entries.<id>, channels.teamspeak.accounts.<id>.tools
 //   persona         /config/openclaw/workspace/agents/<id>/*.md (+ lines.json, moods.json)
 //   shifts          /config/summoner/config.json     bots.<id>.shifts (and the merged /run copy the summoner reads)
-// Each write keeps the previous version (openclaw.json.ctl-bak, <bot>/.ctl-history/, config.json.ctl-bak).
+//   bots (#4374)    /config/bots.json                the list itself: enabled, nick, channel, identity, port, flags, env
+// Each write keeps the previous version (openclaw.json.ctl-bak, <bot>/.ctl-history/, config.json.ctl-bak, bots.json.ctl-bak).
 // Pure helpers take their inputs as arguments so test/control.test.mjs needs no container.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
@@ -265,4 +266,191 @@ export function writeShifts(path, id, shifts) {
   writeAtomic(`${path}.ctl-bak`, readFileSync(path, 'utf8'));
   writeAtomic(path, `${JSON.stringify(cfg, null, 2)}\n`);
   return true;
+}
+
+/** Set bots.<id>.nick in a summoner config file. The summoner finds a bot in the room by nick. */
+export function writeSummonerNick(path, id, nick) {
+  const cfg = readJson(path);
+  if (!cfg?.bots?.[id]) return false;
+  cfg.bots[id].nick = nick;
+  writeAtomic(`${path}.ctl-bak`, readFileSync(path, 'utf8'));
+  writeAtomic(path, `${JSON.stringify(cfg, null, 2)}\n`);
+  return true;
+}
+
+// -------------------------------------------------------------------- bots --
+// #4374: the bot list itself (/config/bots.json). stack.mjs derives the
+// supervisor programs and the gateway accounts from this file; after a write
+// the dashboard runs `stack.mjs rewire` + `supervisorctl reread/update` so the
+// change is live now and still there after a container restart. These helpers
+// only edit the parsed file; running things is insights-web's job.
+
+export const BOT_ID = /^[a-z][a-z0-9_-]*$/;
+const ENV_KEY = /^[A-Z_][A-Z0-9_]*$/;
+const FIRST_PORT = 9101;
+/** Keys the edit form may set. `enabled` has its own switch; `port` is checked against the others. */
+const BOT_KEYS = ['nick', 'channel', 'identity', 'port', 'autostart', 'noCatchup', 'noWelcome', 'menace', 'env'];
+
+const title = (id) => id[0].toUpperCase() + id.slice(1);
+const str = (v, what, max) => {
+  if (v === undefined || v === null) return '';
+  if (typeof v !== 'string') throw new Error(`${what} must be text`);
+  const s = v.trim();
+  if (s.length > max) throw new Error(`${what} is too long (max ${max})`);
+  return s;
+};
+
+/** The identity a bot logs in with: its own home, or the shared one it names. */
+export const identityOf = (b) => (b?.identity ? String(b.identity) : null);
+
+/** Which other bot (enabled, or not when `includeDisabled`) shares `identity`. */
+export function identityClash(bots, id, identity) {
+  if (!identity) return null;
+  for (const [other, b] of Object.entries(bots)) {
+    if (other === id || b.enabled === false) continue;
+    if ((b.identity ?? null) === identity) return other;
+  }
+  return null;
+}
+
+/**
+ * Validate `patch` for bot `id` on top of its current entry. Returns the new
+ * entry (defaults dropped so the file stays as small as it was). Throws text
+ * fit to show a person. `bots` is the whole map, for port and identity checks.
+ */
+export function cleanBot(bots, id, patch, cur = bots[id] ?? {}) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('bad bot entry');
+  for (const k of Object.keys(patch)) if (!BOT_KEYS.includes(k)) throw new Error(`unknown bot setting ${k}`);
+  const out = { ...cur };
+  if ('nick' in patch) { const v = str(patch.nick, 'nick', 64); if (v) out.nick = v; else delete out.nick; }
+  if ('channel' in patch) { const v = str(patch.channel, 'channel', 128); if (v) out.channel = v; else delete out.channel; }
+  if ('identity' in patch) {
+    const v = str(patch.identity, 'identity', 40);
+    if (v && !BOT_ID.test(v)) throw new Error('identity must be a short lowercase name (the shared identity folder, e.g. guest)');
+    if (v && v !== id && bots[v] && !bots[v].identity) throw new Error(`identity '${v}' is ${v}'s own; two bots cannot log in as one unless both name a shared identity`);
+    if (v) out.identity = v; else delete out.identity;
+  }
+  if ('port' in patch && patch.port !== '' && patch.port !== null && patch.port !== undefined) {
+    const p = Number(patch.port);
+    if (!Number.isInteger(p) || p < 1024 || p > 65535) throw new Error('port must be a whole number from 1024 to 65535');
+    const taken = Object.entries(bots).find(([other, b]) => other !== id && b.port === p);
+    if (taken) throw new Error(`port ${p} is ${taken[0]}'s`);
+    out.port = p;
+  }
+  for (const k of ['autostart', 'noCatchup', 'noWelcome', 'menace']) {
+    if (!(k in patch)) continue;
+    if (typeof patch[k] !== 'boolean') throw new Error(`${k} must be true or false`);
+    // autostart defaults to true, the rest to false: only the non-default is written.
+    if (patch[k] === (k === 'autostart')) delete out[k]; else out[k] = patch[k];
+  }
+  if ('env' in patch) {
+    const env = patch.env ?? {};
+    if (typeof env !== 'object' || Array.isArray(env)) throw new Error('env must be a map of NAME to value');
+    const keys = Object.keys(env);
+    if (keys.length > 32) throw new Error('at most 32 env overrides');
+    for (const k of keys) {
+      if (!ENV_KEY.test(k)) throw new Error(`env name ${k} must be UPPER_CASE`);
+      if (typeof env[k] !== 'string' || env[k].length > 512) throw new Error(`env ${k} must be text (max 512)`);
+    }
+    if (keys.length) out.env = { ...env }; else delete out.env;
+  }
+  const clash = out.enabled !== false ? identityClash(bots, id, identityOf(out)) : null;
+  if (clash) throw new Error(`${id} and ${clash} share the identity '${out.identity}'; only one of them can be enabled at a time`);
+  return out;
+}
+
+/** The next bridge port stack.mjs would hand out. */
+export function nextFreePort(bots) {
+  const used = new Set(Object.values(bots).map((b) => b.port).filter(Boolean));
+  let p = FIRST_PORT;
+  while (used.has(p)) p += 1;
+  return p;
+}
+
+/** `file` is the parsed bots.json; mutates it. Each returns what changed for the log. */
+export function setBotEnabled(file, id, on) {
+  const bots = file.bots ?? {};
+  if (!bots[id]) throw Object.assign(new Error(`unknown bot ${id}`), { code: 404 });
+  if (typeof on !== 'boolean') throw new Error('enabled must be true or false');
+  if (on) {
+    const clash = identityClash(bots, id, identityOf(bots[id]));
+    if (clash) throw Object.assign(new Error(`${id} and ${clash} share the identity '${bots[id].identity}'; disable ${clash} first`), { code: 409 });
+    delete bots[id].enabled;
+  } else bots[id].enabled = false;
+  return bots[id];
+}
+
+export function editBot(file, id, patch) {
+  const bots = file.bots ?? {};
+  if (!bots[id]) throw Object.assign(new Error(`unknown bot ${id}`), { code: 404 });
+  bots[id] = cleanBot(bots, id, patch);
+  return bots[id];
+}
+
+/** Add `id` (a persona pack) with `patch` as its entry; the port is picked if not given. */
+export function addBot(file, id, patch, packIds) {
+  if (!BOT_ID.test(String(id))) throw new Error('bot id must be a short lowercase name');
+  if (!packIds.includes(id)) throw new Error(`no persona pack '${id}' in /config/personas or the image`);
+  file.bots ??= {};
+  if (file.bots[id]) throw Object.assign(new Error(`${id} is already in bots.json`), { code: 409 });
+  const entry = cleanBot(file.bots, id, patch ?? {}, {});
+  entry.port ??= nextFreePort(file.bots);
+  file.bots[id] = entry;
+  if (Array.isArray(file.removed)) {
+    file.removed = file.removed.filter((x) => x !== id);
+    if (!file.removed.length) delete file.removed;
+  }
+  return entry;
+}
+
+/** Drop `id` from the list and remember it so its pack is not re-added at boot. The home and identity stay on disk. */
+export function removeBot(file, id) {
+  const bots = file.bots ?? {};
+  if (!bots[id]) throw Object.assign(new Error(`unknown bot ${id}`), { code: 404 });
+  const gone = bots[id];
+  delete bots[id];
+  file.removed = uniq([...(file.removed ?? []), id]);
+  return gone;
+}
+
+/** `supervisorctl status` text → { program: STATE }. */
+export function parseSupervisorStatus(text) {
+  const out = {};
+  for (const line of String(text ?? '').split('\n')) {
+    const m = /^(\S+)\s+([A-Z]+)/.exec(line.trim());
+    if (m) out[m[1]] = m[2];
+  }
+  return out;
+}
+
+/**
+ * The rows the tab shows. `packs` = { id: { dir, nick } } from the persona
+ * roots; `programs` from parseSupervisorStatus; `live` = summoner /status bots;
+ * `accounts` = openclaw.json channels.teamspeak.accounts (for voice.mode).
+ */
+export function listBots(file, packs, { programs = {}, live = null, accounts = {} } = {}) {
+  const bots = file?.bots ?? {};
+  const rows = Object.entries(bots).map(([id, b]) => ({
+    id,
+    pack: packs[id]?.dir ?? null,
+    nick: b.nick || packs[id]?.nick || title(id),
+    nickFromPack: !b.nick,
+    channel: b.channel ?? '',
+    identity: b.identity ?? '',
+    port: b.port ?? null,
+    enabled: b.enabled !== false,
+    autostart: b.autostart !== false,
+    noCatchup: !!b.noCatchup,
+    noWelcome: !!b.noWelcome,
+    menace: !!b.menace,
+    env: b.env ?? {},
+    core: programs[`core-${id}`] ?? 'ABSENT',
+    menaceState: b.menace ? programs[`menace-${id}`] ?? 'ABSENT' : null,
+    live: live?.bots?.[id] ?? null,
+    voiceMode: accounts[id]?.voice?.mode ?? null,
+    clash: b.enabled !== false ? null : identityClash(bots, id, identityOf(b)),
+  }));
+  const inUse = new Set(Object.keys(bots));
+  const available = Object.entries(packs).filter(([id]) => !inUse.has(id)).map(([id, p]) => ({ id, nick: p.nick || title(id), dir: p.dir }));
+  return { bots: rows, available, removed: file?.removed ?? [], nextPort: nextFreePort(bots) };
 }

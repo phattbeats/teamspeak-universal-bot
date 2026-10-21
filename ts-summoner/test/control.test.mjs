@@ -100,3 +100,72 @@ test('writeShifts edits one bot and keeps a backup', () => {
   assert.deepEqual(JSON.parse(readFileSync(`${p}.ctl-bak`, 'utf8')).bots.a.shifts, []);
   assert.equal(writeShifts(p, 'zzz', []), false);
 });
+
+// #4374: the Bots tab's edits to bots.json.
+import { addBot, cleanBot, editBot, listBots, nextFreePort, parseSupervisorStatus, removeBot, setBotEnabled } from '../control.mjs';
+
+const botsFile = () => ({ bots: {
+  sexton: { port: 9101 },
+  lexton: { port: 9103, menace: true, noCatchup: true, noWelcome: true },
+  johnny: { port: 9104, identity: 'guest', autostart: false, enabled: false },
+  trixie: { port: 9105, identity: 'guest', autostart: false },
+} });
+
+test('cleanBot keeps the file small: defaults are dropped, text is trimmed, bad values are refused', () => {
+  const f = botsFile();
+  const e = cleanBot(f.bots, 'sexton', { nick: '  Sexton Prime ', channel: '', autostart: true, noCatchup: true, menace: false, env: { SEXTON_X: '1' }, port: 9110 });
+  assert.deepEqual(e, { port: 9110, nick: 'Sexton Prime', noCatchup: true, env: { SEXTON_X: '1' } });
+  assert.throws(() => cleanBot(f.bots, 'sexton', { port: 9103 }), /lexton's/);
+  assert.throws(() => cleanBot(f.bots, 'sexton', { port: 80 }), /1024 to 65535/);
+  assert.throws(() => cleanBot(f.bots, 'sexton', { env: { 'bad-name': 'x' } }), /UPPER_CASE/);
+  assert.throws(() => cleanBot(f.bots, 'sexton', { identity: 'Guest!' }), /lowercase/);
+  assert.throws(() => cleanBot(f.bots, 'sexton', { identity: 'lexton' }), /lexton's own/);
+  assert.throws(() => cleanBot(f.bots, 'sexton', { colour: 'red' }), /unknown bot setting/);
+  assert.throws(() => cleanBot(f.bots, 'sexton', { menace: 'yes' }), /true or false/);
+});
+
+test('two enabled bots cannot share an identity', () => {
+  const f = botsFile();
+  assert.throws(() => setBotEnabled(f, 'johnny', true), /trixie/); // trixie holds 'guest'
+  setBotEnabled(f, 'trixie', false);
+  setBotEnabled(f, 'johnny', true);
+  assert.equal(f.bots.johnny.enabled, undefined);
+  assert.equal(f.bots.trixie.enabled, false);
+  assert.throws(() => editBot(f, 'sexton', { identity: 'guest' }), /johnny/); // sexton is enabled, so is johnny now
+  editBot(f, 'trixie', { identity: 'guest2' }); // a disabled bot may be re-pointed freely
+  assert.throws(() => setBotEnabled(f, 'nobody', true), /unknown bot/);
+});
+
+test('add picks the next free port and clears the removed list; remove keeps the pack from coming back', () => {
+  const f = botsFile();
+  const gone = removeBot(f, 'lexton');
+  assert.equal(gone.menace, true);
+  assert.deepEqual(f.removed, ['lexton']);
+  assert.throws(() => addBot(f, 'dexton', {}, ['lexton']), /no persona pack/);
+  assert.throws(() => addBot(f, 'sexton', {}, ['sexton']), /already/);
+  assert.equal(nextFreePort(f.bots), 9102);
+  const e = addBot(f, 'lexton', { nick: 'Lexton II', menace: true }, ['lexton']);
+  assert.deepEqual(e, { nick: 'Lexton II', menace: true, port: 9102 });
+  assert.equal(f.removed, undefined);
+});
+
+test('listBots joins the file with packs, supervisor and the summoner', () => {
+  const f = botsFile();
+  const packs = { sexton: { dir: '/p/sexton', nick: 'The Sexton' }, lexton: { dir: '/p/lexton', nick: null }, johnny: { dir: '/p/johnny', nick: 'Rotten Johnny' }, trixie: { dir: '/p/trixie', nick: 'Trixie' }, dexton: { dir: '/p/dexton', nick: 'Dexton' } };
+  const programs = parseSupervisorStatus('core-sexton    RUNNING   pid 12, uptime 1:00:00\ncore-lexton STOPPED Oct 21 01:00 AM\nmenace-lexton  BACKOFF  Exited too quickly\ncore-trixie STOPPED  not started\n');
+  const l = listBots(f, packs, { programs, live: { bots: { sexton: { running: true } } }, accounts: { sexton: { voice: { mode: 'stt-tts' } }, lexton: { voice: { mode: 'off' } } } });
+  const by = Object.fromEntries(l.bots.map((b) => [b.id, b]));
+  assert.equal(by.sexton.nick, 'The Sexton');
+  assert.equal(by.sexton.nickFromPack, true);
+  assert.equal(by.lexton.nick, 'Lexton');
+  assert.equal(by.sexton.core, 'RUNNING');
+  assert.equal(by.sexton.live.running, true);
+  assert.equal(by.lexton.menaceState, 'BACKOFF');
+  assert.equal(by.lexton.voiceMode, 'off');
+  assert.equal(by.johnny.core, 'ABSENT');
+  assert.equal(by.johnny.enabled, false);
+  assert.equal(by.johnny.clash, 'trixie');
+  assert.equal(by.trixie.voiceMode, null);
+  assert.deepEqual(l.available.map((p) => p.id), ['dexton']);
+  assert.equal(l.nextPort, 9102);
+});

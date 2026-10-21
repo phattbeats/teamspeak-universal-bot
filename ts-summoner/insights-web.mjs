@@ -8,20 +8,24 @@
 //   GET /api/bots?days=N       per bot + what drives engagement
 //   GET /api/log?types=&q=&nick=&before=&limit=   the everything-log
 //   /api/control/...           tools+skills, persona files, shifts (control.mjs); writes need X-Requested-With
+//   /api/control/bots/...      #4374: the bot list: enable/disable, edit, add, remove; live via stack.mjs rewire
+//   /api/control/voice/on|off  #4374: the stack-wide voice switch (the summoner's POST /voice/*)
 //
 // Every route sits behind HTTP basic auth: this is everyone's chat and speech.
 // The credentials are /config/insights/auth.txt (`user:password`), generated
 // on first start if missing; `cat` it on the box to log in.
 
+import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { applyTurnOps, getMeta, openDb, parseRoomLog, setMeta, turnOps } from './insights.mjs';
 import { bots, logPage, overview, people } from './insights-stats.mjs';
 import {
-  applyTools, cleanShifts, personaFiles, personaHistory, readHistory, readJson, readPersona, readTools, scanSkills,
-  writeAtomic, writePersona, writeShifts,
+  addBot, applyTools, cleanShifts, editBot, listBots, parseSupervisorStatus, personaFiles, personaHistory, readHistory,
+  readJson, readPersona, readTools, removeBot, scanSkills, setBotEnabled, writeAtomic, writePersona, writeShifts,
+  writeSummonerNick,
 } from './control.mjs';
 
 const log = (...a) => console.log(new Date().toISOString(), 'insights:', ...a);
@@ -49,6 +53,12 @@ const WORKSPACES = `${OPENCLAW}/workspace/agents`;
 const SUMMONER_EDITABLE = `${CONFIG_DIR}/summoner/config.json`;
 const SKILL_DIRS = (env.CONTROL_SKILL_DIRS || `${OPENCLAW}/plugin-skills:${OPENCLAW}/skills:${OPENCLAW}/workspace/skills:/usr/local/lib/node_modules/openclaw/skills`).split(':');
 const SUMMONER_URL = `http://127.0.0.1:${cfg.httpPort || 8099}`;
+const MERGED = env.SUMMONER_CONFIG || '/run/universal/summoner.json';
+// #4374: the bot list and what applies it.
+const BOTS_FILE = `${CONFIG_DIR}/bots.json`;
+const STACK = env.UNIVERSAL_STACK || '/opt/universal/stack.mjs';
+const SUPERVISORCTL = env.SUPERVISORCTL || 'supervisorctl';
+const SEED = env.UNIVERSAL_SEED || '/opt/sexton-gateway/openclaw.seed.json';
 
 const db = openDb(DB_PATH);
 
@@ -91,7 +101,7 @@ function ingestBot(id) {
 }
 
 function ingestAll() {
-  for (const id of Object.keys(cfg.bots ?? {})) {
+  for (const id of botIds()) {
     try {
       const n = ingestBot(id);
       if (n) log(`${id}: +${n} turns`);
@@ -143,7 +153,10 @@ function prune() {
 
 // --------------------------------------------------------------- control --
 
-const botIds = () => Object.keys(cfg.bots ?? {});
+// The merged summoner config is rewritten by `stack.mjs rewire` when the Bots
+// tab adds or removes a bot (#4374), so read it fresh: a bot added live shows
+// up on every tab without restarting this server.
+const botIds = () => Object.keys(readJson(MERGED, cfg).bots ?? {});
 const need = (id) => { if (!botIds().includes(id)) throw Object.assign(new Error(`unknown bot ${id}`), { code: 404 }); return id; };
 const personaDir = (id) => `${WORKSPACES}/${need(id)}`;
 
@@ -166,6 +179,148 @@ function editOpenclaw(fn) {
   writeAtomic(OPENCLAW_JSON, `${JSON.stringify(next, null, 2)}\n`, 0o600);
 }
 
+// ---------------------------------------------------------- bots (#4374) --
+
+/** Run a command, collect its output. Like the summoner's execLocal: callers read the output, exit codes are not thrown. */
+function run(cmd, timeoutMs = 60_000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd[0], cmd.slice(1), { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`${cmd.join(' ')}: timeout`)); }, timeoutMs);
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ code, out: out.trim() }); });
+  });
+}
+const supervisorctl = async (...args) => (await run([SUPERVISORCTL, ...args])).out;
+
+/** The persona packs on disk, by id, with the nick each would log in as. */
+async function packsOnDisk() {
+  const r = await run(['node', STACK, 'packs'], 20_000);
+  let dirs = {};
+  try { dirs = JSON.parse(r.out); } catch { throw new Error(`stack.mjs packs: ${r.out.slice(0, 200)}`); }
+  return Object.fromEntries(Object.entries(dirs).map(([id, dir]) => [id, { dir, nick: readJson(`${dir}/voice.json`, {}).nick ?? null }]));
+}
+
+/** Read-modify-write bots.json with a .ctl-bak, like editOpenclaw. */
+function editBots(fn) {
+  const raw = existsSync(BOTS_FILE) ? readFileSync(BOTS_FILE, 'utf8') : '{}';
+  const file = JSON.parse(raw);
+  file.bots ??= {};
+  let result;
+  try { result = fn(file); } catch (e) { e.code ??= 400; throw e; } // validation text is the person's, not a 500
+  writeAtomic(`${BOTS_FILE}.ctl-bak`, raw);
+  writeAtomic(BOTS_FILE, `${JSON.stringify(file, null, 2)}\n`);
+  return result;
+}
+
+/**
+ * Make bots.json live: regenerate bots.conf + the gateway wiring, then let
+ * supervisord add/remove/restart only the programs whose config changed. The
+ * summoner keeps its bot list in memory, so it is restarted when that list
+ * (or a nick it finds a bot by) changed.
+ */
+async function applyBots({ restartSummoner = false } = {}) {
+  const steps = {};
+  const rewire = await run(['node', STACK, 'rewire'], 120_000);
+  steps.rewire = rewire.out;
+  if (rewire.code !== 0) throw new Error(`stack.mjs rewire failed: ${rewire.out.slice(-400)}`);
+  steps.reread = await supervisorctl('reread');
+  steps.update = await supervisorctl('update');
+  if (restartSummoner) steps.summoner = await supervisorctl('restart', 'summoner');
+  return steps;
+}
+
+async function botsSnapshot() {
+  const [packs, status, live] = await Promise.all([
+    packsOnDisk(),
+    supervisorctl('status').catch((e) => `supervisorctl: ${e.message}`),
+    summoner('/status').catch(() => null),
+  ]);
+  const accounts = readJson(OPENCLAW_JSON, {})?.channels?.teamspeak?.accounts ?? {};
+  const file = readJson(BOTS_FILE, { bots: {} });
+  return {
+    ...listBots(file, packs, { programs: parseSupervisorStatus(status), live, accounts }),
+    summoner: !!live,
+    voice: live?.voice ?? 'unknown',
+    seedVoiceMode: seedVoiceMode(),
+  };
+}
+const seedVoiceMode = () => readJson(SEED, {})?.channels?.teamspeak?.voice?.mode ?? 'stt-tts';
+const programsOf = (id, entry) => [`core-${id}`, ...(entry?.menace ? [`menace-${id}`] : [])];
+
+async function controlBots(req, id, verb, send) {
+  if (!id) return send(200, await botsSnapshot());
+  if (verb === 'summon' || verb === 'dismiss') {
+    need(id);
+    return send(200, await summoner(`/${verb}/${id}?by=dashboard`, 'POST'));
+  }
+  if (verb === 'voice') {
+    // Per-bot voice: the account's voice.mode. "off" = text-only; "on" = back
+    // to the seed's lane (stt-tts). The gateway picks it up from disk.
+    need(id);
+    const { mode } = await readBody(req);
+    if (mode !== 'on' && mode !== 'off') throw Object.assign(new Error('mode must be on or off'), { code: 400 });
+    editOpenclaw((c) => {
+      const a = c?.channels?.teamspeak?.accounts?.[id];
+      if (!a) throw new Error(`unknown bot ${id}`);
+      (a.voice ??= {}).mode = mode === 'off' ? 'off' : seedVoiceMode();
+      return c;
+    });
+    log(`control: bots ${id}: voice ${mode}`);
+    return send(200, { id, voiceMode: mode === 'off' ? 'off' : seedVoiceMode() });
+  }
+  if (verb === 'enabled') {
+    if (req.method !== 'PUT') return send(405, { error: 'PUT only' });
+    const { on } = await readBody(req);
+    const entry = editBots((f) => setBotEnabled(f, id, on));
+    const steps = {};
+    if (!on) for (const p of programsOf(id, entry)) steps[`stop ${p}`] = await supervisorctl('stop', p);
+    Object.assign(steps, await applyBots({ restartSummoner: true }));
+    if (on && entry.autostart !== false) {
+      try { unlinkSync(`${CONFIG_DIR}/bots/${id}/.off-duty`); } catch { /* was not off duty */ }
+      for (const p of programsOf(id, entry)) steps[`start ${p}`] = await supervisorctl('start', p);
+    }
+    log(`control: bots ${id}: ${on ? 'enabled' : 'disabled'} ${JSON.stringify(steps)}`);
+    return send(200, { id, enabled: on, steps, note: on && entry.autostart === false ? 'enabled; it has autostart off, so Summon (or its shift) brings it in' : null });
+  }
+  if (verb) return send(404, { error: 'not found' });
+  if (req.method === 'PUT') {
+    const patch = await readBody(req);
+    const before = readJson(BOTS_FILE, {})?.bots?.[id];
+    const entry = editBots((f) => editBot(f, id, patch));
+    let nickChanged = false;
+    if ('nick' in patch && (before?.nick ?? null) !== (entry.nick ?? null)) {
+      const nick = entry.nick || (await packsOnDisk())[id]?.nick || id[0].toUpperCase() + id.slice(1);
+      writeSummonerNick(SUMMONER_EDITABLE, id, nick);
+      nickChanged = true;
+    }
+    const steps = await applyBots({ restartSummoner: nickChanged });
+    log(`control: bots ${id}: edited ${JSON.stringify(patch)} ${JSON.stringify(steps)}`);
+    return send(200, { id, entry, steps });
+  }
+  if (req.method === 'POST') {
+    const patch = await readBody(req);
+    const packs = await packsOnDisk();
+    const entry = editBots((f) => addBot(f, id, patch, Object.keys(packs)));
+    const steps = await applyBots({ restartSummoner: true });
+    log(`control: bots ${id}: added ${JSON.stringify(entry)} ${JSON.stringify(steps)}`);
+    return send(200, { id, entry, steps });
+  }
+  if (req.method === 'DELETE') {
+    const before = readJson(BOTS_FILE, {})?.bots?.[id];
+    if (!before) return send(404, { error: `unknown bot ${id}` });
+    const steps = {};
+    for (const p of programsOf(id, before)) steps[`stop ${p}`] = await supervisorctl('stop', p);
+    editBots((f) => removeBot(f, id));
+    Object.assign(steps, await applyBots({ restartSummoner: true }));
+    log(`control: bots ${id}: removed (home and identity kept) ${JSON.stringify(steps)}`);
+    return send(200, { id, removed: true, steps });
+  }
+  return send(405, { error: 'GET, PUT, POST or DELETE' });
+}
+
 async function control(req, url, send) {
   const parts = url.pathname.split('/').slice(3).map(decodeURIComponent); // after /api/control
   const [area, id, file, sub, version] = parts;
@@ -173,6 +328,15 @@ async function control(req, url, send) {
   if (write && !req.headers['x-requested-with']) return send(403, { error: 'missing X-Requested-With' });
   const skills = () => scanSkills(SKILL_DIRS);
 
+  if (area === 'bots') return controlBots(req, id, file, send);
+  if (area === 'voice') {
+    // The stack-wide switch (#4372 API, #4374 UI): POST /api/control/voice/on|off.
+    if (req.method !== 'POST') return send(405, { error: 'POST only' });
+    if (id !== 'on' && id !== 'off') return send(404, { error: 'POST voice/on | voice/off' });
+    const r = await summoner(`/voice/${id}?by=dashboard`, 'POST');
+    log(`control: voice ${id}: ${JSON.stringify(r)}`);
+    return send(200, r);
+  }
   if (area === 'tools') {
     if (!id) return send(200, readTools(readJson(OPENCLAW_JSON, {}), botIds(), skills()));
     if (req.method !== 'PUT') return send(405, { error: 'PUT only' });

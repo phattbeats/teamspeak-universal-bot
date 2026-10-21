@@ -95,6 +95,18 @@ textarea.persona { width: 100%; min-height: 360px; background: var(--surface-1);
 .shift { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--grid); }
 .shift .days label { display: inline-flex; align-items: center; gap: 2px; margin-right: 6px; font-size: 12px; color: var(--text-secondary); }
 input[type=time] { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font: inherit; }
+input[type=text], input[type=number], textarea.env { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font: inherit; }
+tr.off td { opacity: .5; }
+tr.off td.actions { opacity: 1; }
+.state { font-size: 12px; white-space: nowrap; }
+.state .dot.bad { background: #b91c1c; } .state .dot.idle { background: var(--muted); }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 18px; }
+.form-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text-secondary); }
+.form-grid label.chk { flex-direction: row; align-items: center; gap: 6px; }
+textarea.env { width: 100%; min-height: 70px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.btn-row { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.btn-row .plain { padding: 3px 8px; font-size: 12px; }
 @media (max-width: 640px) { .log-row { grid-template-columns: 1fr; gap: 2px; } .grid2 { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -110,8 +122,9 @@ input[type=time] { background: var(--surface-1); color: var(--text-primary); bor
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
     <button role="tab" data-tab="people" aria-selected="false">People</button>
-    <button role="tab" data-tab="bots" aria-selected="false">Bots</button>
+    <button role="tab" data-tab="bots" aria-selected="false">Bot stats</button>
     <button role="tab" data-tab="log" aria-selected="false">Log</button>
+    <button role="tab" data-tab="manage" aria-selected="false">Bots</button>
     <button role="tab" data-tab="tools" aria-selected="false">Tools &amp; skills</button>
     <button role="tab" data-tab="persona" aria-selected="false">Personas</button>
     <button role="tab" data-tab="schedule" aria-selected="false">Schedule</button>
@@ -155,6 +168,11 @@ input[type=time] { background: var(--surface-1); color: var(--text-primary); bor
       <div class="card"><h2>What people ask the bots for</h2><p class="sub" id="asks-sub"></p><div id="asks"></div><details class="tbl"><summary>Show as table</summary><div id="asks-table"></div></details></div>
       <div class="card"><h2>What the bots start, and who answers</h2><p class="sub" id="events-sub"></p><div id="events"></div></div>
     </div>
+  </section>
+
+  <section id="tab-manage" hidden>
+    <p class="sub">Which bots exist and how they log in. Every change is written to <code>bots.json</code> and applied now: only the bot you changed is restarted, and it is still that way after a container restart.</p>
+    <div id="manage-body"></div>
   </section>
 
   <section id="tab-tools" hidden>
@@ -386,8 +404,8 @@ async function loadLog(more = false) {
 // ---- wiring
 let tab = 'overview';
 // ---- control pages (tools, personas, schedule): loaded on tab switch only, never on a timer, so edits are not wiped
-const CONTROL = ['tools', 'persona', 'schedule'];
-const ctl = { bot: {}, tools: null, persona: null, files: {}, schedule: null };
+const CONTROL = ['manage', 'tools', 'persona', 'schedule'];
+const ctl = { bot: {}, tools: null, persona: null, files: {}, schedule: null, manage: null, form: null };
 async function send(method, path, body) {
   const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'dashboard' }, body: body === undefined ? undefined : JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
@@ -405,8 +423,121 @@ async function loadControl() {
     if (tab === 'tools') { ctl.tools = await api('api/control/tools'); const ids = Object.keys(ctl.tools.bots); ctl.bot.tools ??= ids[0]; renderTools(); }
     if (tab === 'persona') { ctl.persona = await api('api/control/persona'); const ids = Object.keys(ctl.persona); ctl.bot.persona ??= ids[0]; ctl.file ??= {}; renderPersona(); }
     if (tab === 'schedule') { ctl.schedule = await api('api/control/schedule'); renderSchedule(); }
+    if (tab === 'manage') { ctl.manage = await api('api/control/bots'); renderManage(); }
   } catch (e) { console.error(e); }
 }
+
+// ---- Bots tab (#4374): the list in bots.json, applied live
+const STATE_DOT = { RUNNING: '', STARTING: '', BACKOFF: 'bad', FATAL: 'bad', STOPPED: 'idle', EXITED: 'idle', ABSENT: 'idle' };
+function botState(b) {
+  const core = `<span class="dot ${STATE_DOT[b.core] ?? 'idle'}"></span>${esc(b.core.toLowerCase())}`;
+  const room = b.live ? (b.live.running ? ' · in the room' : ' · not in the room') : '';
+  const menace = b.menaceState ? ` · menace ${esc(b.menaceState.toLowerCase())}` : '';
+  return `<span class="state">${core}${room}${menace}</span>`;
+}
+function botForm(b, packs) {
+  // b = existing row (edit) or null (add). The pack picker only appears on add.
+  const v = b ?? { nick: '', channel: '', identity: '', port: '', autostart: true, noCatchup: false, noWelcome: false, menace: false, env: {} };
+  const envText = Object.entries(v.env ?? {}).map(([k, x]) => `${k}=${x}`).join('\n');
+  const chk = (k, label, note) => `<label class="chk"><input type="checkbox" data-f="${k}"${v[k] ? ' checked' : ''}> ${label}${note ? ` <span class="muted">${note}</span>` : ''}</label>`;
+  return `<div class="card" id="bot-form"><h2>${b ? `Edit ${esc(b.nick)} <span class="muted">(${esc(b.id)})</span>` : 'Add a bot'}</h2>
+    <p class="sub">${b ? 'Saving rewrites this bot\'s supervisor program and gateway account and restarts only this core.' : 'The bot gets its own home, workspace and gateway account from the pack; its TeamSpeak identity is created the first time it connects.'}</p>
+    <div class="form-grid">
+      ${b ? '' : `<label>Persona pack <select data-f="pack">${packs.map((p) => `<option value="${esc(p.id)}">${esc(p.id)} (${esc(p.nick)})</option>`).join('')}</select></label>`}
+      <label>Nick <input type="text" data-f="nick" value="${esc(v.nickFromPack ? '' : v.nick)}" placeholder="${esc(b?.nickFromPack ? `${b.nick} (from the pack)` : 'from the pack')}"></label>
+      <label>Channel <input type="text" data-f="channel" value="${esc(v.channel)}" placeholder="General Shit (default)"></label>
+      <label>Identity <input type="text" data-f="identity" value="${esc(v.identity)}" placeholder="own (empty) or a shared name, e.g. guest"></label>
+      <label>Bridge port <input type="number" data-f="port" value="${esc(v.port ?? '')}" placeholder="${b ? '' : `next free: ${ctl.manage.nextPort}`}" min="1024" max="65535"></label>
+      ${chk('autostart', 'Start at boot', 'off = only the summoner brings it in')}
+      ${chk('noCatchup', 'No catch-up', 'skip the "what did I miss" on join')}
+      ${chk('noWelcome', 'No welcome line')}
+      ${chk('menace', 'Menace', 'the villain side-program (Lexton)')}
+    </div>
+    <label style="display:block;margin-top:10px;font-size:13px;color:var(--text-secondary)">Env overrides, one <code>NAME=value</code> per line (SEXTON_* variables for this core)<textarea class="env" data-f="env" spellcheck="false">${esc(envText)}</textarea></label>
+    <div class="ctl-actions"><button class="primary" id="bot-form-save">${b ? 'Save and apply' : 'Add and start'}</button><button class="plain" id="bot-form-cancel">Cancel</button><span class="msg" id="bot-form-msg"></span></div></div>`;
+}
+function readBotForm() {
+  const f = (k) => $(`#bot-form [data-f="${k}"]`);
+  const env = {};
+  for (const line of f('env').value.split('\n')) {
+    const t = line.trim(); if (!t) continue;
+    const i = t.indexOf('='); if (i < 1) throw new Error(`env line "${t}" needs NAME=value`);
+    env[t.slice(0, i).trim()] = t.slice(i + 1);
+  }
+  return {
+    patch: { nick: f('nick').value, channel: f('channel').value, identity: f('identity').value, port: f('port').value === '' ? null : Number(f('port').value),
+      autostart: f('autostart').checked, noCatchup: f('noCatchup').checked, noWelcome: f('noWelcome').checked, menace: f('menace').checked, env },
+    pack: f('pack')?.value,
+  };
+}
+function renderManage() {
+  const m = ctl.manage;
+  const voice = m.voice === 'on' || m.voice === 'off' ? m.voice : null;
+  const rows = m.bots.map((b) => `<tr class="${b.enabled ? '' : 'off'}" data-bot="${esc(b.id)}">
+      <td><label title="${b.enabled ? 'Disable: stops it now and keeps it off after a restart' : 'Enable: adds it back and starts it'}"><input type="checkbox" data-act="enabled"${b.enabled ? ' checked' : ''}${!b.enabled && b.clash ? ' disabled' : ''}></label></td>
+      <td><b>${esc(b.nick)}</b> <span class="muted">${esc(b.id)}</span>${b.pack ? '' : ' <span class="warn">no persona pack on disk</span>'}${!b.enabled && b.clash ? `<div class="warn">shares the identity '${esc(b.identity)}' with ${esc(b.clash)}; disable ${esc(b.clash)} first</div>` : ''}</td>
+      <td>${esc(b.channel) || '<span class="muted">default</span>'}</td>
+      <td class="num">${b.port ?? ''}</td>
+      <td>${b.identity ? `${esc(b.identity)} <span class="muted">(shared)</span>` : '<span class="muted">own</span>'}</td>
+      <td>${b.enabled ? botState(b) : '<span class="muted">disabled</span>'}</td>
+      <td>${b.voiceMode === null ? '<span class="muted">no account yet</span>' : `<button class="plain" data-act="voice" data-mode="${b.voiceMode === 'off' ? 'on' : 'off'}" title="Per-bot voice.mode (${esc(b.voiceMode)})">${b.voiceMode === 'off' ? 'text only · turn voice on' : `voice ${esc(b.voiceMode)} · turn off`}</button>`}</td>
+      <td class="actions"><span class="btn-row">${b.enabled && m.summoner ? '<button class="plain" data-act="summon">Summon</button><button class="plain" data-act="dismiss">Dismiss</button>' : ''}<button class="plain" data-act="edit">Edit</button><button class="plain" data-act="remove">Remove</button></span></td>
+    </tr>`).join('');
+  $('#manage-body').innerHTML = `
+    <div class="card"><div class="card-head"><div><h2>Voice, whole stack</h2><p class="sub">${voice ? `Voice is <b>${voice}</b>. Off = whisper stopped, every bot text-only within seconds; on = whisper reloads in about 20 s.` : m.summoner ? 'The summoner did not report the voice state.' : '<span class="warn">summoner not reachable: voice switch, summon and dismiss are unavailable</span>'}</p></div>
+      <div class="btn-row"><button class="plain" data-voice="on"${voice === 'on' || !m.summoner ? ' disabled' : ''}>Voice on</button><button class="plain" data-voice="off"${voice === 'off' || !m.summoner ? ' disabled' : ''}>Voice off</button></div></div><span class="msg" id="voice-msg"></span></div>
+    <div class="card"><div class="card-head"><div><h2>Bots</h2><p class="sub">Enabled = has a supervisor program and a gateway account. "In the room" is the summoner's view; Summon and Dismiss go through it so shifts stay consistent.</p></div>
+      <div class="btn-row">${m.available.length ? '<button class="plain" id="bot-add">Add a bot from a pack…</button>' : '<span class="muted">every persona pack on disk is already a bot</span>'}</div></div>
+      <table><tr><th>On</th><th>Bot</th><th>Channel</th><th class="num">Port</th><th>Identity</th><th>State</th><th>Voice</th><th></th></tr>${rows || '<tr><td colspan="8" class="empty">bots.json has no bots.</td></tr>'}</table>
+      <div class="ctl-actions"><span class="msg" id="manage-msg"></span></div></div>
+    <div id="bot-form-slot">${ctl.form ? botForm(ctl.form === 'add' ? null : m.bots.find((b) => b.id === ctl.form), m.available) : ''}</div>`;
+  const add = $('#bot-add'); if (add) add.onclick = () => { ctl.form = 'add'; renderManage(); };
+  const cancel = $('#bot-form-cancel'); if (cancel) cancel.onclick = () => { ctl.form = null; renderManage(); };
+  const save = $('#bot-form-save'); if (save) save.onclick = async () => {
+    save.disabled = true;
+    try {
+      const { patch, pack } = readBotForm();
+      say('#bot-form-msg', 'Applying… (rewire, supervisor update)');
+      const id = ctl.form === 'add' ? pack : ctl.form;
+      const r = await send(ctl.form === 'add' ? 'POST' : 'PUT', `api/control/bots/${encodeURIComponent(id)}`, patch);
+      ctl.form = null; ctl.manage = await api('api/control/bots'); renderManage();
+      say('#manage-msg', `${id}: saved and applied. ${stepsText(r.steps)}`);
+    } catch (e) { say('#bot-form-msg', e.message, true); save.disabled = false; }
+  };
+}
+const stepsText = (s) => s ? Object.entries(s).filter(([k]) => k !== 'rewire').map(([k, v]) => `${k}: ${String(v).split('\n').pop()}`).join(' · ') : '';
+$('#manage-body').addEventListener('click', async (ev) => {
+  const vb = ev.target.closest('[data-voice]');
+  if (vb) {
+    try { say('#voice-msg', `turning voice ${vb.dataset.voice}…`); const r = await send('POST', `api/control/voice/${vb.dataset.voice}`); ctl.manage = await api('api/control/bots'); renderManage(); say('#voice-msg', `Voice ${r.voice}${r.changed === false ? ' (it already was)' : ''}. ${r.whisper ?? ''}`); }
+    catch (e) { say('#voice-msg', e.message, true); }
+    return;
+  }
+  const el = ev.target.closest('[data-act]'); if (!el) return;
+  const id = el.closest('tr[data-bot]').dataset.bot, act = el.dataset.act;
+  const reload = async (text) => { ctl.manage = await api('api/control/bots'); renderManage(); if (text) say('#manage-msg', text); };
+  try {
+    if (act === 'edit') { ctl.form = id; renderManage(); $('#bot-form').scrollIntoView({ behavior: 'smooth' }); }
+    else if (act === 'enabled') {
+      const on = el.checked; el.disabled = true;
+      say('#manage-msg', `${on ? 'Enabling' : 'Disabling'} ${id}…`);
+      const r = await send('PUT', `api/control/bots/${encodeURIComponent(id)}/enabled`, { on });
+      await reload(`${id} ${on ? 'enabled' : 'disabled'}. ${r.note ?? ''} ${stepsText(r.steps)}`);
+    } else if (act === 'remove') {
+      if (!confirm(`Remove ${id} from bots.json? Its core stops now. Its home folder, identity and gateway account stay on disk (the account is switched off), so adding it back restores everything.`)) return;
+      say('#manage-msg', `Removing ${id}…`);
+      const r = await send('DELETE', `api/control/bots/${encodeURIComponent(id)}`);
+      await reload(`${id} removed. ${stepsText(r.steps)}`);
+    } else if (act === 'voice') {
+      const r = await send('PUT', `api/control/bots/${encodeURIComponent(id)}/voice`, { mode: el.dataset.mode });
+      await reload(`${id}: voice.mode is now ${r.voiceMode}. The gateway applies it when it reloads its config.`);
+    } else if (act === 'summon' || act === 'dismiss') {
+      await send('POST', `api/control/bots/${encodeURIComponent(id)}/${act}`);
+      say('#manage-msg', `${act} sent for ${id}; the state column updates in a few seconds.`);
+      setTimeout(() => { if (tab === 'manage') reload(); }, 5000);
+    }
+  } catch (e) { say('#manage-msg', e.message, true); if (act === 'enabled') reload(); }
+});
 
 function renderTools() {
   const t = ctl.tools, id = ctl.bot.tools, b = t.bots[id];

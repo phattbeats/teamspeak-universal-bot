@@ -30,7 +30,7 @@ image/gateway/                 the gateway's seed config and core patches
 
 | path | holds |
 | --- | --- |
-| `config/bots.json` | which bots run; bridge ports (assigned once, never move); `identity` sharing (the guests share one); `menace`, `noCatchup`, `noWelcome`, `autostart`, `nick`, `env` |
+| `config/bots.json` | which bots run; bridge ports (assigned once, never move); `identity` sharing (the guests share one); `menace`, `noCatchup`, `noWelcome`, `autostart`, `nick`, `env`, `enabled: false`; top-level `removed` (packs the dashboard removed). Edited live from the dashboard's Bots tab (#4374, `docs/universal-bot/ADMIN-DASHBOARD.md`) |
 | `config/bots/<id>/` | `sexton-id.txt` (the TeamSpeak identity), `.announce`, `.off-duty`, band songs, villain state |
 | `config/.voice-off` | the voice kill switch (#4372): exists = voice off for the whole stack; `POST /voice/off\|on` on the summoner writes/removes it |
 | `config/openclaw/` | the gateway's `openclaw.json`, agents (transcripts), workspaces |
@@ -75,7 +75,8 @@ again, by design.
 ## Adding a bot
 
 Drop a pack in `personas/<id>/` (rebuild) or `config/personas/<id>/` (no
-rebuild) with at least a `voice.json`, then restart the container. stack.mjs
+rebuild) with at least a `voice.json`, then restart the container, or add it
+from the dashboard's Bots tab without a restart (#4374). stack.mjs
 adds it to `bots.json` with the next free port and seeds its workspace,
 agent, account and binding. The summoner keeps a bot it has no shifts for on
 duty around the clock; give it shifts in `config/summoner/config.json`. A new
