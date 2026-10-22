@@ -58,10 +58,29 @@ export const PLUGIN_GROUPS = [
     tools: ['edit_channel', 'create_channel', 'delete_channel', 'edit_server', 'add_to_server_group'],
   },
 ];
-/** Always on; they are the bot being a bot in the room, not something to opt into. */
-export const PLUGIN_ALWAYS = ['what_did_i_miss', 'who_is_here', 'poke', 'leave_voice', 'join_voice', 'list_channels',
-  'move_to_channel', 'where_is', 'send_text', 'summon_bot', 'dismiss_bot', 'show_persona', 'edit_persona',
-  'set_voice', 'set_wake_names', 'set_follow_up_window'];
+/**
+ * Always on; they are the bot being a bot in the room, not something to opt
+ * into. Notes are the short form of each tool's own description in
+ * teamspeak-plugin/src/tools/registry.ts and persona-tools.ts (#4374).
+ */
+export const PLUGIN_ALWAYS = [
+  { name: 'what_did_i_miss', note: 'Reads back the recent chat in its channel from the room log, for "what did I miss?".' },
+  { name: 'who_is_here', note: 'Lists who is in its own channel right now.' },
+  { name: 'poke', note: 'Pokes someone with a short text that pops up on their screen. Only when asked.' },
+  { name: 'leave_voice', note: 'Sits out: stops listening, speaking and any music until asked back. Says a short goodbye first.' },
+  { name: 'join_voice', note: 'Comes back into voice after sitting out.' },
+  { name: 'list_channels', note: 'Every channel on the server and who is in each one (the whole server, not just its channel).' },
+  { name: 'move_to_channel', note: 'Moves itself to another channel, by name or id, or follows a person to wherever they are.' },
+  { name: 'where_is', note: 'Finds which channel a person is in, anywhere on the server.' },
+  { name: 'send_text', note: 'Sends a text message instead of speaking: its channel, the whole server, or one person directly.' },
+  { name: 'summon_bot', note: 'Calls another regular (Sexton, Bexton, Lexton) into the channel via the summoner; they arrive a minute later.' },
+  { name: 'dismiss_bot', note: 'Sends a regular home, or clocks itself out when told to go.' },
+  { name: 'show_persona', note: 'Reads back a summary of its own SOUL, AGENTS, IDENTITY, USER and HUMAN files.' },
+  { name: 'edit_persona', note: 'Adds a standing rule to its own SOUL.md when an operator or Brandon says "from now on". Announces the change.' },
+  { name: 'set_voice', note: 'Changes its own TTS voice (MiniMax voice id) for the next spoken reply. Only when asked.' },
+  { name: 'set_wake_names', note: 'Replaces the names that wake it in voice. Immediate. Only when asked.' },
+  { name: 'set_follow_up_window', note: 'How many seconds after it speaks a reply is accepted without its name; 0 = always need the name.' },
+];
 
 /** OpenClaw core tools an agent may be given or denied. */
 export const CORE_TOOLS = [
