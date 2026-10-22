@@ -151,3 +151,38 @@ test('voice: UNIVERSAL_VOICE=0 writes the kill-switch file and starts every core
   // The file outlives the env switch: voice stays off until POST /voice/on.
   assert.match(stack(root, 'supervisor', { UNIVERSAL_VOICE: '1' }), /voice OFF .*exists/);
 });
+
+// #4374: the dashboard edits bots.json while the stack is up and runs `rewire`.
+test('rewire: bots.conf and the gateway follow bots.json; a removed bot stays removed, add brings it back', () => {
+  const root = fresh();
+  stack(root, 'supervisor');
+  stack(root, 'gateway');
+  const file = json(`${root}/config/bots.json`);
+  file.bots.trixie.channel = 'Lounge';
+  file.bots.trixie.env = { SEXTON_EXTRA: 'x' };
+  delete file.bots.lexton;
+  file.removed = ['lexton'];
+  writeFileSync(`${root}/config/bots.json`, JSON.stringify(file));
+  stack(root, 'rewire');
+  const conf = readFileSync(`${root}/run/bots.conf`, 'utf8');
+  assert.match(conf, /SEXTON_CHANNEL="Lounge"/);
+  assert.match(conf, /SEXTON_EXTRA="x"/);
+  assert.doesNotMatch(conf, /core-lexton/);
+  assert.doesNotMatch(conf, /menace-lexton/);
+  const again = json(`${root}/config/bots.json`);
+  assert.equal(again.bots.lexton, undefined); // the pack is still on disk, but it is not re-added
+  assert.equal(again.bots.trixie.port, 9105); // ports never move
+  const cfg = json(`${root}/config/openclaw/openclaw.json`);
+  assert.equal(cfg.channels.teamspeak.accounts.lexton.enabled, false); // switched off, not deleted
+  assert.ok(!cfg.bindings.some((b) => b.agentId === 'lexton'));
+  assert.equal(json(`${root}/run/summoner.json`).bots.lexton, undefined);
+  // Add it back the way the tab does: an entry, no port.
+  again.bots.lexton = { menace: true };
+  delete again.removed;
+  writeFileSync(`${root}/config/bots.json`, JSON.stringify(again));
+  stack(root, 'rewire');
+  assert.equal(json(`${root}/config/bots.json`).bots.lexton.port, 9103);
+  assert.match(readFileSync(`${root}/run/bots.conf`, 'utf8'), /\[program:menace-lexton\]/);
+  assert.equal(json(`${root}/config/openclaw/openclaw.json`).channels.teamspeak.accounts.lexton.enabled, undefined);
+  assert.deepEqual(JSON.parse(stack(root, 'packs')).lexton, join(repo, 'personas', 'lexton'));
+});
