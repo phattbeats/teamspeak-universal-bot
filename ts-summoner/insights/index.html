@@ -550,7 +550,10 @@ function renderTools() {
     </div>
     <div class="card"><h2>Voice &amp; room tools</h2><p class="sub">Switches for the TeamSpeak plugin's tool groups.</p>
       <div class="ctl-grid">${t.groups.map((g) => `<label class="ctl-row"><input type="checkbox" data-group="${esc(g.id)}"${b.groups[g.id] ? ' checked' : ''}><div><b>${esc(g.label)}</b>${g.sensitive ? ' <span class="warn">needs an allowed server group</span>' : ''}<div class="t">${g.tools.map(esc).join(', ')}</div></div></label>`).join('')}</div>
-      <p class="sub" style="margin-top:10px">Moderation only works for people in: ${b.moderationGroups.length ? b.moderationGroups.map(esc).join(', ') : '<i>nobody (no group set)</i>'}. Always on: ${t.always.map(esc).join(', ')}.</p>
+      <p class="sub" style="margin-top:10px">Moderation only works for people in: ${b.moderationGroups.length ? b.moderationGroups.map(esc).join(', ') : '<i>nobody (no group set)</i>'}.</p>
+    </div>
+    <div class="card"><h2>Always on</h2><p class="sub">The bot being a bot in the room. These cannot be switched off per bot.</p>
+      <div class="ctl-grid">${t.always.map((a) => `<div class="ctl-row"><div><b>${esc(a.name)}</b><div class="t">${esc(a.note)}</div></div></div>`).join('')}</div>
     </div>
     <div class="card"><h2>Skills</h2><p class="sub">Which skills this bot's agent can use.</p>
       <label class="ctl-row"><input type="checkbox" id="skills-all"${allSkills ? ' checked' : ''}><div><b>No allow-list</b> <span class="warn">every installed skill is available</span></div></label>
