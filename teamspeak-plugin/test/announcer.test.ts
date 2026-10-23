@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Announcer, rollMood } from "../src/voice/announcer.js";
 
-function setup(opts: { ready?: boolean; random?: () => number; now?: number } = {}) {
+function setup(opts: { ready?: boolean; random?: () => number; now?: number; voiceOff?: () => boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "announce-"));
   const requestFile = join(dir, ".announce");
   const linesFile = join(dir, "lines.json");
@@ -20,6 +20,7 @@ function setup(opts: { ready?: boolean; random?: () => number; now?: number } = 
       return { durationMs: 2_000 };
     },
     isReady: () => state.ready,
+    ...(opts.voiceOff ? { isVoiceOff: opts.voiceOff } : {}),
     random: opts.random ?? (() => 0),
     now: () => opts.now ?? 1_000_000,
     sleep: async (ms) => {
@@ -32,6 +33,19 @@ function setup(opts: { ready?: boolean; random?: () => number; now?: number } = 
 }
 
 describe("Announcer (#3824)", () => {
+  it("says nothing while voice is off, and still clears the request (#4372)", async () => {
+    let off = true;
+    const t = setup({ voiceOff: () => off });
+    t.request("shift_end");
+    await t.announcer.tick();
+    expect(t.spoken).toEqual([]);
+    expect(existsSync(t.requestFile)).toBe(false);
+    off = false;
+    t.request("shift_end");
+    await t.announcer.tick();
+    expect(t.spoken).toEqual(["a"]);
+  });
+
   it("speaks a line from the reason's pool, waits it out, then removes the request", async () => {
     const t = setup();
     t.request("shift_end");

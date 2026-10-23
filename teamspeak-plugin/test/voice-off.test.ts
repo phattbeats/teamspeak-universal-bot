@@ -8,7 +8,7 @@
  * summoner writes (`voice.offFile`), which flips a running lane both ways.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TYPE_SEND_TEXT, TYPE_VOICE_AUDIO } from "../src/bridge/protocol.js";
+import { TYPE_MUSIC_AUDIO, TYPE_SEND_TEXT, TYPE_VOICE_AUDIO } from "../src/bridge/protocol.js";
 import type { RosterEntry } from "../src/bridge/protocol.js";
 import { resolveTeamSpeakVoiceMode, resolveTeamSpeakVoiceOffFile } from "../src/config.js";
 import type { RoomPlaybackQueue } from "../src/voice/room-playback.js";
@@ -55,6 +55,7 @@ function harness(opts: {
   fileExists?: (path: string) => boolean;
   synthesize?: ReturnType<typeof vi.fn>;
   onChatMessage?: (message: { text: string }) => Promise<string | undefined>;
+  createMusic?: (sink: { sendMusicAudio(pcm: Buffer): void }) => unknown;
 }) {
   const bridge = new MockBridge();
   const sessions = new Map<number, CountingSession>();
@@ -74,6 +75,7 @@ function harness(opts: {
     ...(opts.fileExists ? { fileExists: opts.fileExists } : {}),
     ...(opts.synthesize ? { synthesize: opts.synthesize as never } : {}),
     ...(opts.onChatMessage ? { onChatMessage: opts.onChatMessage as never } : {}),
+    ...(opts.createMusic ? { toolOverrides: { createMusic: opts.createMusic as never } } : {}),
     createSpeakerSession: (client: RosterEntry, playback) => {
       created += 1;
       const session = new CountingSession(client.clientId, client.nickname, playback);
@@ -221,5 +223,51 @@ describe("the live kill switch (voice.offFile)", () => {
     expect(await speak("hello")).toBeUndefined();
     expect(synthesize).not.toHaveBeenCalled();
     expect(h.bridge.sentOfType(TYPE_VOICE_AUDIO)).toHaveLength(0);
+  });
+});
+
+// Brandon (2026-10-23): "needs to also affect intro/outros, the random
+// conversations, etc. they should make 0 voices." Entrances, exits and scene
+// lines all go through the announcer and the room speaker. Music and the band
+// keep playing ("its the direct speaking of the agents that is off").
+describe("voice off silences every spoken line, not the music", () => {
+  let present = false;
+  afterEach(() => {
+    present = false;
+  });
+
+  it("drops a room line whose TTS call was still out when voice went off", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    const synthesize = vi.fn(() => new Promise((resolve) => (finish = resolve)));
+    const h = harness({ voiceOffFile: "/config/.voice-off", fileExists: () => present, synthesize });
+    const speak = (h.runtime as unknown as { createRoomSpeaker: (s: unknown, o: string) => (t: string) => Promise<unknown> })
+      .createRoomSpeaker(synthesize, "announcer");
+    const pending = speak("Evening. Velvet Vice is open.");
+    present = true;
+    await vi.waitFor(() => expect(h.runtime.isVoiceOff).toBe(true));
+    finish({ status: "ok", pcm48kMono: FRAME_20MS });
+    expect(await pending).toBeUndefined();
+    expect(h.bridge.sentOfType(TYPE_VOICE_AUDIO)).toHaveLength(0);
+    h.runtime.stop();
+  });
+
+  it("keeps the music playing: voice off is the agents' speech, not the jukebox", async () => {
+    let sink: { sendMusicAudio(pcm: Buffer): void } | undefined;
+    const music = { stop: vi.fn(() => true), close: vi.fn(), queueLength: 0, nowPlaying: undefined };
+    const h = harness({
+      voiceOffFile: "/config/.voice-off",
+      fileExists: () => present,
+      createMusic: (s) => {
+        sink = s;
+        return music;
+      },
+    });
+    present = true;
+    await vi.waitFor(() => expect(h.runtime.isVoiceOff).toBe(true));
+    expect(music.stop).not.toHaveBeenCalled();
+    sink?.sendMusicAudio(FRAME_20MS);
+    expect(h.bridge.sentOfType(TYPE_MUSIC_AUDIO)).toHaveLength(1);
+    expect(h.bridge.sentOfType(TYPE_VOICE_AUDIO)).toHaveLength(0);
+    h.runtime.stop();
   });
 });

@@ -101,7 +101,8 @@ export const offCooldown = (lastAt, cooldownDays, now) => !lastAt || now - lastA
  */
 export function takeoverEligible(x) {
   return Boolean(
-    x.enabled && x.queryUp && !x.active && x.humans >= x.minHumans
+    // #4372: a takeover is a scene; it doesn't start while voice is off.
+    x.enabled && !x.voiceOff && x.queryUp && !x.active && x.humans >= x.minHumans
     && x.targetRunning && x.targetOnShift && !x.targetOverride && !x.targetBusy
     && x.targetOnShiftAfter
     && !x.villainRunning && !x.villainOnShift && !x.villainOverride && !x.villainBusy

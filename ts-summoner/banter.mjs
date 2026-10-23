@@ -45,12 +45,13 @@ export const playsOn = (plays, day) => (plays ?? []).filter((p) => p.day === day
  * May a bit start now? Plain values:
  *   { queryUp, humans, lastTalk (ms, voice or chat), stageBusy (another event,
  *     a scene, a guest), plays: [{ day, at, key }], day, now }
+ * `voiceOff` (#4372): the bit is all talk, so it never starts with voice off.
  * Someone has to have talked in the last `recentTalkMin` (the room isn't
  * AFK), but nobody in the last `quietMin` (it's a lull, not a conversation).
  * Streams are checked separately, see isStreaming.
  */
 export function banterOpen(bc, x) {
-  if (!bc.enabled || !x.queryUp || x.stageBusy || x.humans < bc.minHumans) return false;
+  if (!bc.enabled || x.voiceOff || !x.queryUp || x.stageBusy || x.humans < bc.minHumans) return false;
   if (!x.lastTalk || x.now - x.lastTalk > bc.recentTalkMin * MIN) return false;
   if (x.now - x.lastTalk < bc.quietMin * MIN) return false;
   if (playsOn(x.plays, x.day) >= bc.maxPerNight) return false;

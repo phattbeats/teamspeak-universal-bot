@@ -207,7 +207,12 @@ export class TeamSpeakVoiceRuntime {
     this.voiceOff = this.voiceOffPinned;
     this.playback = new RoomPlaybackQueue({
       sink: {
-        writeVoiceAudio: (pcm) => this.bridge.sendVoiceAudio(pcm),
+        // Voice off (#4372): the last word on outbound audio. Whatever got
+        // past the gates upstream (a line synthesized as the switch flipped)
+        // never reaches the bridge.
+        writeVoiceAudio: (pcm) => {
+          if (!this.voiceOff) this.bridge.sendVoiceAudio(pcm);
+        },
         clearVoice: () => this.bridge.clearVoice(),
       },
       minBargeInAudioEndMs: params.minBargeInAudioEndMs ?? DEFAULT_MIN_BARGE_IN_AUDIO_END_MS,
@@ -500,6 +505,8 @@ export class TeamSpeakVoiceRuntime {
 
   private createMusicController(): MusicController | undefined {
     const sink: MusicSink = {
+      // Not gated by voice off: music and the band keep playing (Brandon,
+      // 2026-10-23: "its the direct speaking of the agents that is off").
       sendMusicAudio: (pcm) => this.bridge.sendMusicAudio(pcm),
       setMusicGain: (gain) => this.bridge.setMusicGain(gain),
     };
@@ -566,6 +573,7 @@ export class TeamSpeakVoiceRuntime {
       ...resolveAnnouncePaths(config),
       speak: this.createRoomSpeaker(this.params.synthesize, "announcer"),
       isReady: () => this.bridge.isConnected && this.state.connected && this.selfClientId !== undefined,
+      isVoiceOff: () => this.voiceOff,
       ...(this.params.log ? { log: this.params.log } : {}),
     });
   }
@@ -614,6 +622,10 @@ export class TeamSpeakVoiceRuntime {
       }
       if (speech.status === "failed") {
         throw new Error(`speech synthesis failed: ${speech.error}`);
+      }
+      // The switch may have flipped while the TTS call was out.
+      if (this.parked || this.voiceOff) {
+        return undefined;
       }
       for (const frame of chunkBridgePcm(speech.pcm48kMono)) {
         this.playback.enqueue(owner, frame);
@@ -664,7 +676,8 @@ export class TeamSpeakVoiceRuntime {
   /**
    * Flip voice off or on (#4372). Off closes every speaker session (so no
    * segment is ever closed and no transcription requested), cuts whatever is
-   * mid-playback and stops the music. On reopens a session per roster entry.
+   * mid-speech. Music keeps playing: voice off is the agents' own speech, not
+   * the jukebox. On reopens a session per roster entry.
    * A config-pinned off (`voice.mode: "off"`) stays off whatever asks.
    */
   setVoiceOff(off: boolean, reason: string): void {
@@ -678,7 +691,6 @@ export class TeamSpeakVoiceRuntime {
     if (off) {
       this.sessions.suspendSessions(`voice-off:${reason}`);
       this.playback.handleBargeIn("voice-off", { force: true });
-      this.music?.stop(`voice-off:${reason}`);
     } else if (!this.parked) {
       this.sessions.resumeSessions();
     }

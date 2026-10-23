@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createVoiceSwitch } from '../voice.mjs';
+import { canBeHeard, createVoiceSwitch } from '../voice.mjs';
 
 const fresh = () => {
   const offFile = join(mkdtempSync(join(tmpdir(), 'voice-')), '.voice-off');
@@ -45,4 +45,15 @@ test('a supervisorctl failure never loses the file change', async () => {
   assert.equal(off.voice, 'off');
   assert.match(off.whisper, /stop ears failed: socket gone/);
   assert.ok(existsSync(offFile));
+});
+
+// Brandon (2026-10-23): voice off "needs to also affect intro/outros, the
+// random conversations, etc. they should make 0 voices".
+test('canBeHeard: voice off is nobody listening, whoever is on the server', () => {
+  const room = { queryUp: true, humans: 3 };
+  assert.equal(canBeHeard(room), true);
+  assert.equal(canBeHeard({ ...room, voiceOff: true }), false);
+  assert.equal(canBeHeard({ ...room, humans: 0 }), false);
+  assert.equal(canBeHeard({ ...room, queryUp: false }), false);
+  assert.equal(canBeHeard({ ...room, announceEnabled: false }), false);
 });

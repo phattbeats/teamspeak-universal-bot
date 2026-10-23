@@ -110,7 +110,7 @@ test('takeover only when Sexton is working, Lexton is not, and people are watchi
     villainRunning: false, villainOnShift: false, villainOverride: false, villainBusy: false, offCooldown: true,
   };
   assert.equal(takeoverEligible(ok), true);
-  for (const [k, v] of [['humans', 1], ['targetOnShiftAfter', false], ['villainRunning', true], ['offCooldown', false], ['active', true], ['targetOverride', true]]) {
+  for (const [k, v] of [['humans', 1], ['targetOnShiftAfter', false], ['villainRunning', true], ['offCooldown', false], ['active', true], ['targetOverride', true], ['voiceOff', true]]) {
     assert.equal(takeoverEligible({ ...ok, [k]: v }), false, k);
   }
 });

@@ -30,6 +30,7 @@ test('closed: nobody on, query down, a guest already in', () => {
   assert.equal(slotOpen(g, open({ humans: 0 })), false);
   assert.equal(slotOpen(g, open({ queryUp: false })), false);
   assert.equal(slotOpen(g, open({ slotBusy: true })), false);
+  assert.equal(slotOpen(g, open({ voiceOff: true })), false); // #4372
 });
 
 test('weekly cap, with one extra on a special night', () => {
