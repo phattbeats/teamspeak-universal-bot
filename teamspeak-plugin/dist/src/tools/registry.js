@@ -71,15 +71,6 @@ const PLAY_SOURCE_TOOL = "play_source";
 const PAUSE_TOOL = "pause";
 const RESUME_TOOL = "resume";
 const SEEK_TOOL = "seek";
-const SOUND_TOOLS = /* @__PURE__ */ new Set([
-  PLAY_MUSIC_TOOL,
-  PLAY_SOURCE_TOOL,
-  RESUME_TOOL,
-  SKIP_TOOL,
-  SEEK_TOOL,
-  COMPOSE_SONG_TOOL,
-  REPLAY_SONG_TOOL
-]);
 const MUSIC_SOURCE_KINDS = [
   "youtube",
   "soundcloud",
@@ -718,12 +709,6 @@ async function dispatch(deps, name, args, context) {
   const flag = MODERATION_FLAG[name];
   if (flag && !moderationOptions(deps.config)[flag]) {
     return { ok: false, error: "That moderation tool is not enabled here." };
-  }
-  if (SOUND_TOOLS.has(name) && deps.isVoiceOff?.()) {
-    return {
-      ok: false,
-      error: "Voice is off (text-only mode): no music or songs until someone turns voice back on."
-    };
   }
   switch (name) {
     case PLAY_MUSIC_TOOL:

@@ -110,17 +110,6 @@ export const PAUSE_TOOL = "pause";
 export const RESUME_TOOL = "resume";
 export const SEEK_TOOL = "seek";
 
-/** The tools that start a sound, refused while voice is off (#4372). Stop/queue/volume still answer. */
-const SOUND_TOOLS = new Set<string>([
-  PLAY_MUSIC_TOOL,
-  PLAY_SOURCE_TOOL,
-  RESUME_TOOL,
-  SKIP_TOOL,
-  SEEK_TOOL,
-  COMPOSE_SONG_TOOL,
-  REPLAY_SONG_TOOL,
-]);
-
 const MUSIC_SOURCE_KINDS: MusicSourceKind[] = [
   "youtube",
   "soundcloud",
@@ -156,11 +145,6 @@ export type TeamSpeakToolDeps = {
    */
   setParked: (parked: boolean, reason: string) => void;
   isParked: () => boolean;
-  /**
-   * Voice off (#4372): text-only. The tools that would make a sound (music,
-   * the band) refuse instead of playing to a muted bridge.
-   */
-  isVoiceOff?: () => boolean;
   // --- moderation (#3786) ------------------------------------------------
   kickClient: (clientId: TeamSpeakClientId, fromServer: boolean, reason?: string) => void;
   banClient: (clientId: TeamSpeakClientId, durationSecs?: number, reason?: string) => void;
@@ -885,12 +869,6 @@ async function dispatch(
   const flag = MODERATION_FLAG[name];
   if (flag && !moderationOptions(deps.config)[flag]) {
     return { ok: false, error: "That moderation tool is not enabled here." };
-  }
-  if (SOUND_TOOLS.has(name) && deps.isVoiceOff?.()) {
-    return {
-      ok: false,
-      error: "Voice is off (text-only mode): no music or songs until someone turns voice back on.",
-    };
   }
   switch (name) {
     case PLAY_MUSIC_TOOL:

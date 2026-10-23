@@ -51,9 +51,10 @@ layers; the bots stay in the channel and still answer text either way.
 | gateway | every account goes `voice.mode: "off"`: the bridge stays connected for roster, chat and tools, inbound audio frames are dropped before any transcriber, nothing is synthesized, no `voice_audio` leaves | the same file, polled every 2 s (`voice.offFile`, wired by `stack.mjs`); or pin one account with `voice.mode: "off"` / `voice.listen: false` |
 | core | `sexton --no-audio` (`SEXTON_NO_AUDIO=1`): inbound Opus is dropped before decode, nothing forwarded, ~0% CPU | boot-time only: `stack.mjs` sets it on every core when `UNIVERSAL_VOICE=0` |
 
-**Zero voices, not just no replies.** Brandon, 2026-10-23: "needs to also
-affect intro/outros, the random conversations, etc. they should make 0
-voices." While voice is off:
+**No agent speech at all, not just no replies.** Brandon, 2026-10-23: "needs
+to also affect intro/outros, the random conversations, etc. they should make
+0 voices" and "music playing and song generation work fine. its the direct
+speaking of the agents that is off." While voice is off:
 
 - entrance and exit lines, scene lines and bender news are never said: the
   summoner treats voice off as nobody listening (entrances still go out
@@ -62,12 +63,13 @@ voices." While voice is off:
 - banter, hostile takeovers and guest visits don't start, by dice or by hand
   (`POST /event/<banter|takeover|guest>` answers `voice is off`). A
   calendar-forced one waits until voice is back on;
-- music and the band are refused (`play_music`, `play_source`, `resume`,
-  `skip`, `seek`, `compose_song`, `replay_song`); `stop_music` and the
-  queue tools still answer;
-- as a backstop the runtime drops every outbound `voice_audio` and
-  `music_audio` frame, so a line or a song that was already on its way when
-  the switch flipped never reaches the room.
+- music and the band keep working: `play_music` (from a text request), the
+  queue, `compose_song` and `replay_song` all play as usual, and a song
+  already playing is not stopped. Only the band leader's spoken
+  introduction is dropped;
+- as a backstop the runtime drops every outbound `voice_audio` frame, so a
+  line that was already on its way when the switch flipped never reaches the
+  room. `music_audio` is untouched.
 
 **Live, no restart:**
 

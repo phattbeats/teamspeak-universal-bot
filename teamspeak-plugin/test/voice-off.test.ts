@@ -228,9 +228,9 @@ describe("the live kill switch (voice.offFile)", () => {
 
 // Brandon (2026-10-23): "needs to also affect intro/outros, the random
 // conversations, etc. they should make 0 voices." Entrances, exits and scene
-// lines all go through the announcer and the room speaker; music and the band
-// go through the music sink. Each of them is covered here.
-describe("voice off makes no sound at all", () => {
+// lines all go through the announcer and the room speaker. Music and the band
+// keep playing ("its the direct speaking of the agents that is off").
+describe("voice off silences every spoken line, not the music", () => {
   let present = false;
   afterEach(() => {
     present = false;
@@ -251,9 +251,9 @@ describe("voice off makes no sound at all", () => {
     h.runtime.stop();
   });
 
-  it("lets no music frame out while off, and plays again once voice is back", async () => {
+  it("keeps the music playing: voice off is the agents' speech, not the jukebox", async () => {
     let sink: { sendMusicAudio(pcm: Buffer): void } | undefined;
-    const music = { stop: vi.fn(() => false), close: vi.fn(), queueLength: 0, nowPlaying: undefined };
+    const music = { stop: vi.fn(() => true), close: vi.fn(), queueLength: 0, nowPlaying: undefined };
     const h = harness({
       voiceOffFile: "/config/.voice-off",
       fileExists: () => present,
@@ -264,26 +264,10 @@ describe("voice off makes no sound at all", () => {
     });
     present = true;
     await vi.waitFor(() => expect(h.runtime.isVoiceOff).toBe(true));
-    sink?.sendMusicAudio(FRAME_20MS);
-    expect(h.bridge.sentOfType(TYPE_MUSIC_AUDIO)).toHaveLength(0);
-    present = false;
-    await vi.waitFor(() => expect(h.runtime.isVoiceOff).toBe(false));
+    expect(music.stop).not.toHaveBeenCalled();
     sink?.sendMusicAudio(FRAME_20MS);
     expect(h.bridge.sentOfType(TYPE_MUSIC_AUDIO)).toHaveLength(1);
-    h.runtime.stop();
-  });
-
-  it("refuses the tools that start a sound, but stop_music still answers", async () => {
-    const music = { stop: vi.fn(() => true), close: vi.fn(), queueLength: 0, nowPlaying: undefined };
-    const h = harness({ voiceOff: true, createMusic: () => music });
-    const run = (name: string, args: Record<string, unknown> = {}) =>
-      h.runtime.toolAccess!.run(name, args, { clientId: 11, nickname: "brandon" });
-    for (const name of ["play_music", "play_source", "resume", "skip", "compose_song", "replay_song"]) {
-      const result = await run(name, { query: "anything", brief: "a song" });
-      expect(result).toMatchObject({ ok: false });
-      expect(String(result.error)).toMatch(/Voice is off/u);
-    }
-    expect(await run("stop_music")).toMatchObject({ ok: true, stopped: true });
+    expect(h.bridge.sentOfType(TYPE_VOICE_AUDIO)).toHaveLength(0);
     h.runtime.stop();
   });
 });

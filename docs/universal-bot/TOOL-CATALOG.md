@@ -121,7 +121,7 @@ needs an agent tool, **new** = build.
 | `poke` | have | |
 | `send_text` | plumbed | `BridgeCommand::SendText` (channel/server/client) |
 | `leave_voice` / `join_voice` | have | |
-| `set_voice_mode` | have (#4372) | `mode: "on"\|"off"`. The **stack-wide** voice kill switch: "Sexton, go quiet" → `POST /voice/off` on the summoner → `/config/.voice-off` written, whisper stopped, every bot text-only within ~2 s; `"on"` reverses it (~20 s for whisper to reload). Unlike `leave_voice` (one bot, parked, deaf to text too) the bots stay in the channel and keep answering text, so "turn voice back on" works from chat. Off means zero voices: entrances/exits, scenes and banter are silent or don’t start, and the music/band tools that start a sound refuse while it is off. Also `UNIVERSAL_VOICE=0` / `voice.mode: "off"` for the boot-time forms; see `image/README.md` → Voice off |
+| `set_voice_mode` | have (#4372) | `mode: "on"\|"off"`. The **stack-wide** voice kill switch: "Sexton, go quiet" → `POST /voice/off` on the summoner → `/config/.voice-off` written, whisper stopped, every bot text-only within ~2 s; `"on"` reverses it (~20 s for whisper to reload). Unlike `leave_voice` (one bot, parked, deaf to text too) the bots stay in the channel and keep answering text, so "turn voice back on" works from chat. Off means no agent speech at all: entrances/exits, scenes and banter are silent or don’t start. Music and the band keep playing (only the band leader's spoken intro is dropped). Also `UNIVERSAL_VOICE=0` / `voice.mode: "off"` for the boot-time forms; see `image/README.md` → Voice off |
 
 ### 4.2 Music queue (#3635 gave us a queue the bot can't see)
 

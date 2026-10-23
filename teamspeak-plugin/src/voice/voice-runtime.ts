@@ -327,7 +327,6 @@ export class TeamSpeakVoiceRuntime {
           sendText: (target, text) => this.bridge.sendText(target, text),
           setParked: (parked, reason) => this.setParked(parked, reason),
           isParked: () => this.parked,
-          isVoiceOff: () => this.voiceOff,
           kickClient: (clientId, fromServer, reason) => this.bridge.kickClient(clientId, fromServer, reason),
           banClient: (clientId, durationSecs, reason) =>
             this.bridge.banClient(clientId, durationSecs, reason),
@@ -506,11 +505,9 @@ export class TeamSpeakVoiceRuntime {
 
   private createMusicController(): MusicController | undefined {
     const sink: MusicSink = {
-      // Same backstop as the voice sink (#4372): a song the band finished
-      // after voice went off plays to nobody.
-      sendMusicAudio: (pcm) => {
-        if (!this.voiceOff) this.bridge.sendMusicAudio(pcm);
-      },
+      // Not gated by voice off: music and the band keep playing (Brandon,
+      // 2026-10-23: "its the direct speaking of the agents that is off").
+      sendMusicAudio: (pcm) => this.bridge.sendMusicAudio(pcm),
       setMusicGain: (gain) => this.bridge.setMusicGain(gain),
     };
     const createMusic = this.params.toolOverrides?.createMusic;
@@ -679,7 +676,8 @@ export class TeamSpeakVoiceRuntime {
   /**
    * Flip voice off or on (#4372). Off closes every speaker session (so no
    * segment is ever closed and no transcription requested), cuts whatever is
-   * mid-playback and stops the music. On reopens a session per roster entry.
+   * mid-speech. Music keeps playing: voice off is the agents' own speech, not
+   * the jukebox. On reopens a session per roster entry.
    * A config-pinned off (`voice.mode: "off"`) stays off whatever asks.
    */
   setVoiceOff(off: boolean, reason: string): void {
@@ -693,7 +691,6 @@ export class TeamSpeakVoiceRuntime {
     if (off) {
       this.sessions.suspendSessions(`voice-off:${reason}`);
       this.playback.handleBargeIn("voice-off", { force: true });
-      this.music?.stop(`voice-off:${reason}`);
     } else if (!this.parked) {
       this.sessions.resumeSessions();
     }
