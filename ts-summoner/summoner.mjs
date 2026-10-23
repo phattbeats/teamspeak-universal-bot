@@ -46,7 +46,7 @@ import {
 } from './guests.mjs';
 import { banterChance, banterConfig, banterKey, banterOpen, isStreaming, pickBanter } from './banter.mjs';
 import { Recorder } from './insights.mjs';
-import { createVoiceSwitch } from './voice.mjs';
+import { canBeHeard, createVoiceSwitch } from './voice.mjs';
 
 const CONFIG_PATH = process.env.SUMMONER_CONFIG || '/app/config.json';
 const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
@@ -338,6 +338,9 @@ const voiceSwitch = LOCAL ? createVoiceSwitch({
   exec: (cmd) => execLocal(cmd, 60_000),
   log,
 }) : null;
+// Voice off means no voice at all: every staged line goes through
+// `audience()`, and banter, takeovers and guest visits don't start (#4372).
+const voiceOff = () => voiceSwitch?.isOff() === true;
 
 // The core is `[program:sexton]` in every bot container. The marker file tells
 // sexton-healthcheck the bot is off duty, not broken.
@@ -393,7 +396,9 @@ const ANNOUNCE_FILE = cfg.announce?.file ?? '/config/.announce';
 // #3791: one announce file per bot when they share a container.
 const announceFile = (bot) => (bot.dir ? `${bot.dir}/.announce` : ANNOUNCE_FILE);
 
-const audience = () => cfg.announce?.enabled !== false && room.queryUp && room.humans > 0;
+// Voice off (#4372) counts as nobody listening: entrances go out quiet (the
+// mood still rolls), exits, scene lines and bender news are skipped.
+const audience = () => canBeHeard({ announceEnabled: cfg.announce?.enabled !== false, queryUp: room.queryUp, humans: room.humans, voiceOff: voiceOff() });
 
 // `entrance` requests go out even to an empty server, marked quiet: they also
 // roll the shift's mood (#3840). `vars` fill {who} on a birthday (#3841).
@@ -614,7 +619,7 @@ function takeoverTick(now, forced) {
   }
   const tg = state[t.target], vl = state[t.villain];
   const ok = takeoverEligible({
-    enabled: true, queryUp: room.queryUp, active: false, humans: room.humans, minHumans: t.minHumans ?? 2,
+    enabled: true, voiceOff: voiceOff(), queryUp: room.queryUp, active: false, humans: room.humans, minHumans: t.minHumans ?? 2,
     targetRunning: tg.running, targetOnShift: onShift(t.target, now), targetOverride: Boolean(tg.override), targetBusy: tg.busy,
     targetOnShiftAfter: onShift(t.target, now + (t.durationMin + 15) * MIN),
     villainRunning: vl.running, villainOnShift: onShift(t.villain, now), villainOverride: Boolean(vl.override), villainBusy: vl.busy,
@@ -726,7 +731,7 @@ function guestsTick(now) {
   if (!cands.length) return;
   const special = specialNight(cands, now);
   const slotBusy = [...GUESTS].some((g) => state[g].running || state[g].busy || state[g].override?.mode === 'on');
-  if (!slotOpen(gc, { queryUp: room.queryUp, humans: room.humans, slotBusy, visits: events.guests.visits, special, now })) return;
+  if (!slotOpen(gc, { voiceOff: voiceOff(), queryUp: room.queryUp, humans: room.humans, slotBusy, visits: events.guests.visits, special, now })) return;
   if (Math.random() >= visitChance(gc, cfg.reconcileSec, special)) return;
   const id = pickGuest(cfg, cands);
   if (id) startVisit(id, now, special ? 'dice, special night' : 'dice');
@@ -821,7 +826,7 @@ async function banterTick(now) {
   const lastTalk = Math.max(room.lastHumanTalk, room.lastChat);
   const day = serviceDay(now, cfg.tz).ymd;
   if (banterChecking) return;
-  if (!banterOpen(bc, { queryUp: room.queryUp, humans: room.humans, lastTalk, stageBusy: stageBusy(), plays: events.banter.plays, day, now })) return;
+  if (!banterOpen(bc, { voiceOff: voiceOff(), queryUp: room.queryUp, humans: room.humans, lastTalk, stageBusy: stageBusy(), plays: events.banter.plays, day, now })) return;
   if (Math.random() >= banterChance(bc, cfg.reconcileSec)) return;
   banterChecking = true;
   try {
@@ -829,7 +834,7 @@ async function banterTick(now) {
     if (streamer) { log(`banter: skipped, ${streamer === true ? 'stream check unavailable' : `${streamer} is streaming`}`); return; }
   } finally { banterChecking = false; }
   // Re-check: someone may have spoken, or a scene started, while we asked.
-  if (!banterOpen(bc, { queryUp: room.queryUp, humans: room.humans, lastTalk: Math.max(room.lastHumanTalk, room.lastChat), stageBusy: stageBusy(), plays: events.banter.plays, day, now: Date.now() })) return;
+  if (!banterOpen(bc, { voiceOff: voiceOff(), queryUp: room.queryUp, humans: room.humans, lastTalk: Math.max(room.lastHumanTalk, room.lastChat), stageBusy: stageBusy(), plays: events.banter.plays, day, now: Date.now() })) return;
   const sc = scenes();
   const pick = pickBanter(bc, {
     present: banterPresent, canDrop: banterCanDrop,
@@ -841,6 +846,9 @@ async function banterTick(now) {
 
 function startEventByHand(kind, who) {
   const now = Date.now();
+  if (voiceOff() && ['guest', 'takeover', 'banter'].includes(kind)) {
+    return { ok: false, error: `voice is off; a ${kind} is all talk (POST /voice/on first)` };
+  }
   if (kind === 'guest' && GUESTS.size) {
     if (events.guests.active) return { ok: false, error: `${events.guests.active.bot} is already visiting` };
     const id = who ? resolveBot(who) : pickGuest(cfg, guestCandidates(cfg, inRoom)) ?? pickGuest(cfg, [...GUESTS]);

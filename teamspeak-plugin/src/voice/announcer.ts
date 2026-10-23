@@ -63,6 +63,12 @@ export type AnnouncerParams = {
   speak: (text: string) => Promise<{ durationMs: number } | undefined>;
   /** In the channel and able to be heard. Requests wait (not dropped) until it is. */
   isReady: () => boolean;
+  /**
+   * Voice is off (#4372): entrances, exits and scene lines are all dropped
+   * unsaid (the mood still rolls), and the request file still goes, so the
+   * summoner's "has he said it yet" wait ends at once.
+   */
+  isVoiceOff?: () => boolean;
   pollMs?: number;
   /** An entrance that waited longer than this for the core is no longer an entrance. */
   maxAgeMs?: number;
@@ -150,6 +156,10 @@ export class Announcer {
     const mood = await this.settleMood(base);
     if (request.quiet) {
       this.params.log?.(`teamspeak announce: '${request.reason}' quiet (empty server)`);
+      return;
+    }
+    if (this.params.isVoiceOff?.()) {
+      this.params.log?.(`teamspeak announce: '${request.reason}' quiet (voice off)`);
       return;
     }
     const line = request.text ? fill(request.text, request.vars) : await this.choose(chain, mood, request.vars);

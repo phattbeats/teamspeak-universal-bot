@@ -15,6 +15,15 @@
 // twice in a row reads as "already off" rather than a second announcement.
 import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
 
+/**
+ * Is there anyone to say a line to? Voice off counts as nobody listening
+ * (Brandon, 2026-10-23: "needs to also affect intro/outros, the random
+ * conversations, etc. they should make 0 voices"), so every line the summoner
+ * stages (entrances, exits, scenes, bender news) goes out quiet or not at all.
+ */
+export const canBeHeard = ({ announceEnabled = true, queryUp, humans, voiceOff = false }) =>
+  announceEnabled && !voiceOff && Boolean(queryUp) && humans > 0;
+
 export function createVoiceSwitch({
   offFile = '/config/.voice-off',
   program = 'whisper',

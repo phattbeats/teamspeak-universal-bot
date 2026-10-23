@@ -207,7 +207,12 @@ export class TeamSpeakVoiceRuntime {
     this.voiceOff = this.voiceOffPinned;
     this.playback = new RoomPlaybackQueue({
       sink: {
-        writeVoiceAudio: (pcm) => this.bridge.sendVoiceAudio(pcm),
+        // Voice off (#4372): the last word on outbound audio. Whatever got
+        // past the gates upstream (a line synthesized as the switch flipped)
+        // never reaches the bridge.
+        writeVoiceAudio: (pcm) => {
+          if (!this.voiceOff) this.bridge.sendVoiceAudio(pcm);
+        },
         clearVoice: () => this.bridge.clearVoice(),
       },
       minBargeInAudioEndMs: params.minBargeInAudioEndMs ?? DEFAULT_MIN_BARGE_IN_AUDIO_END_MS,
@@ -322,6 +327,7 @@ export class TeamSpeakVoiceRuntime {
           sendText: (target, text) => this.bridge.sendText(target, text),
           setParked: (parked, reason) => this.setParked(parked, reason),
           isParked: () => this.parked,
+          isVoiceOff: () => this.voiceOff,
           kickClient: (clientId, fromServer, reason) => this.bridge.kickClient(clientId, fromServer, reason),
           banClient: (clientId, durationSecs, reason) =>
             this.bridge.banClient(clientId, durationSecs, reason),
@@ -500,7 +506,11 @@ export class TeamSpeakVoiceRuntime {
 
   private createMusicController(): MusicController | undefined {
     const sink: MusicSink = {
-      sendMusicAudio: (pcm) => this.bridge.sendMusicAudio(pcm),
+      // Same backstop as the voice sink (#4372): a song the band finished
+      // after voice went off plays to nobody.
+      sendMusicAudio: (pcm) => {
+        if (!this.voiceOff) this.bridge.sendMusicAudio(pcm);
+      },
       setMusicGain: (gain) => this.bridge.setMusicGain(gain),
     };
     const createMusic = this.params.toolOverrides?.createMusic;
@@ -566,6 +576,7 @@ export class TeamSpeakVoiceRuntime {
       ...resolveAnnouncePaths(config),
       speak: this.createRoomSpeaker(this.params.synthesize, "announcer"),
       isReady: () => this.bridge.isConnected && this.state.connected && this.selfClientId !== undefined,
+      isVoiceOff: () => this.voiceOff,
       ...(this.params.log ? { log: this.params.log } : {}),
     });
   }
@@ -614,6 +625,10 @@ export class TeamSpeakVoiceRuntime {
       }
       if (speech.status === "failed") {
         throw new Error(`speech synthesis failed: ${speech.error}`);
+      }
+      // The switch may have flipped while the TTS call was out.
+      if (this.parked || this.voiceOff) {
+        return undefined;
       }
       for (const frame of chunkBridgePcm(speech.pcm48kMono)) {
         this.playback.enqueue(owner, frame);

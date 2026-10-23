@@ -443,6 +443,14 @@ quiet"). The file is the state: it survives a container restart, and
 the cores with `--no-audio`, which this switch cannot do live). Full table of
 the three layers: `image/README.md` → Voice off.
 
+Voice off is zero voices, scheduled ones included (Brandon, 2026-10-23):
+`audience()` is false, so entrances go out quiet (mood still rolls), exits,
+scene lines, bender news and the no-show line are skipped, and banter,
+takeovers and guest visits don't start (`banterOpen`, `takeoverEligible`
+and `slotOpen` all take `voiceOff`). `POST /event/<banter|takeover|guest>`
+answers `{ok:false, error:"voice is off; ..."}`. Bender still runs: it is a
+schedule change, and its news line is simply not said.
+
 ## 6. Deploy
 
 Summoner (PHATT-RAID):

@@ -48,7 +48,8 @@ export const visitsThisWeek = (visits, now) => (visits ?? []).filter((t) => now 
  * Wednesday one.
  */
 export function slotOpen(g, x) {
-  if (!g.enabled || !x.queryUp || x.slotBusy || x.humans < g.minHumans) return false;
+  // #4372: a guest is only there to talk; no visits while voice is off.
+  if (!g.enabled || x.voiceOff || !x.queryUp || x.slotBusy || x.humans < g.minHumans) return false;
   const cap = g.maxPerWeek + (x.special ? g.specialNightExtra : 0);
   if (visitsThisWeek(x.visits, x.now) >= cap) return false;
   const last = Math.max(0, ...(x.visits ?? []));

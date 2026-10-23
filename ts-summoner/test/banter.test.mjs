@@ -79,3 +79,8 @@ test('a pair already played tonight waits while another is possible', () => {
   const only = pickBanter(bc, { present: (i) => i !== 'lexton', canDrop: () => false, hasScene: has, recent: ['banter:bexton+sexton'] });
   assert.equal(only.key, 'banter:bexton+sexton');
 });
+
+test('voice off: no banter, however perfect the lull (#4372)', () => {
+  assert.equal(open({}), true);
+  assert.equal(open({ voiceOff: true }), false);
+});

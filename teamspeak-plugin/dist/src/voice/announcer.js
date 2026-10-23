@@ -75,6 +75,10 @@ class Announcer {
       this.params.log?.(`teamspeak announce: '${request.reason}' quiet (empty server)`);
       return;
     }
+    if (this.params.isVoiceOff?.()) {
+      this.params.log?.(`teamspeak announce: '${request.reason}' quiet (voice off)`);
+      return;
+    }
     const line = request.text ? fill(request.text, request.vars) : await this.choose(chain, mood, request.vars);
     if (!line) {
       this.params.log?.(`teamspeak announce: no lines for '${request.reason}'`);
