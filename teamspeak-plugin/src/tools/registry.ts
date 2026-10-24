@@ -97,6 +97,18 @@ const MODERATION_FLAG: Record<string, "kick" | "ban" | "edit"> = {
   [ADD_TO_SERVER_GROUP_TOOL]: "edit",
 };
 
+// --- screen share (PHA-4499) ---------------------------------------------
+export const STREAM_URL_TOOL = "stream_url";
+export const STOP_STREAM_TOOL = "stop_stream";
+export const STREAM_STATUS_TOOL = "stream_status";
+
+/** Round-trips to the Sexton's screen-share actor. `detail` is a human string or status JSON. */
+export type StreamController = {
+  start: (url: string, title?: string) => Promise<{ ok: boolean; detail: string }>;
+  stop: () => Promise<{ ok: boolean; detail: string }>;
+  status: () => Promise<{ ok: boolean; detail: string }>;
+};
+
 // --- music queue v2 (#3785) ---------------------------------------------
 export const NOW_PLAYING_TOOL = "now_playing";
 export const SHOW_QUEUE_TOOL = "show_queue";
@@ -130,6 +142,8 @@ export type TeamSpeakToolDeps = {
   config: TeamSpeakToolsConfig | undefined;
   /** Undefined disables the music tools (no ffmpeg/yt-dlp in the image). */
   music: MusicController | undefined;
+  /** Undefined unless `tools.stream.enabled` (PHA-4499). */
+  stream?: StreamController | undefined;
   /** Everyone the bridge currently sees in the channel, minus the bot itself. */
   roster: () => RosterEntry[];
   /** The channel the bridge is in; `what_did_i_miss` reads that channel's log. */
@@ -205,6 +219,7 @@ export function createTeamSpeakToolRegistration(
   return {
     tools: buildTeamSpeakTools({
       music: deps.music !== undefined,
+      stream: deps.stream !== undefined,
       band: deps.band !== undefined,
       moderation: moderationOptions(deps.config),
       villain: deps.villain !== undefined,
@@ -215,11 +230,42 @@ export function createTeamSpeakToolRegistration(
 
 export function buildTeamSpeakTools(options: {
   music: boolean;
+  stream?: boolean;
   band?: boolean;
   moderation?: { kick: boolean; ban: boolean; edit: boolean };
   villain?: boolean;
 }): RealtimeVoiceTool[] {
   const tools: RealtimeVoiceTool[] = [];
+  if (options.stream) {
+    tools.push(
+      {
+        type: "function",
+        name: STREAM_URL_TOOL,
+        description:
+          "Screen-share a live stream or video into the channel so people can click Watch and see it with sound. Use when someone says \"stream this\" with a Twitch, Kick or YouTube link. Only those sites work. Starting a new one replaces the current one. Tell them to click Watch on your share; the video takes a few seconds to appear after they do. Confirm in a few words.",
+        parameters: {
+          type: "object",
+          properties: {
+            url: { type: "string", description: "The http(s) link to a Twitch, Kick or YouTube stream or video." },
+            title: { type: "string", description: "Optional label for the share; defaults to the stream's title." },
+          },
+          required: ["url"],
+        },
+      },
+      {
+        type: "function",
+        name: STOP_STREAM_TOOL,
+        description: "Stop the screen share. Confirm in a few words.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: STREAM_STATUS_TOOL,
+        description: "Say what is being screen-shared right now and how many are watching.",
+        parameters: { type: "object", properties: {} },
+      },
+    );
+  }
   if (options.music) {
     tools.push(
       {
@@ -939,6 +985,10 @@ async function dispatch(
       return editServerTool(deps, args, context);
     case ADD_TO_SERVER_GROUP_TOOL:
       return addToServerGroupTool(deps, args, context);
+    case STREAM_URL_TOOL:
+    case STOP_STREAM_TOOL:
+    case STREAM_STATUS_TOOL:
+      return await streamTool(deps, name, args);
     case LIST_CHANNELS_TOOL:
       return await listChannelsTool(deps);
     case MOVE_TO_CHANNEL_TOOL:
@@ -1868,6 +1918,48 @@ function editServerTool(
   deps.editServer(name, welcomeMessage);
   auditModeration(deps, context, "edited server settings");
   return { ok: true, name: name ?? null, welcomeMessage: welcomeMessage ?? null };
+}
+
+const STREAM_HOSTS = /^(?:[a-z0-9-]+\.)*(?:twitch\.tv|kick\.com|youtube\.com|youtu\.be)$/iu;
+
+async function streamTool(
+  deps: TeamSpeakToolDeps,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const stream = deps.stream;
+  if (!stream) {
+    return { ok: false, error: "Screen sharing isn't set up here." };
+  }
+  if (name === STOP_STREAM_TOOL) {
+    const r = await stream.stop();
+    return { ok: r.ok, detail: r.detail };
+  }
+  if (name === STREAM_STATUS_TOOL) {
+    const r = await stream.status();
+    try {
+      return { ok: r.ok, ...(JSON.parse(r.detail) as Record<string, unknown>) };
+    } catch {
+      return { ok: r.ok, detail: r.detail };
+    }
+  }
+  const raw = readString(args.url)?.trim();
+  let host: string | undefined;
+  try {
+    const u = raw ? new URL(raw) : undefined;
+    host = u && (u.protocol === "https:" || u.protocol === "http:") ? u.hostname : undefined;
+  } catch {
+    host = undefined;
+  }
+  if (!raw || !host || !STREAM_HOSTS.test(host)) {
+    return { ok: false, error: "I can only stream Twitch, Kick or YouTube links." };
+  }
+  const r = await stream.start(raw, readString(args.title));
+  if (!r.ok) {
+    return { ok: false, error: r.detail };
+  }
+  deps.log?.(`stream: started ${raw}`);
+  return { ok: true, note: "Share is up in the channel. Tell them to click Watch; video appears a few seconds after." };
 }
 
 function addToServerGroupTool(

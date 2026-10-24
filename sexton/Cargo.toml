@@ -19,6 +19,10 @@ name = "probe-channels"
 path = "src/bin/probe-channels.rs"
 
 [[bin]]
+name = "stream-spike"
+path = "src/bin/stream-spike.rs"
+
+[[bin]]
 name = "bridge-test"
 path = "src/bin/bridge-test.rs"
 
@@ -32,7 +36,7 @@ path = "src/bin/bridge-test.rs"
 # (unchanged from #3099): the Sexton's avatar upload already runs over
 # the in-cluster Docker network with plain reqwest, and turning it on would
 # add a native-TLS build dependency for no behavioural gain.
-tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5", default-features = false, features = ["audio"] }
+tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5", default-features = false, features = ["audio", "unstable"] }
 # Needed directly (not just via tsclientlib) for the `AudioData`/`CodecType`/
 # `OutAudio` types the outbound Opus tick builds by hand — same pin, so this
 # is the exact crate version tsclientlib itself compiles against.
@@ -50,7 +54,7 @@ bridge-proto = { path = "../bridge-proto" }
 # out against this TS6 server; do not bump independently of that history.
 audiopus = "0.3.0-rc.0"
 
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process"] }
 tokio-tungstenite = "0.21"
 futures = "0.3"
 futures-util = "0.3"
@@ -63,3 +67,7 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+
+# PHA-4499 spike: TS6 screen-share sender (raw stream* commands + str0m).
+str0m = "0.24"
+tsproto = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5" }

@@ -73,6 +73,7 @@ use tsclientlib::{
 mod audio;
 mod mixer;
 mod protocol;
+mod stream;
 mod ws_server;
 
 use audio::AudioState;
@@ -965,9 +966,26 @@ async fn main() -> Result<()> {
         });
     }
 
+    // PHA-4499: screen-share actor. Opt-in per bot (`SEXTON_STREAM=1`) — it
+    // binds a UDP port, and the bots share a host. `_stream_out_tx` is kept
+    // alive so a disabled bot's `stream_out_rx` stays pending instead of
+    // returning `None` in a hot loop.
+    let (stream_out_tx, mut stream_out_rx) = mpsc::unbounded_channel::<String>();
+    let stream_ctl: Option<mpsc::UnboundedSender<stream::Ctl>> = if env_flag("SEXTON_STREAM") {
+        info!("SEXTON_STREAM set: screen-share lane enabled");
+        Some(stream::spawn(stream::Config::from_env(), stream_out_tx.clone(), event_tx.clone()))
+    } else {
+        None
+    };
+    let _stream_out_tx = stream_out_tx;
+
     let mut backoff = BACKOFF_INITIAL;
     loop {
-        match run_once(&args, &address, &mixer, &mut cmd_rx, &event_tx, &snapshot).await {
+        let res = run_once(&args, &address, &mixer, &mut cmd_rx, &event_tx, &snapshot, &stream_ctl, &mut stream_out_rx).await;
+        if let Some(c) = &stream_ctl {
+            let _ = c.send(stream::Ctl::Disconnected);
+        }
+        match res {
             Ok(()) => {
                 // Clean disconnect (shouldn't normally happen) — reset backoff.
                 backoff = BACKOFF_INITIAL;
@@ -990,6 +1008,8 @@ async fn run_once(
     cmd_rx: &mut mpsc::UnboundedReceiver<bridge_proto::BridgeCommand>,
     event_tx: &broadcast::Sender<bridge_proto::BridgeEvent>,
     snapshot: &Arc<TokioMutex<bridge_proto::Snapshot>>,
+    stream_ctl: &Option<mpsc::UnboundedSender<stream::Ctl>>,
+    stream_out: &mut mpsc::UnboundedReceiver<String>,
 ) -> Result<()> {
     let identity = if args.identity.is_empty() {
         let id = Identity::create();
@@ -1200,6 +1220,30 @@ async fn run_once(
     let mut last_channel_id: Option<u64> = None;
     audio::emit_state_and_roster(&mut con, event_tx, snapshot, &mut last_roster_sig, &mut last_channel_id).await;
 
+    // PHA-4499: feed `notifystream*` lines to the stream actor (the typed
+    // tsclientlib event stream drops them), and tell it we're connected.
+    if let Some(ctl) = stream_ctl {
+        match con.get_tsproto_client_mut() {
+            Ok(raw) => {
+                let tx = ctl.clone();
+                raw.event_listeners.push(Box::new(move |ev: &tsproto::connection::Event| {
+                    if let tsproto::connection::Event::ReceivePacket(p) = ev {
+                        if p.header().packet_type().is_command() {
+                            let text = String::from_utf8_lossy(p.content());
+                            if stream::is_stream_line(&text) {
+                                let (name, args) = stream::parse_line(&text);
+                                let _ = tx.send(stream::Ctl::Raw(name, args));
+                            }
+                        }
+                    }
+                }));
+                let _ = ctl.send(stream::Ctl::Connected { own_clid: own_client_id.0 });
+            }
+            Err(e) => warn!(error = %e, "stream: raw client unavailable; screen share disabled this session"),
+        }
+    }
+    while stream_out.try_recv().is_ok() {} // stale lines from a dead session
+
     let mut tick = tokio::time::interval(Duration::from_millis(20));
     // `Burst`, not `Skip`. `on_tick` pops exactly one 20 ms frame from the
     // mixer and emits one Opus packet, so the tick rate *is* the playout
@@ -1226,6 +1270,7 @@ async fn run_once(
         Cmd(Option<bridge_proto::BridgeCommand>),
         Tick,
         Event(Option<std::result::Result<StreamItem, tsclientlib::Error>>),
+        StreamOut(Option<String>),
     }
 
     loop {
@@ -1235,6 +1280,7 @@ async fn run_once(
                 biased;
                 cmd = cmd_rx.recv() => Wake::Cmd(cmd),
                 _ = tick.tick() => Wake::Tick,
+                line = stream_out.recv() => Wake::StreamOut(line),
                 ev = events.next() => Wake::Event(ev),
             }
         };
@@ -1242,13 +1288,25 @@ async fn run_once(
         match wake {
             Wake::Cmd(cmd) => {
                 if let Some(cmd) = cmd {
-                    handle_bridge_command(&mut con, own_client_id, mixer, &mut audio_state, event_tx, cmd)
+                    handle_bridge_command(&mut con, own_client_id, mixer, &mut audio_state, event_tx, stream_ctl, cmd)
                         .await;
                 }
                 // `None` means every `cmd_tx` clone (the WS server's) is
                 // gone, which only happens if the WS server task itself
                 // panicked — not fatal to the TS connection, so keep going.
             }
+            Wake::StreamOut(Some(line)) => {
+                let cmd = tsproto_packets::packets::OutCommand::new(
+                    tsproto_packets::packets::Direction::C2S,
+                    tsproto_packets::packets::Flags::empty(),
+                    tsproto_packets::packets::PacketType::Command,
+                    &line,
+                );
+                if let Err(e) = cmd.send(&mut con) {
+                    warn!(error = %e, "stream: sending raw command failed");
+                }
+            }
+            Wake::StreamOut(None) => {}
             Wake::Tick => {
                 audio_state.on_tick(&mut con, mixer, event_tx).await;
             }
@@ -1646,6 +1704,7 @@ async fn handle_bridge_command(
     mixer: &Arc<TokioMutex<Mixer>>,
     audio_state: &mut AudioState,
     event_tx: &broadcast::Sender<bridge_proto::BridgeEvent>,
+    stream_ctl: &Option<mpsc::UnboundedSender<stream::Ctl>>,
     cmd: bridge_proto::BridgeCommand,
 ) {
     use bridge_proto::BridgeCommand;
@@ -1679,6 +1738,26 @@ async fn handle_bridge_command(
             }
         }
         BridgeCommand::Mute { muted } => audio_state.set_muted(muted),
+        BridgeCommand::StreamStart { .. } | BridgeCommand::StreamStop | BridgeCommand::StreamStatus => {
+            let (action, off_detail): (&'static str, &str) = match &cmd {
+                BridgeCommand::StreamStart { .. } => ("stream_start", "screen share is not enabled on this bot"),
+                BridgeCommand::StreamStop => ("stream_stop", "screen share is not enabled on this bot"),
+                _ => ("stream_status", "screen share is not enabled on this bot"),
+            };
+            match stream_ctl {
+                Some(ctl) => {
+                    let msg = match cmd {
+                        BridgeCommand::StreamStart { url, title } => stream::Ctl::Start { url, title },
+                        BridgeCommand::StreamStop => stream::Ctl::Stop,
+                        _ => stream::Ctl::Status,
+                    };
+                    let _ = ctl.send(msg);
+                }
+                None => {
+                    let _ = event_tx.send(ModerationResult { action, ok: false, detail: off_detail.into() });
+                }
+            }
+        }
         BridgeCommand::Poke { client_id, text } => {
             let cmd = {
                 match con.get_state() {

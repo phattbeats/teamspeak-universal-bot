@@ -58,6 +58,11 @@ export const TYPE_LIST_CHANNELS = 0x95;
 /** Set the bot's own client description; `""` clears it (#3857: music now-playing). */
 export const TYPE_SET_DESCRIPTION = 0x96;
 
+/** Screen-share a Twitch/Kick/YouTube URL (PHA-4499). Answered via `TYPE_MODERATION_RESULT` actions `stream_start`/`stream_stop`/`stream_status`. */
+export const TYPE_STREAM_START = 0x97;
+export const TYPE_STREAM_STOP = 0x98;
+export const TYPE_STREAM_STATUS = 0x99;
+
 const FRAME_PREFIX_BYTES = 5;
 
 export type TeamSpeakClientId = number;

@@ -121,6 +121,11 @@ pub enum BridgeCommand {
     /// moderation command: it only ever edits the bot itself, and needs
     /// `b_client_modify_own_description`, not `b_client_modify_description`.
     SetDescription { description: String },
+    /// PHA-4499: publish a Twitch/Kick/YouTube URL as a TS6 screen share.
+    /// Answered with `ModerationResult` actions `stream_start` / `stream_stop` / `stream_status`.
+    StreamStart { url: String, title: Option<String> },
+    StreamStop,
+    StreamStatus,
 }
 
 /// One channel and who is sitting in it, as of the last `ListChannels`
