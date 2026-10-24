@@ -988,7 +988,7 @@ async fn main() -> Result<()> {
 
 /// Quarantine has no chat logger, catch-up PMs, audio or bridge commands.
 /// Polling remains essential: tsclientlib only sends/receives while polled.
-async fn wait_in_bot_jail(con: &mut Connection) -> Result<()> {
+async fn wait_in_bot_jail(con: &mut Connection) -> Result<Option<ChannelId>> {
     let (own_client_id, channel_id) = {
         let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
         let channel_id = state.channels.iter()
@@ -1026,9 +1026,22 @@ async fn wait_in_bot_jail(con: &mut Connection) -> Result<()> {
         }
     }
     info!(?channel_id, disconnect_after_secs = BOT_JAIL_TIMEOUT.as_secs(), "bot in Bot Jail");
-    wait_for_jail_timeout(con.events(), BOT_JAIL_TIMEOUT).await?;
-    info!("Bot Jail timer expired");
-    Ok(())
+    let deadline = tokio::time::Instant::now() + BOT_JAIL_TIMEOUT;
+    loop {
+        let current = con.get_state().ok()
+            .and_then(|s| s.clients.get(&own_client_id).map(|c| c.channel));
+        if let Some(home) = current.filter(|id| *id != channel_id) {
+            info!(?home, "bot moved out of jail; cancelling timeout and resuming service");
+            return Ok(Some(home));
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            info!("Bot Jail timer expired");
+            return Ok(None);
+        }
+        // Poll the connection and recheck our channel, even on a quiet server.
+        wait_for_jail_timeout(con.events(), remaining.min(Duration::from_secs(1))).await?;
+    }
 }
 
 async fn disconnect_bot(con: &mut Connection) {
@@ -1138,14 +1151,31 @@ async fn run_once(
     let (own_client_id, channel_id) = loop {
         {
             let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
-            if let Some((id, _)) = state.channels.iter().find(|(_, ch)| ch.name == args.channel) {
-                break (state.own_client, *id);
+            if let Some(id) = audio::resolve_channel_id(state, &args.channel) {
+                break (state.own_client, id);
             }
         }
         if tokio::time::Instant::now() >= deadline {
-            warn!(channel = %args.channel, "destination missing; sending bot to Bot Jail");
-            if let Err(e) = wait_in_bot_jail(&mut con).await {
-                error!(error = %e, "Bot Jail unavailable or connection lost; disconnecting without retry");
+            // The server already selected a landing channel at login. A stale
+            // configured name must not prevent service in that new home.
+            {
+                let book = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
+                if let Some(home) = book.clients.get(&book.own_client).map(|c| c.channel)
+                    .filter(|id| book.channels.get(id)
+                        .is_some_and(|ch| !ch.name.eq_ignore_ascii_case(BOT_JAIL_CHANNEL)))
+                {
+                    warn!(channel = %args.channel, ?home, "destination missing; adopting server landing channel");
+                    break (book.own_client, home);
+                }
+            }
+            warn!(channel = %args.channel, "no usable home; sending bot to Bot Jail");
+            match wait_in_bot_jail(&mut con).await {
+                Ok(Some(home)) => {
+                    let own = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?.own_client;
+                    break (own, home);
+                }
+                Ok(None) => {}
+                Err(e) => error!(error = %e, "Bot Jail unavailable or connection lost; disconnecting without retry"),
             }
             // Disconnect even if jail is absent or rejects the move.
             disconnect_bot(&mut con).await;
@@ -1350,6 +1380,19 @@ async fn run_once(
                     }
                 }
                 Some(Ok(StreamItem::BookEvents(events))) => {
+                    // Follow our actual channel by ID. Renames and manual moves
+                    // must not leave text/catch-up handling attached to an old home.
+                    if let Ok(book) = con.get_state() {
+                        if let Some(own) = book.clients.get(&own_client_id) {
+                            if state.channel_id != own.channel {
+                                state.pending_catchup.clear();
+                            }
+                            state.channel_id = own.channel;
+                            if let Some(channel) = book.channels.get(&own.channel) {
+                                state.channel_name = channel.name.clone();
+                            }
+                        }
+                    }
                     // #3342: forward text messages to bridge subscribers
                     // exactly as the old ts_client.rs did, before the
                     // existing text-lane handler below (which logs/PMs the
