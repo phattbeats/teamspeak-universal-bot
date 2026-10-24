@@ -85,6 +85,17 @@ that is not on that Docker network.
 
 Reconnect backoff is deliberately polite: 60 s initial, ×4 per failure, capped at 1 hour.
 
+Startup accepts channel IDs or names (case-insensitive). If the destination is
+missing after 15 seconds, the bot adopts the server's landing channel as its new
+home. Numeric IDs survive channel renames. Once connected, the bot follows its
+actual channel for text, catch-up and audio, including manual moves and renames.
+
+If no usable landing channel exists, the bot moves to `Bot Jail`, waits 20
+minutes, then disconnects. Dragging it out cancels the timeout and resumes normal
+service in the new channel. While jailed it runs no chat logging, catch-up PMs
+or audio bridge processing. If jail is unavailable or the connection fails, it
+disconnects immediately and stays idle until restarted, preventing retry loops.
+
 ## TS6 protocol notes
 
 `tsclientlib` predates TeamSpeak 6. Against TS6 the handshake does not push the channel list or
