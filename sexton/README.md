@@ -85,6 +85,14 @@ that is not on that Docker network.
 
 Reconnect backoff is deliberately polite: 60 s initial, ×4 per failure, capped at 1 hour.
 
+If the configured destination is still missing after 15 seconds, the bot moves to
+`Bot Jail` (case-insensitive name match), waits 20 minutes, then disconnects.
+While jailed it runs no chat logging, catch-up PMs or audio bridge processing.
+If jail is missing, rejects the move or loses its connection, the bot disconnects
+immediately. It stays idle without reconnecting until explicitly restarted after
+its channel configuration is fixed; the process stays alive to prevent supervisor
+restart loops. Jail must already exist and allow the bot to join.
+
 ## TS6 protocol notes
 
 `tsclientlib` predates TeamSpeak 6. Against TS6 the handshake does not push the channel list or

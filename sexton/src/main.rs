@@ -66,8 +66,8 @@ use tsclientlib::messages::c2s::{
 };
 use tsclientlib::{
     events::{Event, PropertyId},
-    ChannelId, ClientId, Connection, Identity, MessageHandle, MessageTarget, Reason, ServerGroupId,
-    StreamItem,
+    ChannelId, ClientId, Connection, DisconnectOptions, Identity, MessageHandle, MessageTarget, Reason,
+    ServerGroupId, StreamItem,
 };
 
 mod audio;
@@ -111,6 +111,8 @@ const BACKOFF_MAX: Duration = Duration::from_secs(3600);
 /// How long to wait for the server to answer our `channellist` request before
 /// giving up on resolving the watched channel.
 const CHANNEL_TREE_TIMEOUT: Duration = Duration::from_secs(15);
+const BOT_JAIL_CHANNEL: &str = "Bot Jail";
+const BOT_JAIL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// No catch-up PMs for this long after connecting. The server streams the
 /// existing client list to us as a burst of "client added" events just after
 /// the channel list, and those clients did not join anything — our own
@@ -969,17 +971,101 @@ async fn main() -> Result<()> {
     loop {
         match run_once(&args, &address, &mixer, &mut cmd_rx, &event_tx, &snapshot).await {
             Ok(()) => {
-                // Clean disconnect (shouldn't normally happen) — reset backoff.
-                backoff = BACKOFF_INITIAL;
+                // Missing destination is a configuration problem. Stay alive so
+                // supervisors do not restart us into another jail/retry cycle.
+                warn!("bot disconnected after missing channel; restart after fixing channel configuration");
+                cmd_rx.close();
+                future::pending::<()>().await;
             }
             Err(e) => {
                 error!(error = %e, next_retry_in_secs = backoff.as_secs(), "connection died; will retry after backoff");
                 tokio::time::sleep(backoff).await;
                 backoff = std::cmp::min(backoff * BACKOFF_FACTOR, BACKOFF_MAX);
-                continue;
             }
         }
-        tokio::time::sleep(backoff).await;
+    }
+}
+
+/// Quarantine has no chat logger, catch-up PMs, audio or bridge commands.
+/// Polling remains essential: tsclientlib only sends/receives while polled.
+async fn wait_in_bot_jail(con: &mut Connection) -> Result<()> {
+    let (own_client_id, channel_id) = {
+        let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
+        let channel_id = state.channels.iter()
+            .find(|(_, ch)| ch.name.eq_ignore_ascii_case(BOT_JAIL_CHANNEL))
+            .map(|(id, _)| *id)
+            .ok_or_else(|| anyhow!("Bot Jail channel not found"))?;
+        (state.own_client, channel_id)
+    };
+    let handle = OutClientMoveMessage::new(&mut std::iter::once(OutClientMovePart {
+        client_id: own_client_id,
+        channel_id,
+        channel_password: None,
+    }))
+    .send_with_result(con)
+    .map_err(|e| anyhow!("joining Bot Jail: {e}"))?;
+
+    // Require the server's verdict before claiming the bot is jailed.
+    let join_deadline = tokio::time::Instant::now() + CHANNEL_TREE_TIMEOUT;
+    loop {
+        if tokio::time::Instant::now() >= join_deadline {
+            return Err(anyhow!("Bot Jail move acknowledgement timed out"));
+        }
+        match tokio::time::timeout_at(join_deadline, con.events().next()).await {
+            Ok(Some(Ok(StreamItem::MessageResult(h, result)))) if h == handle => {
+                result.map_err(|e| anyhow!("Bot Jail move rejected: {e:?}"))?;
+                break;
+            }
+            Ok(Some(Ok(StreamItem::DisconnectedTemporarily(reason)))) => {
+                return Err(anyhow!("disconnected entering Bot Jail: {reason:?}"));
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(e))) => return Err(anyhow!("entering Bot Jail: {e}")),
+            Ok(None) => return Err(anyhow!("stream ended entering Bot Jail")),
+            Err(_) => return Err(anyhow!("Bot Jail move acknowledgement timed out")),
+        }
+    }
+    info!(?channel_id, disconnect_after_secs = BOT_JAIL_TIMEOUT.as_secs(), "bot in Bot Jail");
+    wait_for_jail_timeout(con.events(), BOT_JAIL_TIMEOUT).await?;
+    info!("Bot Jail timer expired");
+    Ok(())
+}
+
+async fn disconnect_bot(con: &mut Connection) {
+    if let Err(e) = con.disconnect(DisconnectOptions::new()) {
+        warn!(error = %e, "could not send disconnect; dropping connection");
+        return;
+    }
+    // Flush the disconnect, with a bound if the peer never closes the stream.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        if !matches!(tokio::time::timeout_at(deadline, con.events().next()).await, Ok(Some(Ok(_)))) {
+            break;
+        }
+    }
+    info!("bot disconnected");
+}
+
+/// Use one fixed deadline so incoming events cannot extend the jail sentence.
+async fn wait_for_jail_timeout<S, E>(mut events: S, duration: Duration) -> Result<()>
+where
+    S: Stream<Item = std::result::Result<StreamItem, E>> + Unpin,
+    E: std::fmt::Display,
+{
+    let deadline = tokio::time::Instant::now() + duration;
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(());
+        }
+        match tokio::time::timeout_at(deadline, events.next()).await {
+            Ok(Some(Ok(StreamItem::DisconnectedTemporarily(reason)))) => {
+                return Err(anyhow!("disconnected in Bot Jail: {reason:?}"));
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(e))) => return Err(anyhow!("Bot Jail connection: {e}")),
+            Ok(None) => return Err(anyhow!("stream ended in Bot Jail")),
+            Err(_) => return Ok(()),
+        }
     }
 }
 
@@ -1056,17 +1142,20 @@ async fn run_once(
                 break (state.own_client, *id);
             }
         }
+        if tokio::time::Instant::now() >= deadline {
+            warn!(channel = %args.channel, "destination missing; sending bot to Bot Jail");
+            if let Err(e) = wait_in_bot_jail(&mut con).await {
+                error!(error = %e, "Bot Jail unavailable or connection lost; disconnecting without retry");
+            }
+            // Disconnect even if jail is absent or rejects the move.
+            disconnect_bot(&mut con).await;
+            return Ok(());
+        }
         match tokio::time::timeout_at(deadline, con.events().next()).await {
             Ok(Some(Ok(_))) => {}
             Ok(Some(Err(e))) => return Err(anyhow!("waiting for channel list: {e}")),
             Ok(None) => return Err(anyhow!("stream ended while waiting for channel list")),
-            Err(_) => {
-                return Err(anyhow!(
-                    "channel {:?} not found in channel tree after {}s",
-                    args.channel,
-                    CHANNEL_TREE_TIMEOUT.as_secs()
-                ))
-            }
+            Err(_) => {} // Deadline reached; take the fallback on the next iteration.
         }
     };
 
@@ -2459,5 +2548,41 @@ mod tests {
         )
         .unwrap();
         assert!(seeded_from(&dir, channel).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod bot_jail_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn quiet_connection_expires_without_server_events() {
+        let events = futures::stream::pending::<Result<StreamItem>>();
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_for_jail_timeout(events, Duration::from_millis(10)),
+        ).await.expect("jail timer must wake even on a quiet connection").unwrap();
+    }
+
+    #[tokio::test]
+    async fn continuous_events_cannot_extend_the_jail_timer() {
+        let events = futures::stream::repeat_with(|| {
+            Ok::<_, anyhow::Error>(StreamItem::BookEvents(Vec::new()))
+        });
+        wait_for_jail_timeout(events, Duration::from_millis(10)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn closed_connection_stops_quarantine() {
+        let events = futures::stream::empty::<Result<StreamItem>>();
+        assert!(wait_for_jail_timeout(events, BOT_JAIL_TIMEOUT)
+            .await.unwrap_err().to_string().contains("stream ended"));
+    }
+
+    #[tokio::test]
+    async fn failed_connection_stops_quarantine() {
+        let events = futures::stream::iter(vec![Err::<StreamItem, _>(anyhow!("connection lost"))]);
+        assert!(wait_for_jail_timeout(events, BOT_JAIL_TIMEOUT)
+            .await.unwrap_err().to_string().contains("connection lost"));
     }
 }
