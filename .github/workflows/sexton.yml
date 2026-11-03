@@ -51,7 +51,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            sexton/target
+            target
           key: ${{ runner.os }}-sexton-cargo-${{ hashFiles('sexton/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-sexton-cargo-
@@ -69,9 +69,9 @@ jobs:
         with:
           name: sexton-binaries
           path: |
-            sexton/target/release/sexton
-            sexton/target/release/send-test
-            sexton/target/release/probe-channels
+            target/release/sexton
+            target/release/send-test
+            target/release/probe-channels
           if-no-files-found: error
           retention-days: 14
 
