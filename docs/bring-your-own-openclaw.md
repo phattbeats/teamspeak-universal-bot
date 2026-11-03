@@ -17,7 +17,7 @@ Two pieces, both from this repo, both independent of Sexton/Bexton's own deploym
 
 1. **The channel plugin** (`teamspeak-plugin/`, package `@openclaw/teamspeak`) — runs
    inside *your* gateway process. STT → agent turn → TTS, wake-word gating, text
-   commands, and the agent tool catalog (`docs/universal-bot/TOOL-CATALOG.md`).
+   commands, and the agent tool catalog (`docs/tool-catalog.md`).
 2. **The bridge** (`sexton/`, published as `ghcr.io/phattbeats/plnt-ts-bridge`) — the
    actual TeamSpeak client. A separate container; your gateway never speaks the TS6
    protocol directly, only WebSocket to this.
@@ -78,7 +78,7 @@ container name (`ts-bridge`) won't resolve — put them on one `docker network` 
 - **`npm:@openclaw/teamspeak`** — not published to the npm registry yet. This is the
   intended end state (#3798 item 1's preferred fix) and needs someone with npm
   publish rights for the `@openclaw` scope (or a rename to an unscoped package name) to
-  actually run `npm publish` from `teamspeak-plugin/` — a `[Brandon/host]` step, not
+  actually run `npm publish` from `teamspeak-plugin/` — an operator step, not
   something done in this pass. Once published, `openclaw plugins install
   npm:@openclaw/teamspeak` should work: this repo's `teamspeak-plugin/dist/` (committed,
   CI-checked not to drift from `src/`) satisfies the compiled-entry requirement that
@@ -101,13 +101,13 @@ container name (`ts-bridge`) won't resolve — put them on one `docker network` 
   #3326), but it means staging the plugin directory onto your box and does not need
   `dist/` at all. Same private-repo caveat as above: you need a checkout of this repo,
   which today means either being handed one or getting repo access — `plnt-sexton` is
-  private. See `teamspeak-plugin/INSTALL-PHATT-RAID.md` for the exact staging recipe (it
-  is written against our own box, but the `stage-teamspeak-link.sh` step is generic).
+  private. See `teamspeak-plugin/README.md` ("Installing as a managed plugin") for the staging recipe; the
+  `stage-teamspeak-link.sh` step is generic.
 
 **The private-repo problem is real and unsolved by this pass.** Whichever install kind
 you use, someone still has to hand a stranger either a checkout or a built tarball of a
 private repo. The `npm:` path is the only one of the three that actually removes that
-dependency — until it's published, "self-service" BYO is really "ask phattbeats for a
+dependency — until it's published, "self-service" BYO is really "ask the maintainers for a
 `.tgz`."
 
 Minimal `openclaw.json` channel config once the plugin is installed:
@@ -179,7 +179,7 @@ actual risk this section exists to head off:
   false and every command is rejected. Add specific TeamSpeak client ids once you know
   who should have access.
 - **Moderation tools already fail closed** (`src/tools/registry.ts`,
-  `docs/universal-bot/TOOL-CATALOG.md` §4.3) — an empty or absent `moderation.allowGroups`
+  `docs/tool-catalog.md` §4.3) — an empty or absent `moderation.allowGroups`
   disables every kick/ban/edit tool regardless of the `kick`/`ban`/`edit` flags, no
   action needed beyond not setting `allowGroups`. If you do want moderation, the bot's
   own TeamSpeak identity also needs the underlying server permission (a real TS server
@@ -202,7 +202,7 @@ actual risk this section exists to head off:
 
 If you want moderation tools live (not just configured — see above), the bot's TS
 identity needs an actual server group with kick/ban/move/edit permissions, same recipe
-as Sexton/Bexton (`docs/universal-bot/TOOL-CATALOG.md` §4.3, #3793):
+as Sexton/Bexton (`docs/tool-catalog.md` §4.3, #3793):
 
 1. Create a TeamSpeak server group (or reuse an existing admin-ish one) carrying the
    permissions the moderation tools need: `b_client_kick_from_channel`,
@@ -223,7 +223,7 @@ at all (fails closed).
 
 ## Open items after this pass
 
-- Publish `@openclaw/teamspeak` to the npm registry — `[Brandon/host]`, needs npm
+- Publish `@openclaw/teamspeak` to the npm registry — operator step; needs npm
   publish rights for the `@openclaw` scope (or an unscoped rename).
 - Live-verify `npm-pack:`/`git:` installs against a real, non-production gateway.
 - #3790's STT provider contract will likely rename/move the config fields §3 points

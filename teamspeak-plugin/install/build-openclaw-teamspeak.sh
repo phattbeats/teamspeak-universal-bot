@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Build an OpenClaw gateway image with extensions/teamspeak compiled in.
 #
-# Run this ON PHATT-RAID (10.0.0.100). Unraid has docker but no compose plugin,
-# so this is `docker build`, not the `docker compose build` the plugin README
-# gives for a normal checkout. See INSTALL-PHATT-RAID.md for the deploy that
-# follows it.
+# Run this on the Gateway host. It is a plain `docker build`, for hosts with
+# docker but no compose plugin; with compose, use the `docker compose build`
+# the plugin README gives for a normal checkout.
 set -euo pipefail
 
 SRC_ROOT=${SRC_ROOT:-/mnt/cache/appdata/openclaw/src}

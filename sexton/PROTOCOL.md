@@ -1,7 +1,7 @@
 # Sexton audio/voice bridge WebSocket protocol
 
 **#3342**: this used to be `ts-bridge/PROTOCOL.md`, served by a separate
-`plnt-ts-bridge` container. That container is gone — Brandon's ask was one
+`plnt-ts-bridge` container. That container is gone — the goal was one
 docker container, one bot account (#3341/#3342) — and this WebSocket
 server now runs inside the Sexton binary itself, on the same port. Nothing
 below changed for an external consumer: same frames, same port, same

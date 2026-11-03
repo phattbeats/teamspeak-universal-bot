@@ -1,6 +1,6 @@
 # image/gateway/ — the Sexton's own OpenClaw gateway (#3428, option (a))
 
-Brandon, 2026-09-12:
+Design decision:
 
 > **option (a)** — this container runs its own OpenClaw gateway instance with
 > the teamspeak plugin installed via the #3326 managed install. Do not wire
@@ -16,7 +16,7 @@ happens; delete the file if you want the seed back.
 
 Under option (b) the plugin ran in the main gateway, a different container, so
 it dialled `ws://sexton:9099` and `http://sexton:8080/inference` by container
-name on `phattvip`. Option (a) puts the plugin in the same container as the
+name on `<ts-network>`. Option (a) puts the plugin in the same container as the
 bridge, whisper and the POT provider, so all three are loopback. That is the
 security win of (a) and the reason the image publishes none of those ports:
 under (a) nothing outside this container has any reason to reach them.

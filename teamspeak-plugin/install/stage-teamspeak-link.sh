@@ -9,8 +9,7 @@
 # Requires OpenClaw >=2026.9.2 (package.json#compat) -- older cores can't
 # resolve the `openclaw/plugin-sdk/*` production-private subpaths from an
 # out-of-tree plugin directory. Verified against 2026.7.1 (fails: plugin-API
-# compat gate before it gets to SDK resolution) and 2026.9.2 (resolves; see
-# INSTALL-PHATT-RAID.md).
+# compat gate before it gets to SDK resolution) and 2026.9.2 (resolves).
 #
 # Also verified (2026-09-07, post #3220 repo split): `openclaw plugins
 # install git:https://.../openclaw-teamspeak-plugin.git` hits the exact same
@@ -60,7 +59,7 @@ cp -a "$PLUGIN_SRC" "$DEST"
 # Checkout-only scaffolding not needed for a runtime install: the real SDK
 # resolves against the linked-in host package once OpenClaw restarts, so the
 # test suite and its stubs would just be dead weight here.
-rm -rf "$DEST/.git" "$DEST/node_modules" "$DEST/test" "$DEST/vitest.standalone.config.ts" "$DEST/INSTALL-PHATT-RAID.md"
+rm -rf "$DEST/.git" "$DEST/node_modules" "$DEST/test" "$DEST/vitest.standalone.config.ts"
 
 log "install runtime dependencies (ws) via the Gateway image's node/npm"
 docker run --rm -v "$DEST:/mnt/plugin" -w /mnt/plugin --entrypoint sh "$GATEWAY_IMAGE" \

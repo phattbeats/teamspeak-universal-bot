@@ -97,7 +97,7 @@ voice block can be copied across unchanged.
       },
       "tools": {
         "enabled": true,                     // default; false removes every tool
-        "logDir": "/mnt/user/appdata/sexton", // or TEAMSPEAK_SEXTON_LOG_DIR
+        "logDir": "<appdata>/sexton", // or TEAMSPEAK_SEXTON_LOG_DIR
         "catchUpDefaultLines": 15,           // default
         "catchUpMaxLines": 40,               // default
         "music": {
@@ -130,8 +130,8 @@ see `image/README.md` → Voice off.
 ## The stt-tts lane
 
 `voice.mode: "stt-tts"` is the second lane (#3228). It exists because the
-realtime lane costs money per minute of open microphone, and Brandon's decision
-on #3177 was a **$0 pay-as-you-go ceiling**: no metered per-minute provider
+realtime lane costs money per minute of open microphone, and the standing decision
+was a **$0 pay-as-you-go ceiling**: no metered per-minute provider
 anywhere in the path.
 
 ```
@@ -180,7 +180,7 @@ Wake config is read from `voice` first and `voice.realtime` second, so a
 registers (deepgram, openai, elevenlabs, mistral) is metered and hosted, so
 `voice.streaming.transcription.provider` is checked against a short local
 allow-list and the account refuses to start on anything else. The sidecar and
-its deploy live in [`../../whisper`](../../whisper). This is also the privacy
+its deploy live in [`../../whisper`](../whisper). This is also the privacy
 answer the channel notice promises: the hot mic never leaves the house.
 
 **Pin new-version MiniMax model ids.** A Coding Plan (`sk-cp-…`) key routes by
@@ -244,7 +244,7 @@ the provider blocks its turn until every outstanding call has a result.
 Every call is logged with caller, arguments, outcome and duration:
 
 ```
-teamspeak tool: play_music caller=brandon#11 args={"query":"smooth jazz"} ok=true 842ms
+teamspeak tool: play_music caller=alice#11 args={"query":"smooth jazz"} ok=true 842ms
 ```
 
 The tool descriptions ask for a short spoken confirmation. The Plant's contempt
@@ -379,7 +379,7 @@ mechanism is read from OpenClaw's own source (`src/plugins/plugin-peer-link.ts`,
 `src/plugins/package-entry-resolution.ts`), but no one has run
 `openclaw plugins install npm-pack:...` or `git:...` against this package end to end yet.
 Do that before calling #3798 item 1 done, ideally from a machine that is not also running
-the live PHATT-RAID `--link` install (don't `--force` over the production install record).
+the live the Docker host `--link` install (don't `--force` over the production install record).
 
 `index.ts` and `src/channel.ts` (and everything downstream of them) are transpiled by
 esbuild, not type-checked: they import `openclaw/plugin-sdk/channel-entry-contract`,
@@ -430,14 +430,7 @@ image). Neither is touched by swapping the base image. That is the whole
 motivation for this path over the custom Gateway image below, which an image
 pull silently wipes. The bind mount itself does need to be a permanent part
 of whatever manages the container's lifecycle (compose file, Unraid
-template, etc.) — see [`INSTALL-PHATT-RAID.md`](INSTALL-PHATT-RAID.md) for
-how that's done for this plugin's one live deployment.
-
-**Live on PHATT-RAID as of 2026-09-09** (#3326): core bumped to
-`ghcr.io/openclaw/openclaw:2026.9.3`, plugin `--link`-installed and loading
-clean (`"imported": true`), mount persisted in the Unraid container template.
-The `channels.teamspeak` config block is a separate, not-yet-done step
-(#3220's live-voice verification).
+template, etc.).
 
 ```bash
 # On the Gateway host. Stages the plugin, strips the checkout-only test
@@ -456,9 +449,6 @@ Then, once — these steps touch the running container, so they're manual:
 `openclaw plugins update` does not apply to a `--link` install (there's no
 version to move to; it always loads current disk contents) — a plugin change
 just needs `stage-teamspeak-link.sh` re-run and the Gateway restarted.
-
-For PHATT-RAID specifically, see [`INSTALL-PHATT-RAID.md`](INSTALL-PHATT-RAID.md)
-for the exact commands against that box's layout.
 
 ## Building it into the Gateway image (alternative / CI)
 
