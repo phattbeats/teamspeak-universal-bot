@@ -5,8 +5,8 @@ when the server is busy, who posts and talks the most, who spends the most time
 in voice, and what gets people talking to the bots. It also keeps a searchable
 log of chat, speech, bot turns, voice sessions and connects.
 
-`http://<PHATT-RAID>:8097`. Log in with `user:password` from
-`/mnt/user/appdata/teamspeak-universal-bot/config/insights/auth.txt`. The file
+`http://<host>:8097`. Log in with `user:password` from
+`<appdata>/teamspeak-universal-bot/config/insights/auth.txt`. The file
 is generated on first start; edit it to change the login, and it applies on the
 next request.
 
@@ -63,7 +63,7 @@ the files the bots already read; there is no second copy.
 
 | Page | Edits | When it takes effect |
 |---|---|---|
-| Bots (#4374) | `/config/bots.json`: enable/disable, nick, channel, identity, port, flags, env; add a bot from a pack; remove. Per-bot and stack-wide voice switches. See [ADMIN-DASHBOARD.md](ADMIN-DASHBOARD.md) | at once: `stack.mjs rewire` + `supervisorctl update` restarts only the bot you changed; survives a container restart |
+| Bots (#4374) | `/config/bots.json`: enable/disable, nick, channel, identity, port, flags, env; add a bot from a pack; remove. Per-bot and stack-wide voice switches. See [ADMIN-DASHBOARD.md](admin-dashboard.md) | at once: `stack.mjs rewire` + `supervisorctl update` restarts only the bot you changed; survives a container restart |
 | Tools & skills | `openclaw.json`: `agents.entries.<bot>.tools` (allow/deny), `.skills`, and `channels.teamspeak.accounts.<bot>.tools` (music, band, villain, moderation switches) | when the gateway reloads its config |
 | Personas | `workspace/agents/<bot>/*.md`, `lines.json`, `moods.json` | the agent reads them on its next turn |
 | Schedule | `bots.<bot>.shifts` in `/config/summoner/config.json` and the merged `/run/universal/summoner.json` | at once: the summoner's `POST /reload` re-reads shifts, no restart |

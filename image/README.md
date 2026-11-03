@@ -1,11 +1,11 @@
 # image/ — every TeamSpeak bot as one container (#3791)
 
-Brandon, 2026-10-02/03: "since openclaw can handle multiple agents, cant they
-all be under one, expanding container?" ... "combine everything into one".
+OpenClaw can run multiple agents, so every bot lives in one expanding
+container.
 
 ```
 image/Dockerfile               the image: phattbeats/teamspeak-universal-bot
-image/build.sh                 build + verify it (on PHATT-RAID)
+image/build.sh                 build + verify it (on the Docker host)
 image/deploy.sh                (re)create the teamspeak-universal-bot container
 image/universal/stack.mjs      bots.json + persona packs -> supervisor programs, summoner config, gateway accounts
 image/universal/migrate.mjs    one-time move from the old per-bot containers
@@ -22,15 +22,15 @@ image/gateway/                 the gateway's seed config and core patches
 | `gateway` | ONE OpenClaw gateway: agent + `channels.teamspeak.accounts.<id>` + binding per bot | one gateway per container |
 | `whisper` | 2 whisper.cpp workers + the coalescing proxy on :8082 (#3921); down entirely while voice is off (#4372) | the `whisper` container |
 | `pot` | bgutil POT provider for yt-dlp | per container |
-| `suno-api` | gcui-art/suno-api + `suno-api/phattbeats.patch`, chromium, on :3000 | the `suno-api` container |
+| `suno-api` | gcui-art/suno-api + `suno-api/suno-api.patch`, chromium, on :3000 | the `suno-api` container |
 | `summoner` | ts-summoner: shifts, summons, scenes, guests; starts/stops `core-<id>` | the `ts-summoner` container |
 | `menace-<id>` | Lexton's menacing DMs, for a bot with `menace: true` | a program in `lexton` |
 
-## Volumes (`/mnt/user/appdata/teamspeak-universal-bot`)
+## Volumes (`<appdata>/teamspeak-universal-bot`)
 
 | path | holds |
 | --- | --- |
-| `config/bots.json` | which bots run; bridge ports (assigned once, never move); `identity` sharing (the guests share one); `menace`, `noCatchup`, `noWelcome`, `autostart`, `nick`, `env`, `enabled: false`; top-level `removed` (packs the dashboard removed), `server` (stack-wide address/port/channel/fallbackChannel/query/`botTag`, default tag ` [BOT]` on TS nicks) and `solo` (one bot id: only it runs, 24/7, summoner idle; an overlay, so clearing it restores the roster as it was; Bots tab "Solo mode" or `stack.mjs solo <id>\|off`). Edited live from the dashboard's Bots tab (#4374, `docs/universal-bot/ADMIN-DASHBOARD.md`) |
+| `config/bots.json` | which bots run; bridge ports (assigned once, never move); `identity` sharing (the guests share one); `menace`, `noCatchup`, `noWelcome`, `autostart`, `nick`, `env`, `enabled: false`; top-level `removed` (packs the dashboard removed), `server` (stack-wide address/port/channel/fallbackChannel/query/`botTag`, default tag ` [BOT]` on TS nicks) and `solo` (one bot id: only it runs, 24/7, summoner idle; an overlay, so clearing it restores the roster as it was; Bots tab "Solo mode" or `stack.mjs solo <id>\|off`). Edited live from the dashboard's Bots tab (#4374, `docs/admin-dashboard.md`) |
 | `config/bots/<id>/` | `sexton-id.txt` (the TeamSpeak identity), `.announce`, `.off-duty`, band songs, villain state |
 | `config/.summoner-off` | written by stack.mjs while `solo` is set; `run-summoner.sh` idles while it exists |
 | `config/.voice-off` | the voice kill switch (#4372): exists = voice off for the whole stack; `POST /voice/off\|on` on the summoner writes/removes it |
@@ -42,8 +42,7 @@ image/gateway/                 the gateway's seed config and core patches
 
 ## Voice off (#4372): text-only mode, zero STT/TTS CPU
 
-Brandon: "need a way to disable all voice and whisper. needed in times where
-we dont want the bots talking, as well as saving CPU." One switch, three
+For times when the bots should not talk, and to save CPU. One switch, three
 layers; the bots stay in the channel and still answer text either way.
 
 | layer | off means | how |
@@ -52,10 +51,9 @@ layers; the bots stay in the channel and still answer text either way.
 | gateway | every account goes `voice.mode: "off"`: the bridge stays connected for roster, chat and tools, inbound audio frames are dropped before any transcriber, nothing is synthesized, no `voice_audio` leaves | the same file, polled every 2 s (`voice.offFile`, wired by `stack.mjs`); or pin one account with `voice.mode: "off"` / `voice.listen: false` |
 | core | `sexton --no-audio` (`SEXTON_NO_AUDIO=1`): inbound Opus is dropped before decode, nothing forwarded, ~0% CPU | boot-time only: `stack.mjs` sets it on every core when `UNIVERSAL_VOICE=0` |
 
-**No agent speech at all, not just no replies.** Brandon, 2026-10-23: "needs
-to also affect intro/outros, the random conversations, etc. they should make
-0 voices" and "music playing and song generation work fine. its the direct
-speaking of the agents that is off." While voice is off:
+**No agent speech at all, not just no replies.** Voice off also covers
+intros/outros and random conversations: zero voices. Music playing and song
+generation keep working; only the agents' direct speaking is off. While voice is off:
 
 - entrance and exit lines, scene lines and bender news are never said: the
   summoner treats voice off as nobody listening (entrances still go out
@@ -121,12 +119,12 @@ and a guest visit no longer restarts anything.
 # History: the Sexton as one container (#3428)
 
 
-Brandon's decision, 2026-09-12: the Sexton stack deploys as **one Docker
-container** on PHATT-RAID. One image, one container, one Unraid template entry.
+Design decision: the stack deploys as **one Docker
+container** on the Docker host. One image, one container, one template entry.
 
 ```
 image/Dockerfile          the image
-image/build.sh            build it (run on PHATT-RAID — the sandbox has no C toolchain)
+image/build.sh            build it (run on the Docker host — the sandbox has no C toolchain)
 image/deploy.sh           docker run form; also removes the sidecars it supersedes
 image/unraid-sexton.xml   the Unraid template
 image/supervisord.conf    PID 1
@@ -157,7 +155,7 @@ bridge socket is two answers to every message.
 ### Why the weights are baked in and not mounted
 
 `whisper/deploy.sh` fetched `ggml-base.en.bin` (~148 MB) once into
-`/mnt/user/appdata/whisper/models` and mounted it read-only. That was right for
+`<appdata>/whisper/models` and mounted it read-only. That was right for
 a sidecar and wrong for a single image: it makes the container's most important
 non-code asset a thing that lives outside the image, is not versioned with it,
 and that a fresh deploy on a fresh box silently does without. It is now a build
@@ -218,7 +216,7 @@ pipe a script in — without `-i` python gets an empty stdin and writes nothing)
 in the file after boot and `fetch failed` stays at zero.
 
 `image/deploy-bexton.sh` sets those and calls `image/deploy.sh` with its own
-`NAME`/`APPDATA` (`/mnt/user/appdata/bexton`), `IMPORT_FROM=sexton` (the
+`NAME`/`APPDATA` (`<appdata>/bexton`), `IMPORT_FROM=sexton` (the
 credentials come from the config known to work on this lane, not the main
 gateway's), and `DISABLE_MAIN_TEAMSPEAK=0` (the Sexton's deploy already did
 that). `image/unraid-bexton.xml` is the same thing as a template. Both need
@@ -244,7 +242,7 @@ deploy picks one with `BAND_PROVIDER`:
 
 - `minimax` — the default; works only for an existing music customer.
 - `suno-api` — a self-hosted [gcui-art/suno-api](https://github.com/gcui-art/suno-api)
-  container on `phattvip`, driven by a Suno web-account cookie (Suno has no
+  container on `<ts-network>`, driven by a Suno web-account cookie (Suno has no
   official API). `BAND_SUNO_API_URL=http://suno-api:3000`. Free beyond the Suno
   plan, but it is a browser-cookie automation and breaks when Suno changes.
 - `command` — any executable at `/config/band/generate` (spec as JSON on
@@ -269,7 +267,7 @@ The issue asked for a decision between:
 with a preference for (a) "unless it doubles the gateway's config burden".
 
 **It is (a).** An earlier revision of this file took the escape hatch and
-argued for (b); Brandon overruled that on 2026-09-12:
+argued for (b); the maintainer overruled that:
 
 > **option (a)** — this container runs its own OpenClaw gateway instance with
 > the teamspeak plugin installed via the #3326 managed install. Do not wire
@@ -283,7 +281,7 @@ the plugin is `--link`-installed into it on every boot by
 
 1. **The internal ports stop being a network surface.** Under (b) the bridge,
    whisper and the POT provider had to be reachable from another container on
-   `phattvip`. Under (a) the only process that dials them is in this container,
+   `<ts-network>`. Under (a) the only process that dials them is in this container,
    over loopback. For a lane whose entire premise is that the channel's audio
    does not leave the box, that is the right shape.
 2. **ffmpeg and yt-dlp land where they are actually spawned.** They are spawned
@@ -294,8 +292,8 @@ the plugin is `--link`-installed into it on every boot by
    path never actually worked there. Under (a) the plugin and the binaries are
    the same container. The `/opt/sexton-tools` export that (b) needed is gone.
 3. **The last manual step in this issue is gone with it.** (b) required a human
-   to add two read-only path mappings to the `OpenClaw` container in the Unraid
-   GUI. (a) requires none.
+   to add two read-only path mappings to the `OpenClaw` container in the host's
+   Docker GUI. (a) requires none.
 
 ### What (a) costs — the escape hatch was not wrong, just overruled
 

@@ -16,7 +16,7 @@
 //
 //
 // #3841 layered three things on top, all documented in
-// docs/universal-bot/SCHEDULE-AND-EVENTS.md:
+// docs/schedules-and-events.md:
 //   - a special-nights calendar (calendar.json) that bends shifts and picks
 //     themed entrance/exit pools (Friday lounge, Halloween, birthdays...),
 //   - two-bot scenes (scenes.json) at shift changes instead of lone lines,

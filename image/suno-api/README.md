@@ -1,17 +1,17 @@
 # image/suno-api — the house band's generator (#3554)
 
 > **#3791: built into the one image.** The Dockerfile's `suno-builder` stage
-> checks out upstream at a2e6a82 and applies `phattbeats.patch`, which is the
+> checks out upstream at a2e6a82 and applies `suno-api.patch`, which is the
 > exact diff the hand-built `suno-api` container ran (the 2026 UI selectors
 > `patch-new-ui.py` used to apply, Turnstile via 2Captcha, the v2-web path,
 > the proxy, the decrypted-audio route). It runs as program `suno-api` on
 > `127.0.0.1:3000`, secrets from `/config/suno-api.env`. `deploy.sh` and
 > `patch-new-ui.py` are gone.
 
-Brandon, 2026-09-18, after MiniMax closed its Music API to the account
+After MiniMax closed its Music API to the account
 (HTTP 410 / status 2153 on every model id, "existing paying customers only"):
 
-> Self-host suno-api on phattvip with my Suno cookie
+> Self-host suno-api with a Suno account cookie
 
 So the band's songs come from [gcui-art/suno-api](https://github.com/gcui-art/suno-api),
 a self-hosted service that drives a Suno **web account** the way a browser
@@ -24,8 +24,8 @@ does. It is not an official API and it is not free of moving parts:
 | a Suno plan | credits. A free account is 50 credits/day (10 songs); paid plans more. `GET /api/get_limit` shows what is left. |
 | chromium | baked into the image by Playwright, headless, GPU off. The image is ~2 GB. |
 
-`deploy.sh` runs it as the `suno-api` container on `phattvip`, no published
-ports, secrets from `/mnt/user/appdata/suno-api/.env` (0600). Bexton is its only
+`deploy.sh` runs it as the `suno-api` container on `<ts-network>`, no published
+ports, secrets from `<appdata>/suno-api/.env` (0600). Bexton is its only
 client, at `http://suno-api:3000`, through the plugin's `suno-api` generator
 (`openclaw-teamspeak-plugin/src/tools/band-generators.ts`): `POST /api/custom_generate`
 with the title, the band-leader tag line and the lyrics, then `GET /api/get?ids=`

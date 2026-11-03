@@ -1,6 +1,6 @@
 # sexton
 
-The Sexton — a persistent chat-memory bot for `teamspeak.phatt.vip` (TeamSpeak 6).
+The Sexton — a persistent chat-memory bot for `your TeamSpeak server` (TeamSpeak 6).
 
 TeamSpeak does not persist channel chat, so anyone who joins a channel late sees nothing.
 The Sexton sits in a channel, watches user text messages, and makes them readable after the
@@ -76,11 +76,11 @@ Both steps log a line (`avatar upload complete`, `avatar hash set hash=…`).
 ## Networking
 
 Default target is **`teamspeak6-server:9987`** — the TS6 container's name on its own Docker
-network (`phattvip`). PHATT-RAID and the TeamSpeak server share one public IP, so connecting via
+network (`<ts-network>`). the Docker host and the TeamSpeak server share one public IP, so connecting via
 the public hostname hairpins out and back in and gets flood-scored as if it came from the open
 internet, which is what produced the earlier `ConnectFailedBanned` loop.
 
-`--public-fallback` switches the target to `teamspeak.phatt.vip` for running the bot somewhere
+`--public-fallback` switches the target to `your TeamSpeak server` for running the bot somewhere
 that is not on that Docker network.
 
 Reconnect backoff is deliberately polite: 60 s initial, ×4 per failure, capped at 1 hour.
@@ -106,8 +106,8 @@ actually stored.
 
 ## Audio / voice bridge (#3342)
 
-Brandon: "i want everything running off of one docker container / one bot
-account." Before this, the Sexton connected as `Sexton` for text and a
+The goal: everything running off one docker container / one bot
+account. Before this, the Sexton connected as `Sexton` for text and a
 separate `ts-bridge` container connected as `Sexton-Bridge` for audio — two
 client slots in the channel roster for one bot. #3341 collapsed that to
 one `tsclientlib::Connection`, fronted by a Unix-socket IPC (`bridge-proto`)
@@ -161,11 +161,11 @@ recipe is two concurrent invocations — see `deploy/verify.sh`.
 ## Running
 
 See `deploy/sexton-compose.yml`. The image is `phattbeats/sexton:latest`, built from the
-`Dockerfile` here, and runs on the `phattvip` Docker network on PHATT-RAID with:
+`Dockerfile` here, and runs on the `<ts-network>` Docker network on the Docker host with:
 
 - the pinned identity mounted read-only at `/run/secrets/sexton-identity`
-- the avatar baked into the image at `/usr/local/share/sexton-avatar/brandon.png`
-- logs persisted at `/mnt/user/appdata/sexton` (mounted at `/var/sexton-logs`)
+- the avatar baked into the image at `/usr/local/share/sexton-avatar/<avatar>.png`
+- logs persisted at `<appdata>/sexton` (mounted at `/var/sexton-logs`)
 - the audio bridge's WebSocket exposed to sibling containers on `:9099` (#3342)
 
 `sexton-compose.yml` overrides the image's entrypoint to invoke the binary with explicit
@@ -174,14 +174,14 @@ flags directly:
 ```
 sexton -a teamspeak6-server -p 9987 -n Sexton -c "General Shit" \
        -i "$(cat /run/secrets/sexton-identity)" \
-       -A /usr/local/share/sexton-avatar/brandon.png \
+       -A /usr/local/share/sexton-avatar/<avatar>.png \
        -l /var/sexton-logs \
        --ws-bind 0.0.0.0:9099 \
        --duck-gain 0.25
 ```
 
-PHATT-RAID has no `docker compose` plugin, so production runs the equivalent `docker run` in
-`deploy/deploy.sh` (copied to `/mnt/user/appdata/sexton/deploy.sh` on the box). Keep it and the
+the Docker host has no `docker compose` plugin, so production runs the equivalent `docker run` in
+`deploy/deploy.sh` (copied to `<appdata>/sexton/deploy.sh` on the box). Keep it and the
 compose file in step. **Superseded by `image/deploy.sh` (#3428)** — both are kept as the
 record of the settings that were proven here, not as a thing to still run.
 
@@ -194,7 +194,7 @@ workspace path dependency on `bridge-proto`) — see `Dockerfile`'s header comme
 This same `Dockerfile` is also published as `ghcr.io/phattbeats/plnt-ts-bridge` — the
 bridge half alone, for someone who already runs their own OpenClaw gateway elsewhere and
 just wants a TeamSpeak client to point its `teamspeak` channel plugin at (see
-[`docs/universal-bot/BYO-OPENCLAW.md`](../docs/universal-bot/BYO-OPENCLAW.md)). The default
+[`docs/bring-your-own-openclaw.md`](../docs/bring-your-own-openclaw.md)). The default
 entrypoint there is `sexton/docker-entrypoint.sh`, an env→argv wrapper (`TS_BRIDGE_*`), not
 the binary directly — `docker run ghcr.io/phattbeats/plnt-ts-bridge` with no args and no env
 now fails loudly (`TS_BRIDGE_CHANNEL is required`) instead of launching `sexton` with an

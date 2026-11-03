@@ -51,7 +51,7 @@
 The `voice.mode=stt-tts` lane transcribes speaker audio here, on the TS6 host's
 own Docker network, and nowhere else.
 
-That is not a performance decision. It is the two constraints Brandon set on
+That is not a performance decision. It is the two constraints set on
 #3177, expressed as a container:
 
 - **$0 marginal cost.** Every transcription provider OpenClaw registers
@@ -67,7 +67,7 @@ start. Since #3790 that is a slot rule rather than a hardcoded allowlist — a
 hosted provider *can* be the primary, but only when the same config block also
 says `allowHosted: true`, which is a deliberate act with a name on it. See
 `teamspeak-plugin/src/voice/stt-provider.ts` and `stt-registry.ts`, and
-[docs/universal-bot/STT-PROVIDERS.md](../docs/universal-bot/STT-PROVIDERS.md).
+[docs/stt-providers.md](../docs/stt-providers.md).
 
 ## What runs
 
@@ -77,7 +77,7 @@ multipart form-data (`file`, `response_format=json`, `language`, `temperature`)
 and returns `{"text": "..."}` — which is exactly what
 `src/voice/whisper-local.ts` speaks (same repo as above).
 
-CPU only. There is no GPU on PHATT-RAID, and `base.en` on CPU transcribes a few
+CPU only. There is no GPU on the Docker host, and `base.en` on CPU transcribes a few
 seconds of speech in a few hundred milliseconds, which fits the lane's 1.5-3s
 first-audio budget with room to spare.
 
@@ -100,23 +100,23 @@ hearings, and a bigger model gives it better ones to work with.
 
 ## Deploy
 
-On PHATT-RAID (10.0.0.100). Unraid has docker but no compose plugin, so
+On a Docker host. Unraid has docker but no compose plugin, so
 `deploy.sh` is the `docker run` form of `whisper-compose.yml`; keep the two in
 step, the same way `sexton/deploy/` does.
 
 ```bash
-scp whisper/deploy.sh root@10.0.0.100:/mnt/user/appdata/whisper/deploy.sh
-ssh root@10.0.0.100 'bash /mnt/user/appdata/whisper/deploy.sh'
+scp whisper/deploy.sh root@<host-ip>:<appdata>/whisper/deploy.sh
+ssh root@<host-ip> 'bash <appdata>/whisper/deploy.sh'
 ```
 
-It downloads the model once into `/mnt/user/appdata/whisper/models` and starts
-the container on the `phattvip` network as `whisper`, which is the hostname the
+It downloads the model once into `<appdata>/whisper/models` and starts
+the container on the `<ts-network>` network as `whisper`, which is the hostname the
 plugin's default `http://whisper:8080/inference` resolves to.
 
 ## Verify
 
 ```bash
-ssh root@10.0.0.100 'bash /mnt/user/appdata/whisper/verify.sh'
+ssh root@<host-ip> 'bash <appdata>/whisper/verify.sh'
 ```
 
 Synthesizes a WAV, posts it, and prints the transcript. Run it from the gateway

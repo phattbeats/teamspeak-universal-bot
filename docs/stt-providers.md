@@ -1,6 +1,6 @@
 # STT as a connector
 
-#3790, the implementation of [TOOL-CATALOG.md](TOOL-CATALOG.md) §4.7.
+#3790, the implementation of [TOOL-CATALOG.md](tool-catalog.md) §4.7.
 
 ## What was wrong
 
