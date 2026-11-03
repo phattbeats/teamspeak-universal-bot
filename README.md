@@ -29,15 +29,17 @@ product is the framework, not any one character.
 
 ## Quickstart
 
-You need a TeamSpeak 6 server you can connect to, Docker, and an LLM provider
-configured for OpenClaw.
+You need a TeamSpeak 6 server you can connect to, Docker, and a running
+OpenClaw gateway container whose model credentials the first deploy imports
+(`MAIN_GATEWAY`, default `OpenClaw`; without one the bots join but cannot answer).
 
 ```bash
-image/build.sh                  # builds <registry>/teamspeak-universal-bot:<git sha>
-TAG=<sha> image/deploy.sh       # (re)creates the teamspeak-universal-bot container
+image/build.sh                  # builds $IMAGE:<git sha> (IMAGE defaults to phattbeats/teamspeak-universal-bot)
+TAG=<sha> image/deploy.sh       # (re)creates the teamspeak-universal-bot container;
+                                # also reads NETWORK, APPDATA, MAIN_GATEWAY
 ```
 
-Then edit `config/bots.json` (or use the dashboard's Bots tab) to choose
+Then edit `bots.json` in the container's `/config` volume (`$APPDATA/config`) (or use the dashboard's Bots tab) to choose
 which personas run, and give each bot a TeamSpeak identity. Server-side you
 need the bot's port reachable and, for moderation tools, a server group with
 the matching permissions. The full walk-through, volumes and environment
