@@ -29,7 +29,7 @@
 //
 // Per-bot state lives in /config/bots/<id>/ (identity, .announce, .off-duty);
 // guests that take turns in one TeamSpeak identity share it via `identity`.
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 
 const env = process.env;
 const CONFIG = env.UNIVERSAL_CONFIG_DIR || '/config';
@@ -50,6 +50,7 @@ const SUMMONER_DEFAULTS = env.UNIVERSAL_SUMMONER_DEFAULTS || '/opt/ts-summoner';
 // it writes the live file (so whisper and every gateway account see "off"
 // the same way a POST /voice/off does) and starts the cores with no audio.
 // The file alone is the live switch; ts-summoner writes and removes it.
+const SUMMONER_OFF_FILE = env.UNIVERSAL_SUMMONER_OFF_FILE || `${CONFIG}/.summoner-off`;
 const VOICE_OFF_FILE = env.UNIVERSAL_VOICE_OFF_FILE || `${CONFIG}/.voice-off`;
 const VOICE_SWITCH_OFF = /^(0|false|no|off)$/i.test((env.UNIVERSAL_VOICE || '1').trim());
 // Guests have no shifts of their own; they only visit (#3842).
@@ -69,6 +70,7 @@ const writeJson = (p, v, mode) => {
   writeFileSync(`${p}.tmp`, JSON.stringify(v, null, 2) + '\n', mode ? { mode } : undefined);
   renameSync(`${p}.tmp`, p);
 };
+const tagNick = (nick, tag) => (tag && !nick.includes(tag) ? `${nick} ${tag}`.slice(0, 30) : nick); // TS nick max 30
 const titleCase = (id) => id[0].toUpperCase() + id.slice(1);
 
 /** personas/<id>/ dirs that are real packs (a voice.json says so). */
@@ -108,8 +110,13 @@ function loadBots() {
     writeJson(BOTS_FILE, out);
   }
   const list = [];
+  // Solo mode: only this bot runs, around the clock, with no summoner. The other
+  // bots keep their entries (and enabled flags), so `solo off` restores them.
+  const solo = typeof file?.solo === 'string' ? file.solo : '';
+  if (solo && !bots[solo]) log(`WARNING solo '${solo}' is not in bots.json; solo ignored`);
+  const soloId = solo && bots[solo] ? solo : '';
   for (const [id, b] of Object.entries(bots)) {
-    if (b.enabled === false) continue;
+    if (soloId ? id !== soloId : b.enabled === false) continue;
     const dir = found[id];
     if (!dir) { log(`WARNING bots.json lists '${id}' but there is no persona pack for it; skipped`); continue; }
     const voice = readJson(`${dir}/voice.json`, {});
@@ -117,12 +124,22 @@ function loadBots() {
     list.push({
       id, pack: dir, voice, tools, ...b,
       nick: b.nick || voice.nick || titleCase(id),
+      // TeamSpeak shows the tagged name; wake names keep the plain nick.
+      tsNick: tagNick(b.nick || voice.nick || titleCase(id), b.botTag ?? file?.server?.botTag ?? '[BOT]'),
       home: `${CONFIG}/bots/${id}`,
       identityFile: `${CONFIG}/bots/${b.identity || id}/sexton-id.txt`,
       logDir: `${LOGS}/${id}`,
+      // #4875: where each bot connects is bots.json's call: its own entry, else
+      // the stack-wide `server` block, else the container env (a fallback only).
+      address: b.address || file?.server?.address || env.SEXTON_ADDR || '',
+      serverPort: Number(file?.server?.port || env.SEXTON_PORT || 9987),
+      channel: b.channel || file?.server?.channel || env.SEXTON_CHANNEL || '',
+      fallbackChannel: b.fallbackChannel || file?.server?.fallbackChannel || file?.server?.channel || env.SEXTON_CHANNEL || '',
       avatar: b.avatar || (existsSync(`${dir}/avatar.png`) ? `${dir}/avatar.png` : ''),
     });
   }
+  list.solo = soloId;
+  list.serverQuery = file?.server?.query && typeof file.server.query === 'object' ? file.server.query : null;
   return list;
 }
 
@@ -147,13 +164,17 @@ function supervisor() {
     mkdirSync(b.home, { recursive: true });
     mkdirSync(b.identityFile.replace(/\/[^/]+$/, ''), { recursive: true });
     mkdirSync(b.logDir, { recursive: true });
+    if (!b.address || !b.channel) log(`WARNING ${b.id} has no ${!b.address ? 'server address' : 'channel'}: set it on the bot or in bots.json "server"; its core will not start`);
     const vars = {
-      SEXTON_NICK: b.nick,
+      SEXTON_NICK: b.tsNick,
       SEXTON_AVATAR: b.avatar,
       SEXTON_WS_BIND: `127.0.0.1:${b.port}`,
       SEXTON_IDENTITY_FILE: b.identityFile,
       SEXTON_LOG_DIR: b.logDir,
-      SEXTON_CHANNEL: b.channel || env.SEXTON_CHANNEL || 'General Shit',
+      SEXTON_ADDR: b.address,
+      SEXTON_PORT: String(b.serverPort),
+      SEXTON_CHANNEL: b.channel,
+      SEXTON_FALLBACK_CHANNEL: b.fallbackChannel,
       SEXTON_NO_CATCHUP: b.noCatchup ? '1' : '0',
       SEXTON_NO_WELCOME: b.noWelcome ? '1' : '0',
       SEXTON_GUEST_ENV: '/nonexistent',
@@ -162,7 +183,7 @@ function supervisor() {
     };
     // Off duty at boot stays off: the summoner starts it when the shift says
     // so. Guests sharing one identity never autostart (two cores, one UID).
-    const off = existsSync(`${b.home}/.off-duty`) || b.autostart === false;
+    const off = !bots.solo && (existsSync(`${b.home}/.off-duty`) || b.autostart === false);
     conf += `
 [program:core-${b.id}]
 command=/usr/local/bin/run-sexton
@@ -196,6 +217,8 @@ redirect_stderr=true
     }
   }
   writeFileSync(`${RUN}/bots.conf`, conf);
+  // Solo mode idles the summoner (run-summoner.sh looks for this file).
+  if (bots.solo) writeFileSync(SUMMONER_OFF_FILE, `solo ${bots.solo}\n`); else rmSync(SUMMONER_OFF_FILE, { force: true });
   writeSummonerConfig(bots);
   log(`${bots.length} bots: ${bots.map((b) => `${b.id}:${b.port}`).join(' ')}`);
 }
@@ -216,7 +239,12 @@ function writeSummonerConfig(bots) {
   cfg.scenes = { ...cfg.scenes, file: `${dir}/live/scenes.json` };
   cfg.insights = { ...cfg.insights, db: `${CONFIG}/insights/insights.db` }; // #3963
   cfg.voice = { ...cfg.voice, offFile: VOICE_OFF_FILE, whisperProgram: 'whisper' }; // #4372
-  if (cfg.chatLog) cfg.chatLog = { ...cfg.chatLog, dir: `${LOGS}/${cfg.chatLog.whenOff}/${env.SEXTON_CHANNEL || 'General Shit'}` };
+  // The room log lives where the off-duty bot writes it: <its log dir>/<its channel>.
+  const logBot = cfg.chatLog && bots.find((b) => b.id === cfg.chatLog.whenOff);
+  if (logBot) cfg.chatLog = { ...cfg.chatLog, dir: `${logBot.logDir}/${logBot.channel}` };
+  else if (cfg.chatLog) log(`WARNING chatLog.whenOff '${cfg.chatLog.whenOff}' is not a live bot; chatLog.dir left as configured`);
+  // #4875: the summoner's ServerQuery host follows bots.json "server".query when set.
+  if (bots.serverQuery) cfg.query = { ...cfg.query, ...bots.serverQuery };
   cfg.bots = cfg.bots || {};
   const live = new Set(bots.map((b) => b.id));
   for (const id of Object.keys(cfg.bots)) if (!live.has(id)) delete cfg.bots[id];
@@ -358,7 +386,7 @@ function gateway() {
 function accountFromPack(b, seed, cfg) {
   const a = JSON.parse(JSON.stringify(seed));
   delete a.bridgeUrl;
-  a.channel = b.channel || env.SEXTON_CHANNEL || a.channel || 'General Shit';
+  a.channel = b.channel || a.channel;
   a.voice ??= {};
   const v = b.voice;
   const names = Array.isArray(v.wakeNames) && v.wakeNames.length ? v.wakeNames : [b.nick];
@@ -393,6 +421,17 @@ else if (mode === 'gateway') gateway();
 // runs this: bots.conf and the gateway wiring follow the file, and
 // `supervisorctl reread && update` restarts only the cores whose program changed.
 else if (mode === 'rewire') { supervisor(); gateway(); }
+// `solo <id>` runs only that bot 24/7 with the summoner idle; `solo off` restores the roster.
+else if (mode === 'solo') {
+  const arg = process.argv[3];
+  const f = readJson(BOTS_FILE, null);
+  if (!arg || !f?.bots || (arg !== 'off' && !f.bots[arg])) { console.error('usage: stack.mjs solo <bot-id in bots.json>|off'); process.exit(2); }
+  copyFileSync(BOTS_FILE, `${BOTS_FILE}.pre-solo`);
+  if (arg === 'off') delete f.solo; else f.solo = arg; // an overlay: no bot entry changes
+  writeJson(BOTS_FILE, f);
+  supervisor(); gateway();
+  log(arg === 'off' ? 'solo off' : `solo ${arg}`);
+}
 else if (mode === 'list') console.log(JSON.stringify(loadBots().map(({ id, port, nick, identity }) => ({ id, port, nick, identity })), null, 2));
 else if (mode === 'packs') console.log(JSON.stringify(packs(), null, 2));
-else { console.error('usage: stack.mjs supervisor|gateway|rewire|list|packs'); process.exit(2); }
+else { console.error('usage: stack.mjs supervisor|gateway|rewire|solo|list|packs'); process.exit(2); }

@@ -422,9 +422,7 @@ RUN chmod 0755 /usr/local/bin/run-sexton /usr/local/bin/run-whisper-pool \
                /usr/local/bin/universal-healthcheck
 
 ENV RUST_LOG=info \
-    SEXTON_ADDR=teamspeak6-server \
     SEXTON_PORT=9987 \
-    SEXTON_CHANNEL="General Shit" \
     SEXTON_LOG_DIR=/var/sexton-logs \
     WHISPER_WORKERS=2 \
     WHISPER_THREADS=3 \

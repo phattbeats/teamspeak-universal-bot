@@ -155,7 +155,7 @@ for (const [id, bot] of Object.entries(cfg.bots)) {
     leftQuiet: null, // shift key this bot walked out of because the room went quiet
   };
 }
-const room = { humans: 0, lastHumanTalk: 0, lastHumanSeen: 0, lastChat: 0, queryUp: false, clients: [] };
+const room = { lastHumanJoin: 0, humanIds: new Set(), humans: 0, lastHumanTalk: 0, lastHumanSeen: 0, lastChat: 0, queryUp: false, clients: [] };
 const BOOT_AT = Date.now();
 
 // A guest visit restored from disk keeps the guest in until it's over.
@@ -177,7 +177,7 @@ const benderOn = (id, now) => {
 // #3839 S3: nobody has said anything (voice or chat) for a while, counting
 // from when the bot came up or the shift began, whichever is later.
 function roomQuiet(id, now, since) {
-  const lastActivity = Math.max(room.lastHumanTalk, room.lastChat, state[id].onSince, BOOT_AT, since ?? 0);
+  const lastActivity = Math.max(room.lastHumanTalk, room.lastChat, room.lastHumanJoin, state[id].onSince, BOOT_AT, since ?? 0);
   return quietOut(vc, { lastActivity, now, queryUp: room.queryUp });
 }
 
@@ -610,7 +610,7 @@ function endTakeover(now) {
 
 function takeoverTick(now, forced) {
   const t = ev.takeover;
-  if (!t?.enabled) return;
+  if (!t?.enabled || !state[t.villain] || !state[t.target]) return;
   const a = events.takeover.active;
   if (a) {
     if (state[t.villain].busy || state[t.target].busy) return;
@@ -658,7 +658,7 @@ function benderNews(now) {
 
 function benderTick(now, forced) {
   const b = ev.bender;
-  if (!b?.enabled) return;
+  if (!b?.enabled || !state[b.bot]) return;
   const a = events.bender.active;
   if (a && now >= a.until) {
     log(`EVENT bender over; ${a.bot} is back on his next shift`);
@@ -1242,6 +1242,9 @@ async function pollRoom(q) {
   const humans = clients.filter((c) => c.client_type === '0' && !BOT_NICKS.has((c.client_nickname || '').toLowerCase()));
   const now = Date.now();
   room.humans = humans.length;
+  const ids = new Set(humans.map((c) => c.clid));
+  if ([...ids].some((i) => !room.humanIds.has(i)) && room.humanIds.size + ids.size > 0 && polls > 1) room.lastHumanJoin = now;
+  room.humanIds = ids;
   if (humans.length) room.lastHumanSeen = now;
   if (humans.some((c) => c.client_flag_talking === '1')) room.lastHumanTalk = now;
   room.clients = clients;

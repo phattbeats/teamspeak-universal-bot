@@ -4,6 +4,10 @@
 # by stack.mjs into /run/universal/summoner.json. SUMMONER_ENABLED=0 idles it
 # (every core then just runs), which is what a test instance wants.
 set -eu
+if [ -e "${UNIVERSAL_SUMMONER_OFF_FILE:-/config/.summoner-off}" ]; then
+  echo "run-summoner: solo mode (.summoner-off); idling"
+  exec sleep infinity
+fi
 if [ "${SUMMONER_ENABLED:-1}" != "1" ]; then
   echo "run-summoner: disabled by SUMMONER_ENABLED=${SUMMONER_ENABLED:-}"
   exec sleep infinity

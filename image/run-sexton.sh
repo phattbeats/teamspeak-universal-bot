@@ -13,10 +13,9 @@
 # disconnect and leaves a ghost session the server reaps ~150s later.
 set -eu
 
-: "${SEXTON_ADDR:=teamspeak6-server}"
 : "${SEXTON_PORT:=9987}"
 : "${SEXTON_NICK:=Sexton}"
-: "${SEXTON_CHANNEL:=General Shit}"
+: "${SEXTON_FALLBACK_CHANNEL:=}"
 : "${SEXTON_LOG_DIR:=/var/sexton-logs}"
 : "${SEXTON_AVATAR:=}"
 : "${SEXTON_CHANNEL_PASSWORD:=}"
@@ -57,6 +56,11 @@ if [ -z "$SEXTON_IDENTITY" ]; then
        "the bot will generate one and come up as a new, unprivileged account." >&2
 fi
 
+# #4875: no baked-in server or channel. stack.mjs resolves both from bots.json
+# (the bot's entry, then its "server" block); a bot without them stops here, loudly.
+: "${SEXTON_ADDR:?run-sexton: no server address. Set one on the bot or under "server" in /config/bots.json}"
+: "${SEXTON_CHANNEL:?run-sexton: no channel. Set one on the bot or under "server" in /config/bots.json}"
+
 mkdir -p "$SEXTON_LOG_DIR"
 
 set -- \
@@ -64,6 +68,7 @@ set -- \
   --port "$SEXTON_PORT" \
   --nickname "$SEXTON_NICK" \
   --channel "$SEXTON_CHANNEL" \
+  --fallback-channel "$SEXTON_FALLBACK_CHANNEL" \
   --log-dir "$SEXTON_LOG_DIR" \
   --ws-bind "$SEXTON_WS_BIND" \
   --duck-gain "$SEXTON_DUCK_GAIN" \

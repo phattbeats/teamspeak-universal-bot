@@ -52,7 +52,7 @@ test('supervisor: one core per pack, guests share an identity and never autostar
   for (const id of Object.keys(bots)) assert.match(conf, new RegExp(`\\[program:core-${id}\\]`));
   assert.match(conf, /\[program:menace-lexton\]/);
   assert.match(conf, /SEXTON_IDENTITY_FILE="[^"]*\/bots\/guest\/sexton-id.txt"[^\n]*\nautostart=false/);
-  assert.match(conf, /SEXTON_NICK="Rotten Johnny"/);
+  assert.match(conf, /SEXTON_NICK="Rotten Johnny \[BOT\]"/); // TS shows the bot tag
   const summoner = json(`${root}/run/summoner.json`);
   assert.equal(summoner.local, true);
   assert.equal(summoner.bots.bexton.program, 'core-bexton');
@@ -185,4 +185,48 @@ test('rewire: bots.conf and the gateway follow bots.json; a removed bot stays re
   assert.match(readFileSync(`${root}/run/bots.conf`, 'utf8'), /\[program:menace-lexton\]/);
   assert.equal(json(`${root}/config/openclaw/openclaw.json`).channels.teamspeak.accounts.lexton.enabled, undefined);
   assert.deepEqual(JSON.parse(stack(root, 'packs')).lexton, join(repo, 'personas', 'lexton'));
+});
+
+// #4875: address and channel come from bots.json (bot entry, then the `server` block); nothing is baked in.
+test('server block: bots inherit address, port, channel and fallback; a bot entry overrides; chatLog follows', () => {
+  const root = fresh();
+  stack(root, 'supervisor', { SEXTON_ADDR: '', SEXTON_CHANNEL: '' });
+  const file = json(`${root}/config/bots.json`);
+  file.server = { address: 'ts.example.net', port: 9988, channel: 'Lobby', fallbackChannel: 'Spare', query: { host: '100.1.2.3', port: 10022 } };
+  file.bots.bexton.address = 'other.example.net';
+  file.bots.bexton.channel = 'Side Room';
+  writeFileSync(`${root}/config/bots.json`, JSON.stringify(file));
+  stack(root, 'rewire', { SEXTON_ADDR: '', SEXTON_CHANNEL: '' });
+  const conf = readFileSync(`${root}/run/bots.conf`, 'utf8');
+  const core = (id) => conf.split('[program:').find((c) => c.startsWith(`core-${id}]`));
+  assert.match(core('sexton'), /SEXTON_ADDR="ts.example.net"/);
+  assert.match(core('sexton'), /SEXTON_PORT="9988"/);
+  assert.match(core('sexton'), /SEXTON_CHANNEL="Lobby"/);
+  assert.match(core('sexton'), /SEXTON_FALLBACK_CHANNEL="Spare"/);
+  assert.match(core('bexton'), /SEXTON_ADDR="other.example.net"/);
+  assert.match(core('bexton'), /SEXTON_CHANNEL="Side Room"/);
+  const sum = json(`${root}/run/summoner.json`);
+  assert.equal(sum.query.host, '100.1.2.3');
+  assert.ok(!/General Shit/.test(JSON.stringify(sum)));
+  assert.ok(sum.chatLog.dir.endsWith(`/${sum.chatLog.whenOff}/Lobby`));
+});
+
+// Solo mode: one bot around the clock, summoner idle; an overlay that `solo off` undoes exactly.
+test('solo: only that bot runs and autostarts, the summoner idles, and off restores the roster untouched', () => {
+  const root = fresh();
+  stack(root, 'supervisor');
+  const before = json(`${root}/config/bots.json`).bots;
+  execFileSync('node', [join(here, 'stack.mjs'), 'solo', 'johnny'], { encoding: 'utf8', env: { ...process.env, UNIVERSAL_VOICE: '1', UNIVERSAL_CONFIG_DIR: `${root}/config`, UNIVERSAL_RUN_DIR: `${root}/run`, UNIVERSAL_PERSONA_ROOT: join(repo, 'personas'), UNIVERSAL_SEED: join(repo, 'image', 'gateway', 'openclaw.seed.json'), UNIVERSAL_SUMMONER_DEFAULTS: join(repo, 'ts-summoner'), SEXTON_LOG_DIR: `${root}/logs`, OPENCLAW_STATE_DIR: `${root}/config/openclaw`, OPENCLAW_CONFIG_PATH: `${root}/config/openclaw/openclaw.json` } });
+  let conf = readFileSync(`${root}/run/bots.conf`, 'utf8');
+  assert.deepEqual([...conf.matchAll(/\[program:core-(\w+)\]/g)].map((m) => m[1]), ['johnny']);
+  assert.match(conf.split("[program:core-johnny]")[1], /\nautostart=true\n/); // guests normally never autostart
+  assert.ok(existsSync(`${root}/config/.summoner-off`));
+  assert.deepEqual(json(`${root}/config/bots.json`).bots, before);
+  const file = json(`${root}/config/bots.json`);
+  delete file.solo;
+  writeFileSync(`${root}/config/bots.json`, JSON.stringify(file));
+  stack(root, 'rewire');
+  conf = readFileSync(`${root}/run/bots.conf`, 'utf8');
+  assert.equal([...conf.matchAll(/\[program:core-/g)].length, 5);
+  assert.ok(!existsSync(`${root}/config/.summoner-off`));
 });

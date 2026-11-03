@@ -305,10 +305,11 @@ export function writeSummonerNick(path, id, nick) {
 // only edit the parsed file; running things is insights-web's job.
 
 export const BOT_ID = /^[a-z][a-z0-9_-]*$/;
+const HOST = /^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/;
 const ENV_KEY = /^[A-Z_][A-Z0-9_]*$/;
 const FIRST_PORT = 9101;
 /** Keys the edit form may set. `enabled` has its own switch; `port` is checked against the others. */
-const BOT_KEYS = ['nick', 'channel', 'identity', 'port', 'autostart', 'noCatchup', 'noWelcome', 'menace', 'env'];
+const BOT_KEYS = ['nick', 'channel', 'address', 'fallbackChannel', 'identity', 'port', 'autostart', 'noCatchup', 'noWelcome', 'menace', 'env'];
 
 const title = (id) => id[0].toUpperCase() + id.slice(1);
 const str = (v, what, max) => {
@@ -343,6 +344,8 @@ export function cleanBot(bots, id, patch, cur = bots[id] ?? {}) {
   const out = { ...cur };
   if ('nick' in patch) { const v = str(patch.nick, 'nick', 64); if (v) out.nick = v; else delete out.nick; }
   if ('channel' in patch) { const v = str(patch.channel, 'channel', 128); if (v) out.channel = v; else delete out.channel; }
+  if ('fallbackChannel' in patch) { const v = str(patch.fallbackChannel, 'fallback channel', 128); if (v) out.fallbackChannel = v; else delete out.fallbackChannel; }
+  if ('address' in patch) { const v = str(patch.address, 'server address', 253); if (v && !HOST.test(v)) throw new Error('server address must be a host name or IP, no spaces or scheme'); if (v) out.address = v; else delete out.address; }
   if ('identity' in patch) {
     const v = str(patch.identity, 'identity', 40);
     if (v && !BOT_ID.test(v)) throw new Error('identity must be a short lowercase name (the shared identity folder, e.g. guest)');
@@ -378,6 +381,39 @@ export function cleanBot(bots, id, patch, cur = bots[id] ?? {}) {
   return out;
 }
 
+/**
+ * #4875: the stack-wide `server` block in bots.json: the address, port,
+ * default channel and fallback channel every bot uses unless its own entry says
+ * otherwise, and the summoner's ServerQuery target (`query`: host/port/user).
+ */
+export function editServer(file, patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('bad server entry');
+  const out = { ...(file.server ?? {}) };
+  for (const k of Object.keys(patch)) if (!['address', 'port', 'channel', 'fallbackChannel', 'query'].includes(k)) throw new Error(`unknown server setting ${k}`);
+  for (const [k, what, max] of [['address', 'server address', 253], ['channel', 'default channel', 128], ['fallbackChannel', 'fallback channel', 128]]) {
+    if (!(k in patch)) continue;
+    const v = str(patch[k], what, max);
+    if (k === 'address' && v && !HOST.test(v)) throw new Error('server address must be a host name or IP, no spaces or scheme');
+    if (v) out[k] = v; else delete out[k];
+  }
+  if ('port' in patch) {
+    if (patch.port === '' || patch.port === null) delete out.port;
+    else { const p = Number(patch.port); if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error('server port must be 1 to 65535'); out.port = p; }
+  }
+  if ('query' in patch) {
+    const q = patch.query ?? {};
+    if (typeof q !== 'object' || Array.isArray(q)) throw new Error('query must be host/port/user');
+    const nq = {};
+    const host = str(q.host, 'query host', 253);
+    if (host) { if (!HOST.test(host)) throw new Error('query host must be a host name or IP'); nq.host = host; }
+    if (q.port !== undefined && q.port !== null && q.port !== '') { const p = Number(q.port); if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error('query port must be 1 to 65535'); nq.port = p; }
+    const user = str(q.user, 'query user', 64); if (user) nq.user = user;
+    if (Object.keys(nq).length) out.query = nq; else delete out.query;
+  }
+  if (Object.keys(out).length) file.server = out; else delete file.server;
+  return file.server ?? {};
+}
+
 /** The next bridge port stack.mjs would hand out. */
 export function nextFreePort(bots) {
   const used = new Set(Object.values(bots).map((b) => b.port).filter(Boolean));
@@ -397,6 +433,18 @@ export function setBotEnabled(file, id, on) {
     delete bots[id].enabled;
   } else bots[id].enabled = false;
   return bots[id];
+}
+
+/**
+ * Solo mode: `id` runs alone around the clock and the summoner idles; '' or
+ * null turns it off. It is an overlay: no bot entry is touched, so turning it
+ * off brings back exactly the roster (enabled flags, shifts) that was there.
+ */
+export function setSolo(file, id) {
+  if (id === '' || id === null || id === undefined) { delete file.solo; return ''; }
+  if (!file.bots?.[id]) throw Object.assign(new Error(`unknown bot ${id}`), { code: 404 });
+  file.solo = id;
+  return id;
 }
 
 export function editBot(file, id, patch) {
@@ -455,6 +503,8 @@ export function listBots(file, packs, { programs = {}, live = null, accounts = {
     nick: b.nick || packs[id]?.nick || title(id),
     nickFromPack: !b.nick,
     channel: b.channel ?? '',
+    address: b.address ?? '',
+    fallbackChannel: b.fallbackChannel ?? '',
     identity: b.identity ?? '',
     port: b.port ?? null,
     enabled: b.enabled !== false,
@@ -471,5 +521,5 @@ export function listBots(file, packs, { programs = {}, live = null, accounts = {
   }));
   const inUse = new Set(Object.keys(bots));
   const available = Object.entries(packs).filter(([id]) => !inUse.has(id)).map(([id, p]) => ({ id, nick: p.nick || title(id), dir: p.dir }));
-  return { bots: rows, available, removed: file?.removed ?? [], nextPort: nextFreePort(bots) };
+  return { server: file?.server ?? {}, solo: bots[file?.solo] ? file.solo : '', bots: rows, available, removed: file?.removed ?? [], nextPort: nextFreePort(bots) };
 }
