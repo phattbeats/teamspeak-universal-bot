@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/utsb-banner.png" alt="TeamSpeak Universal Bot: voice, chat, tools" width="100%"></p>
+
 # TeamSpeak Universal Bot
 
 A framework for running LLM-driven bots on **TeamSpeak 6**: they hear and
