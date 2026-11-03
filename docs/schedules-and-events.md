@@ -349,7 +349,7 @@ days. I've got a bruise shaped like Oklahoma...").
 
 ### Firing events by hand
 
-From PHATT-RAID (the HTTP API isn't published to the host):
+From the Docker host (the HTTP API isn't published to the host):
 
 ```sh
 docker exec ts-summoner wget -qO- --post-data= http://localhost:8099/event/takeover
@@ -380,7 +380,7 @@ mount, so after editing it run `docker restart ts-summoner`.
 
 Rotten Johnny (the ghoul who owns the Vice) and Trixie (his waitress, the band's second singer) aren't regulars. They **drop in** on Bexton nights a few times a week, and they don't overstay: an arrive scene with Bexton, a few minutes listening for their name, then a leave scene.
 
-**One container for every guest.** `guest` (`image/deploy-guest.sh`, appdata `/mnt/user/appdata/guest`) runs one gateway, one bridge and one TeamSpeak identity. Before each visit the summoner runs `node /usr/local/bin/guest-switch.mjs <id>` in it. That script:
+**One container for every guest.** `guest` (`image/deploy-guest.sh`, appdata `<appdata>/guest`) runs one gateway, one bridge and one TeamSpeak identity. Before each visit the summoner runs `node /usr/local/bin/guest-switch.mjs <id>` in it. That script:
 - rebinds the teamspeak channel to the guest's agent, seeding its workspace from `personas/<id>/` the first time,
 - sets the wake names/excludes and the TTS voice (`voiceId`, plus optional `pitch` and `speed`) from `personas/<id>/voice.json`,
 - writes `/config/.guest-env` (nick + avatar), which `run-sexton.sh` sources when the core starts, and `/config/.guest` (who is in the chair),
@@ -433,8 +433,8 @@ the channel and keep answering text, nothing listens, nothing speaks.
 | `GET /status` | now carries `voice: "on" \| "off"` (`"unknown"` in the old per-container layout, where the routes answer 501). |
 
 ```sh
-docker exec teamspeak-universal-bot curl -s -X POST 'localhost:8099/voice/off?by=brandon'
-docker exec teamspeak-universal-bot curl -s -X POST 'localhost:8099/voice/on?by=brandon'
+docker exec teamspeak-universal-bot curl -s -X POST 'localhost:8099/voice/off?by=operator'
+docker exec teamspeak-universal-bot curl -s -X POST 'localhost:8099/voice/on?by=operator'
 ```
 
 The bots call the same routes through the `set_voice_mode` tool ("Sexton, go
@@ -443,7 +443,7 @@ quiet"). The file is the state: it survives a container restart, and
 the cores with `--no-audio`, which this switch cannot do live). Full table of
 the three layers: `image/README.md` → Voice off.
 
-Voice off is zero voices, scheduled ones included (Brandon, 2026-10-23):
+Voice off is zero voices, scheduled ones included:
 `audience()` is false, so entrances go out quiet (mood still rolls), exits,
 scene lines, bender news and the no-show line are skipped, and banter,
 takeovers and guest visits don't start (`banterOpen`, `takeoverEligible`
@@ -453,27 +453,27 @@ schedule change, and its news line is simply not said.
 
 ## 6. Deploy
 
-Summoner (PHATT-RAID):
+Summoner (the Docker host):
 
 ```sh
 # from a checkout: copy ts-summoner/ to the box, keep query-pass.txt there
 tar cf - -C ts-summoner summoner.mjs schedule.mjs story.mjs variety.mjs config.json deploy.sh Dockerfile live README.md \
-  | ssh root@10.0.0.100 'cd /mnt/user/appdata/ts-summoner && tar xf - --no-same-owner && ./deploy.sh'
+  | ssh root@<host-ip> 'cd <appdata>/ts-summoner && tar xf - --no-same-owner && ./deploy.sh'
 ```
 
 - `live/` (calendar + scenes) is mounted **as a directory**, read-only.
-  Edit `/mnt/user/appdata/ts-summoner/live/*.json` on the box, and the next
+  Edit `<appdata>/ts-summoner/live/*.json` on the box, and the next
   reconcile picks it up. (Single-file bind mounts keep the old inode after
   `sed -i` or an editor save, which is why it's a directory.)
 - `state/` holds `state.json` (event state). Don't delete it mid-event.
 - The scene and tag features need bots on an image with the #3841
-  announcer (`phattbeats/sexton:pha-3841` or later). On an older image, scene
+  announcer (an image that includes the scene announcer). On an older image, scene
   lines are consumed silently: the swap still happens, just with no dialogue.
 
 Bot lines are **live files** (seeded once):
-`/mnt/user/appdata/<bot>/config/openclaw/workspace/agents/<bot>/lines.json`.
+`<appdata>/<bot>/config/openclaw/workspace/agents/<bot>/lines.json`.
 When the repo gains pools, merge the new keys into the live file and
-leave existing keys alone, because Brandon hand-edits them. Keep the file
+leave existing keys alone, because operators hand-edit them. Keep the file
 `root:root` (see the ownership-guard trap).
 
 ---
@@ -484,7 +484,7 @@ leave existing keys alone, because Brandon hand-edits them. Keep the file
 |---|---|
 | a bot isn't in the room | `docker exec ts-summoner wget -qO- localhost:8099/status`: `desired.why` says `off shift`, `on a bender`, `hostile takeover`, `called out`, `room quiet`... |
 | scene didn't play | `docker logs ts-summoner \| grep -E 'scene\|handoff\|arrive\|leave'`. `scene X: <bot> never said his line` = TTS/bridge problem on that bot |
-| scene played but silent | the bot image is older than pha-3841 (`docker logs <bot> \| grep "no lines for 'scene'"`) |
+| scene played but silent | the bot image is older than the scene announcer (`docker logs <bot> \| grep "no lines for 'scene'"`) |
 | wrong holiday pool | `/status → bots.<id>.flavor` shows `{pool, vars, entries, serviceDay}` |
 | wrong hours | `/status → bots.<id>.shiftsToday` (today's shifts after the calendar) |
 | calendar edit ignored | `docker logs ts-summoner \| grep calendar.json`: a JSON error keeps the last good copy |

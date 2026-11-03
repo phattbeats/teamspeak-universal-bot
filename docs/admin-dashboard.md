@@ -1,9 +1,8 @@
 # Admin dashboard: the Bots tab (#4374)
 
-The insights dashboard (`http://<PHATT-RAID>:8098`, login in
-`config/insights/auth.txt`; see [INSIGHTS.md](INSIGHTS.md)) has a **Bots**
-tab that edits the bot list itself. Brandon, 2026-10-21: "i want an easy way
-to enable / disable / edit bots on the admin homepage thing." Before this,
+The insights dashboard (`http://<host>:8098`, login in
+`config/insights/auth.txt`; see [INSIGHTS.md](insights.md)) has a **Bots**
+tab that edits the bot list itself. Before this,
 that meant hand-editing `config/bots.json` and restarting the container.
 
 Everything the tab does is a write to `config/bots.json` (the file

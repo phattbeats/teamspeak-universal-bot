@@ -1,89 +1,99 @@
-# teamspeak-universal-bot
+# TeamSpeak Universal Bot
 
-The Sexton: a bot that gives teamspeak.phatt.vip's channel chat memory, voice,
-and a handful of tools. Tracked as the #3099 epic in Paperclip.
+A framework for running LLM-driven bots on **TeamSpeak 6**: they hear and
+speak in voice channels, read and write text chat, remember what was said, play
+music, and use tools — all driven by [OpenClaw](https://github.com/openclaw/openclaw)
+agents. One container runs any number of bots; each bot is a **persona pack**:
+a folder of markdown and JSON that defines who it is.
 
-TeamSpeak does not persist channel text chat — anyone who joins a channel
-late sees nothing that was said before they arrived. The Sexton fixes that,
-and is the platform the later voice/tool work builds on.
+The bundled personas (see [`personas/`](personas/)) are examples. The
+product is the framework, not any one character.
 
-## Deploy
+## What you get
 
-Everything ships as **one container** (#3791): every bot (Sexton, Bexton,
-Lexton and the guest stars Rotten Johnny and Trixie) under one OpenClaw
-gateway, each with its own TeamSpeak identity, plus the whisper pool,
-suno-api, the POT provider and ts-summoner, all supervised in one place.
+- **Chat memory.** TeamSpeak does not persist channel text. Bots keep a
+  markdown log of the room and catch up anyone who joins late.
+- **Voice, both ways.** Speech-to-text in (local whisper.cpp by default,
+  pluggable), text-to-speech out, with wake names, follow-up windows and a
+  global voice kill switch. See [STT providers](docs/stt-providers.md).
+- **Tools.** Music queue with ducking, `what_did_i_miss`, `who_is_here`, poke,
+  moderation (kick/ban/move, gated by server group), web search, persona
+  editing and more. See the [tool catalog](docs/tool-catalog.md).
+- **Many bots, one container.** Each bot gets its own TeamSpeak identity,
+  nick, avatar and OpenClaw agent, behind a single gateway.
+- **Schedules and events.** Shifts, entrances and exits, two-bot scenes,
+  guest appearances and special nights. See
+  [schedules and events](docs/schedules-and-events.md).
+- **Insights dashboard** with a Bots tab to enable, disable and edit bots.
+  See [insights](docs/insights.md) and the [admin dashboard](docs/admin-dashboard.md).
+
+## Quickstart
+
+You need a TeamSpeak 6 server you can connect to, Docker, and an LLM provider
+configured for OpenClaw.
+
+```bash
+image/build.sh                  # builds <registry>/teamspeak-universal-bot:<git sha>
+TAG=<sha> image/deploy.sh       # (re)creates the teamspeak-universal-bot container
+```
+
+Then edit `config/bots.json` (or use the dashboard's Bots tab) to choose
+which personas run, and give each bot a TeamSpeak identity. Server-side you
+need the bot's port reachable and, for moderation tools, a server group with
+the matching permissions. The full walk-through, volumes and environment
+variables are in [`image/README.md`](image/README.md).
+
+Already run an OpenClaw gateway? Attach just the plugin and bridge: see
+[Bring your own OpenClaw](docs/bring-your-own-openclaw.md).
+
+## Architecture
 
 ```
-image/build.sh                   # on PHATT-RAID; tags phattbeats/teamspeak-universal-bot:<git sha>
-TAG=<sha> image/deploy.sh        # (re)creates the teamspeak-universal-bot container
+TeamSpeak 6 server
+      │  tsclientlib (one connection per bot)
+      ▼
+ core-<id>   Rust bot core (sexton/): identity, chat log, Opus, music/ducking mixer
+      │  local WebSocket bridge (sexton/PROTOCOL.md)
+      ▼
+ OpenClaw gateway  ── teamspeak channel plugin (teamspeak-plugin/)
+      │                 agents, tools, voice lanes, STT/TTS
+      ├─ whisper pool        speech-to-text (whisper/)
+      ├─ summoner            shifts, scenes, guests (ts-summoner/)
+      └─ suno-api, POT       music generation / playback helpers
 ```
 
-A bot is a persona pack: `personas/<id>/` (workspace markdown, `voice.json`,
-`tools.json`, lines, moods, avatar). Add one (or drop it into
-`/config/personas/<id>/` on the box) and the next boot gives it a core, a
-bridge port, a gateway account, an agent and a summoner entry. See
-[`image/README.md`](image/README.md).
+| directory | what |
+| --- | --- |
+| [`sexton/`](sexton/) | Rust core: one TeamSpeak client per bot (the crate and binary keep their historical name) |
+| [`bridge-proto/`](bridge-proto/) | shared bridge protocol types |
+| [`teamspeak-plugin/`](teamspeak-plugin/) | OpenClaw channel plugin: voice lanes, tools, chat commands |
+| [`personas/`](personas/) | persona packs, shipped as examples |
+| [`image/`](image/) | the all-in-one container: build, deploy, supervisor, gateway seed |
+| [`ts-summoner/`](ts-summoner/) | schedules, scenes and guest appearances |
+| [`whisper/`](whisper/) | local speech-to-text workers |
+| [`docs/`](docs/) | guides and reference, start at the [index](docs/README.md) |
 
-## Scope
+## Persona packs
 
-- **v1 — chat memory** (#3173, #3107): a catch-up PM on join and a full
-  markdown log on disk (#3424 removed the earlier rolling last-N-messages
-  channel description, since editing it on every message fired a
-  channel-edit notification sound). Content-only — no joins/leaves/moves/
-  mutes/system messages, just what people typed.
-- **Audio bridge** (#3174, `plnt-ts-bridge`): sidecar exposing per-speaker
-  PCM out, mixed PCM in, and a music lane with ducking over a local
-  WebSocket.
-- **Realtime voice channel plugin** (#3175): OpenClaw channel plugin
-  putting a realtime voice runtime in the channel, with Discord config
-  parity. Lives at [`teamspeak-plugin/`](teamspeak-plugin/) in this repo.
-  Split out into its own repo at #3220 so the plugin and the chat logger
-  could ship independently; #3580 moved it back once #3341/3342 folded
-  them onto one tsclientlib connection and #3428 put them in one image —
-  the repo, `phattbeats/openclaw-teamspeak-plugin`, is now archived.
-- **Voice tools v1** (#3176): `play_music` (ducked lane), `stop`,
-  `what_did_i_miss`, `who_is_here`, `poke`.
+A persona is a directory under `personas/<id>/` (or `config/personas/<id>/`
+on a running box, no rebuild). The only required file is `voice.json`; the
+rest shape the character. `personas/HUMAN.md` is a shared tone file loaded
+under every pack. The shipped packs are examples to copy from:
 
-Server prerequisites (30033/tcp forward, Sexton server group + permissions,
-Docker network placement) and standing decisions (realtime provider, monthly
-cost ceiling, the Sexton's voice, the "Sexton is listening" notice) are
-tracked separately as #3172 and #3177.
+| pack | role |
+| --- | --- |
+| `sexton` | the house host: dry, vulgar, runs the room |
+| `bexton` | a band leader who composes and performs songs |
+| `lexton` | a scheming villain who shows up on special nights |
+| `johnny`, `trixie` | guest stars that drop in on band nights |
 
-## Implementation notes
+Write your own with [Writing a persona](docs/writing-personas.md).
 
-- Rust on [tsclientlib](https://github.com/ReSpeak/tsclientlib), proven
-  against the live server in #3073 (reuses that voicespike build). Text
-  messages arrive as `StreamItem::MessageEvent` / `events::Event::Message`;
-  channel descriptions are edited via
-  `con.get_state()?.channels[id].edit().set_description(...)`; private
-  messages via `send_textmessage` / `Message::client(...)`.
-- One bot client per watched channel, channels listed in a config file.
-- Runs as a Docker container on the TS6 host's Docker network (not on
-  PHATT-RAID reaching over the public IP — that hairpins and gets
-  flood-scored). `restart: unless-stopped`, reconnect with backoff.
-- Channel description limit is 8192 bytes (not 200 — that's the *client*
-  description limit).
+## Documentation
 
-## Definition of done
+Everything is indexed in [`docs/README.md`](docs/README.md). Contributing
+rules are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-Someone in the channel says "Sexton, what did I miss" and hears the last
-messages within two seconds; "Sexton, play some smooth jazz" starts music
-that ducks when anyone speaks and stops on "Sexton, stop"; the catch-up PM
-keeps working underneath; and the group has been told the Sexton listens.
+## License
 
-## Universal bot tool catalog
-
-See [`docs/universal-bot/TOOL-CATALOG.md`](docs/universal-bot/TOOL-CATALOG.md)
-for the research + implementation notes on turning Sexton/Bexton into
-instances of a common tool platform: web search provider choice, the
-`tools.allow` wiring, per-persona skill curation, and the live-verify
-recipe (#3783/#3788).
-
-## Status
-
-`ts-bridge/` (#3174, audio sidecar) has a working Rust implementation —
-see `ts-bridge/README.md` for how to run it and what's not yet verified
-against the live server. v1 chat memory (#3173) and the rest of the epic
-are still planning/blocked. See the #3099 epic and its children in
-Paperclip for current status and decisions.
+[PolyForm Noncommercial 1.0.0](LICENSE).

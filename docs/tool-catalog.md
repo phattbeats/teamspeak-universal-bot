@@ -1,6 +1,6 @@
 # Universal TeamSpeak Bot — research notes and tool catalog
 
-#3783, 2026-09-24. Brandon's ask: one universal TeamSpeak bot platform
+#3783, 2026-09-24. The ask: one universal TeamSpeak bot platform
 that Sexton and Bexton become instances of, with a real tool catalog
 (queue, moderation, channel movement, web search, skills, persona editing,
 token control) and pluggable STT.
@@ -237,7 +237,7 @@ per-persona live permissions into the persona pack is follow-up work.
   that already writes `<logDir>/<channel>/YYYY-MM-DD.md` picks it up the same
   as any other channel message.
 
-**Prerequisite (`[Brandon/host]`, not done by this change):** the
+**Prerequisite (operator step, not done by this change):** the
 Sexton/Bexton TS identities need an actual TeamSpeak server group carrying
 the underlying kick/ban/move/edit permissions. The `allowGroups` config above
 only gates who may *ask* the bot to moderate — the bot's own TS account still
@@ -249,7 +249,7 @@ the TeamSpeak server with a permission error (reported back as
 surface run over a real permission-scoped HTTP API instead of borrowing the
 bot's own client connection, but `teamspeak6-server` currently refuses
 connections on that port — WebQuery is not enabled on the server today. That
-needs Brandon to enable it and mint a scoped API key; not attempted here.
+needs an operator to enable it and mint a scoped API key; not attempted here.
 
 ### 4.4 Persona
 | Tool | Status | Notes |
@@ -283,7 +283,7 @@ three are not there and would need a host change. Cut accordingly.
 | transcript framing size (`agent-turn.ts`) | **cut — already minimal** | `formatTeamSpeakVoicePrompt` is one line: `` `[teamspeak voice] ${nickname} said: ${message}` ``. That's a handful of tokens of fixed overhead, not a growing cost. Nothing to trim. |
 | one log line: prompt/output tokens, model, cost | **shipped, partial** | Extended the existing `teamspeak voice: stt-tts turn` line (`stt-tts-speaker-session.ts`) with `requestedModel=` / `requestedThinking=`, next to the existing `sttMs/agentMs/ttsMs/firstAudioMs`. Prompt tokens, output tokens, and cost are **not there and can't be added from this repo**: `runCommandFromIngress` returns only `{ payloads }` to the ingress caller (`command/types.ts`) — no usage object crosses that boundary, even though the host tracks it internally (`CliUsage` in `cli-output-records.ts`, promptTokens/outputTokens/cost). Getting real numbers into this log line needs `runCommandFromIngress` to return usage on the result, which is a host (openclaw core) change, not a plnt-sexton one. |
 
-#### Latency pass (Brandon 2026-09-25: "limit latency as much as possible")
+#### Latency pass
 
 Where a voice turn's time actually goes, from 12 live sexton turns on
 2026-09-24 (whisper-local + MiniMax-M3 + MiniMax T2A, `thinkingDefault:
@@ -319,7 +319,7 @@ if the `requestedModel`/`requestedThinking` log line, once it has a few days
 of live data, shows spend that's worth capping rather than just watching.
 
 ### 4.7 STT as a connector — **done (#3790)**
-Full write-up: [STT-PROVIDERS.md](STT-PROVIDERS.md).
+Full write-up: [STT-PROVIDERS.md](stt-providers.md).
 
 The premise turned out to be half wrong, which is the interesting part.
 `sttProvider` was *not* already a switch — the name was validated in
@@ -354,7 +354,7 @@ Three notes worth keeping:
 ## 6. Web search + skills curation implementation (#3788)
 
 Closes the "have-but-dead" gap from §4.5. Applied by hand on both live
-gateway containers on PHATT-RAID (config is not reconstructed by
+gateway containers on the Docker host (config is not reconstructed by
 `deploy.sh` per #3601 — this needs redoing if either container is
 rebuilt from scratch instead of restarted).
 
@@ -422,7 +422,7 @@ bots before this change). Curated via `skills: [...]` on each agent entry:
 Everything else (github/gh-issues, 1password, apple-notes/reminders,
 bear-notes, taskflow\*, things-mac, notion, obsidian, trello, coding-agent,
 node-\*, python-debugpy, tmux, skill-creator, etc.) was cut — none of it is
-used by a voice-chat/music persona, and per Brandon's ask this was a prompt-
+used by a voice-chat/music persona, and this was a prompt-
 budget trim, not a science project, so it stops at "what each persona
 actually uses."
 
