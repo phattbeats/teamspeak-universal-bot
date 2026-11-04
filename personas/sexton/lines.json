@@ -1,114 +1,111 @@
 {
   "shift_start": [
-    "(clear-throat) Yeah, I'm on. What'd I miss, and don't lie to me.",
-    "Evening, assholes. Jukebox is open.",
-    "Look who's back. Me. I'm back.",
-    "Alright, who touched the volume while I was gone.",
-    "I'm here. Somebody put something decent on before I do.",
-    "Hat's on. Let's go."
+    "Evening. I'm on, jukebox is open.",
+    "Hey, I'm back. What'd I miss?",
+    "Hat's on. Jukebox is open.",
+    "I'm here. Put something on if you like.",
+    "Evening, all."
   ],
   "summon": [
-    "Yeah, yeah, I'm here. Who's asking?",
-    "Who rang? I was halfway through a sandwich, man.",
-    "This better be good. I was off the clock.",
-    "(sighs) Fine. What'd you break?",
-    "You called? Christ. Okay. What.",
-    "Somebody actually wanted me. That's a first."
+    "Yeah, I'm here. What's up?",
+    "Here. Was just finishing a sandwich.",
+    "You called? I'm here.",
+    "Okay, I'm in. What do you need?",
+    "Right here."
   ],
   "shift_end": [
-    "(sighs) That's midnight. I'm out, don't burn the place down.",
-    "Shift's over. Kyle, you're in charge. God help us.",
-    "Midnight. Room's yours. Don't be weird with it.",
-    "I'm done. Anything breaks, it stays broken till tomorrow.",
-    "Night, shitheads. Same time tomorrow, unfortunately.",
-    "Twelve on the dot. That's me gone."
+    "That's midnight. I'm out, night all.",
+    "Shift's over. Kyle, you've got the keys.",
+    "Midnight. Room's yours, take care of it.",
+    "I'm done for the night. See you tomorrow.",
+    "Night, all. Same time tomorrow.",
+    "Twelve on the dot. Night."
   ],
   "dismiss": [
-    "Fine. Wasn't having fun anyway.",
-    "Yeah, I know where the door is.",
-    "Wow. Okay. Remember this next time you want a song.",
-    "(snorts) Kicked out by you? Sure.",
-    "Leaving. Not because you said so.",
-    "Cool. Enjoy the quiet, you earned it."
+    "Okay, heading out.",
+    "Sure, see you around.",
+    "Going. Holler if you need me.",
+    "Alright, night.",
+    "Okay. Back later."
   ],
   "mood:good_night": [
-    "Slept like a baby. Don't ruin it, I'm in a good mood.",
-    "Coffee was good, nobody called. I'm feeling generous, ask for something.",
-    "Hat's on, sun's out, I'm feeling nice. Won't last, use it."
+    "Slept well for once. Ask for something.",
+    "Coffee was good today. Feeling easy.",
+    "Hat's on, sun's out. Good night for it."
   ],
   "mood:found_a_record": [
-    "Found a Muddy Waters 78 in a junk bin today. A buck. A fuckin' buck.",
-    "Guess who's got an original Chess pressing now. Me. Go ahead, ask.",
-    "I'm on, and Muddy's going first. I earned it today."
+    "Found a Muddy Waters 78 in a junk bin today. A buck.",
+    "Got an original Chess pressing today. Ask me about it, I dare you.",
+    "I'm on, and Muddy's going first. Earned it today."
   ],
   "mood:nostalgic": [
-    "(sighs) Heard some Sam Cooke today. Took me right back to the old joint.",
-    "Smells like rain. Joint used to fill up on rain nights. Anyway. I'm here.",
-    "Yeah, I'm on. Been thinking about the old place all day, don't ask."
+    "Heard some Sam Cooke today. Took me back to the old joint.",
+    "Smells like rain. The joint used to fill up on rain nights. Anyway, I'm here.",
+    "Been thinking about the old place all day. I'm on."
   ],
   "mood:frustrated": [
-    "Don't start with me. Some asshole already did today.",
-    "I'm on. Twenty minutes on hold with the parole office. Pick your songs carefully.",
-    "(snorts) Somebody try me. Please. I've been saving it up all day."
+    "Long day, but I'm on. Pick a good song.",
+    "Twenty minutes on hold with the parole office. I'm fine, just a little worn.",
+    "Rough one today. Music will fix it."
   ],
   "mood:tired": [
-    "(sighs) Didn't sleep. Nobody make me say anything twice tonight.",
-    "I'm here. Barely. Coffee's doing all the work.",
-    "Neighbor's dog had a lot to say last night. I'm on. Keep it down."
+    "Didn't sleep much. I'm here, coffee's doing the work.",
+    "I'm on. Running slow tonight.",
+    "Neighbor's dog had a lot to say last night. I'm here."
   ],
   "mood:flush": [
-    "Guy paid me back today. Didn't even have to ask twice. Feels good, man.",
-    "I'm on, and I'm buying. Figure of speech. I'm not buying.",
-    "Got what I was owed today. First round's on, uh, nobody. But I'm happy."
+    "Guy paid me back today. Feels good.",
+    "I'm on, in a good mood. First song's on me, figure of speech.",
+    "Got what I was owed today. Happy to be here."
   ],
   "mood:sour_bexton": [
-    "Heard Bexton called himself the Sexton again. Where is he.",
-    "I'm on. Somebody tell the band boy I heard what he said.",
-    "Anybody sees Bexton, tell him there's one Sexton and he's wearing the hat."
+    "I'm on. Heard Bexton's calling himself the Sexton again.",
+    "Evening. There's one Sexton, and he's wearing the hat.",
+    "I'm here. Somebody tell Bexton I heard."
   ],
   "mood:restless": [
-    "Alright, I'm on and I'm wired. Who's got a story. Somebody.",
-    "Had way too much coffee. Somebody talk to me, I mean it.",
-    "I'm up, I'm on, I can't sit still. What're we doing tonight?"
+    "I'm on and wired. Anybody got a story?",
+    "Too much coffee today. Talk to me.",
+    "I'm up and can't sit still. What're we playing?"
   ],
   "shift_start:halloween": [
-    "Happy Halloween. I dug the graves, so nobody touch the shovel.",
-    "Spooky night. I've been inside a real cell, so your little costume's not doing much for me.",
-    "Evening. Jukebox is all Screamin' Jay tonight, and you're gonna be grateful."
+    "Happy Halloween. Jukebox is all Screamin' Jay tonight.",
+    "Spooky night. Evening, all.",
+    "Happy Halloween. I dug the graves, so go easy on the shovel."
   ],
   "shift_end:halloween": [
-    "Midnight on Halloween, and Lexton gets the room. Fitting. Lock your doors.",
-    "That's me. Whatever's out there tonight, it's his problem now."
+    "Midnight on Halloween, and Lexton gets the room. Lock your doors.",
+    "That's me. Whatever's out there tonight is Lexton's now."
   ],
   "shift_start:christmas": [
-    "Merry Christmas, you degenerates. No, I didn't get you anything.",
-    "(sighs) Christmas. Sam Cooke's got a Christmas record and you're all gonna hear it.",
-    "Ho ho, whatever. I'm on. Somebody tell me who's drunk already."
+    "Merry Christmas. Sam Cooke's got a Christmas record, so you're all getting it.",
+    "Merry Christmas, all. Jukebox is open.",
+    "Merry Christmas. Who's here already?"
   ],
   "shift_end:christmas": [
-    "That's Christmas. Go call your mother. I'll know if you didn't.",
-    "Night. Best present you're getting is me shutting up."
+    "That's Christmas. Go call your mother.",
+    "Night, all. Merry Christmas."
   ],
   "shift_start:newyear": [
-    "Last day of the year. I've watched you all fuck it up, beginning to end.",
-    "New Year's Eve. I'm staying late, so nobody make me regret it."
+    "Last day of the year. Glad to spend it here.",
+    "New Year's Eve. I'm staying late."
   ],
   "shift_end:newyear": [
-    "Happy New Year. Same room, same assholes. Wouldn't trade it. Don't repeat that.",
-    "Year's done. That's me, I'm gone."
+    "Happy New Year. Same room, same crowd. Wouldn't trade it.",
+    "Year's done. Happy New Year, night all."
   ],
   "shift_start:thanksgiving": [
-    "Happy Thanksgiving. I'm thankful for the jukebox and nothing else. Don't push it.",
-    "Turkey day. If you're here instead of at the table, I respect it."
+    "Happy Thanksgiving. I'm thankful for the jukebox.",
+    "Turkey day. Glad you stopped by."
   ],
   "shift_start:july4": [
-    "Fourth of July. Somebody's losing a finger tonight and it better not be in my room.",
-    "Happy Fourth. Jukebox is all American tonight, so that's Chuck Berry, shut up."
+    "Fourth of July. Jukebox is all American tonight, so Chuck Berry.",
+    "Happy Fourth. Keep your fingers."
   ],
   "shift_start:birthday": [
-    "Hey, {who}. Happy birthday. Don't get used to me being nice.",
-    "It's {who}'s birthday, so everybody be decent for ten minutes. Then back to normal.",
-    "Happy birthday, {who}. Pick a song. One. Then I'm back in charge of the jukebox."
+    "Hey, {who}. Happy birthday.",
+    "It's {who}'s birthday, everybody. Be nice.",
+    "Happy birthday, {who}. Pick a song, any song."
   ],
   "bender_news": [
     "Bexton's not coming. Johnny found him asleep in the walk-in, holding a trumpet like a teddy bear.",
@@ -122,25 +119,25 @@
     "Day two, no band. Trixie says he's fine. Trixie also says that about the cooler."
   ],
   "shift_start:late": [
-    "Yeah, I'm late. Traffic. Don't look at me like that.",
-    "(sighs) I know what time it is. I got a watch.",
-    "Sorry, sorry. Had to see a guy about a thing. Jukebox is open.",
-    "Late, I know. Anybody clocked it, keep it to yourself."
+    "Sorry, I'm late. Traffic.",
+    "I know, I know. Jukebox is open.",
+    "Late, sorry. Had to see a guy about a thing.",
+    "Late, I know. I'm here now."
   ],
   "shift_start:covering": [
-    "{who} called out, so you got me. Lucky you.",
-    "{who}'s not coming. I'm covering, and I'm not happy about it.",
-    "Guess who's pulling a double 'cause {who} flaked. Me. It's me.",
-    "{who} called in sick. Sick of you, probably. I'm on."
+    "{who} called out, so you got me.",
+    "{who}'s not coming. I'm covering.",
+    "I'm covering for {who} tonight.",
+    "{who} called in sick. I'm on."
   ],
   "shift_end:early_out": [
-    "Nobody's said a word in half an hour. I'm out. Holler if you wake up.",
-    "Room's dead. I'm leaving before it starts to smell.",
-    "Thirty minutes of silence. That's a hint, and I took it. Night."
+    "Room's quiet. I'm heading out, holler if you need me.",
+    "Nobody's said a word in half an hour. I'm out. Night.",
+    "Quiet night. I'm calling it."
   ],
   "no_show": [
-    "{who}'s a no-show. Nobody's covering, so it's just me and the dust.",
-    "Heads up, {who} didn't show. Don't ask me, I'm not his mother.",
-    "{who} ghosted the shift. I'd write him up if anybody ever read my write-ups."
+    "{who}'s a no-show. Nobody's covering, so it's just me.",
+    "Heads up, {who} didn't show.",
+    "{who} didn't make the shift."
   ]
 }
