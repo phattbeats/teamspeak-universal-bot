@@ -6,9 +6,17 @@ description = "The Sexton — persistent TeamSpeak channel chat logger (PHA-3099
 license = "MIT OR Apache-2.0"
 publish = false
 
+[lib]
+name = "sexton"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sexton"
 path = "src/main.rs"
+
+[[bin]]
+name = "identity-tool"
+path = "src/bin/identity-tool.rs"
 
 [[bin]]
 name = "send-test"
