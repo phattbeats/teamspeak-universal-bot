@@ -266,6 +266,8 @@ redirect_stderr=true
 }
 
 function writeSummonerConfig(bots) {
+  // External gateways own their always-on cores; never schedule or summon them.
+  const managedBots = bots.filter((b) => b.externalGateway !== true);
   const dir = `${CONFIG}/summoner`;
   mkdirSync(`${dir}/state`, { recursive: true });
   const editable = `${dir}/config.json`;
@@ -288,9 +290,9 @@ function writeSummonerConfig(bots) {
   // #4875: the summoner's ServerQuery host follows bots.json "server".query when set.
   if (bots.serverQuery) cfg.query = { ...cfg.query, ...bots.serverQuery };
   cfg.bots = cfg.bots || {};
-  const live = new Set(bots.map((b) => b.id));
+  const live = new Set(managedBots.map((b) => b.id));
   for (const id of Object.keys(cfg.bots)) if (!live.has(id)) delete cfg.bots[id];
-  for (const b of bots) {
+  for (const b of managedBots) {
     // A pack the summoner has never heard of is on duty around the clock until
     // someone gives it shifts in /config/summoner/config.json.
     const s = (cfg.bots[b.id] ??= { nick: b.nick, names: [b.id], shifts: [{ start: '00:00', end: '24:00' }] });
@@ -305,7 +307,8 @@ function writeSummonerConfig(bots) {
 // ---------------------------------------------------------------- gateway --
 
 function gateway() {
-  const bots = loadBots();
+  // Keep external account IDs disabled and out of local agents/bindings.
+  const bots = loadBots().filter((b) => b.externalGateway !== true);
   const cfg = readJson(CFG_PATH, null);
   if (!cfg) throw new Error(`cannot read ${CFG_PATH}`);
   const before = JSON.stringify(cfg);
