@@ -365,6 +365,8 @@ export type TeamSpeakToolsConfig = {
   /** Hard cap on lines returned in one catch-up. Default: 40. */
   catchUpMaxLines?: number;
   music?: TeamSpeakMusicConfig;
+  /** Screen-share Twitch/Kick/YouTube URLs (PHA-4499). Needs `SEXTON_STREAM=1` on the Sexton. */
+  stream?: { enabled?: boolean };
   band?: TeamSpeakBandConfig;
   moderation?: TeamSpeakModerationConfig;
   villain?: TeamSpeakVillainConfig;
@@ -447,6 +449,11 @@ export function areTeamSpeakToolsEnabled(config: TeamSpeakAccountConfig | undefi
  * `tools.music.enabled: true` explicitly (`image/gateway/openclaw.seed.json`)
  * and is unaffected by this default.
  */
+/** Fails closed like music: it fetches arbitrary URLs and pushes video to viewers (PHA-4499). */
+export function isTeamSpeakStreamEnabled(config: TeamSpeakAccountConfig | undefined): boolean {
+  return areTeamSpeakToolsEnabled(config) && config?.tools?.stream?.enabled === true;
+}
+
 export function isTeamSpeakMusicEnabled(config: TeamSpeakAccountConfig | undefined): boolean {
   return areTeamSpeakToolsEnabled(config) && config?.tools?.music?.enabled === true;
 }

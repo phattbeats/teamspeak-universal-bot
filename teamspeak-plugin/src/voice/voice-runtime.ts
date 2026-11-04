@@ -17,6 +17,7 @@ import {
   DEFAULT_COMMAND_PREFIX,
   isTeamSpeakBandEnabled,
   isTeamSpeakMusicEnabled,
+  isTeamSpeakStreamEnabled,
   resolveAnnouncePaths,
   resolveSextonLogDir,
   resolveVillainPaths,
@@ -44,6 +45,7 @@ import {
   createTeamSpeakToolRegistration,
   runTeamSpeakTool,
   transcriptHistoryReader,
+  type StreamController,
   type TeamSpeakToolDeps,
 } from "../tools/registry.js";
 import {
@@ -197,6 +199,8 @@ export class TeamSpeakVoiceRuntime {
   private voiceOffTimer: ReturnType<typeof setInterval> | undefined;
   private lastRoster: RosterEntry[] = [];
   private channelTreeWaiters: Array<(channels: ChannelInfo[]) => void> = [];
+  /** Screen-share answers (PHA-4499), keyed by moderation-result action; FIFO per action. */
+  private streamWaiters = new Map<string, Array<(r: { ok: boolean; detail: string }) => void>>();
   private selfClientId: TeamSpeakClientId | undefined;
   private readonly chatTurnsInFlight = new Set<TeamSpeakClientId>();
   /** Other bots in the channel that are mid-burst right now (#3829). */
@@ -308,6 +312,12 @@ export class TeamSpeakVoiceRuntime {
           const waiter = this.channelTreeWaiters.shift();
           waiter?.(channels);
         },
+        onModerationResult: (result) => {
+          if (result.action.startsWith("stream_")) {
+            const waiter = this.streamWaiters.get(result.action)?.shift();
+            waiter?.({ ok: result.ok, detail: result.detail });
+          }
+        },
         onError: (error) => this.params.log?.(`teamspeak bridge: ${error.message}`),
       },
     });
@@ -321,6 +331,7 @@ export class TeamSpeakVoiceRuntime {
       ? {
           config: params.config.tools,
           music: this.music,
+          ...(isTeamSpeakStreamEnabled(params.config) ? { stream: this.createStreamController() } : {}),
           roster: () => this.sessions.rosterEntries(),
           channelName: () => this.state.channelName,
           poke: (clientId, text) => this.bridge.poke(clientId, text),
@@ -481,6 +492,38 @@ export class TeamSpeakVoiceRuntime {
    * `follow`) already treat an empty tree as "found nothing" and say so,
    * which is a better outcome for a voice turn than an unhandled rejection.
    */
+  private streamRequest(
+    action: string,
+    send: () => void,
+    timeoutMs: number,
+  ): Promise<{ ok: boolean; detail: string }> {
+    return new Promise((resolve) => {
+      const waiters = this.streamWaiters.get(action) ?? [];
+      this.streamWaiters.set(action, waiters);
+      const finish = (r: { ok: boolean; detail: string }) => {
+        clearTimeout(timer);
+        resolve(r);
+      };
+      const timer = setTimeout(() => {
+        const idx = waiters.indexOf(finish);
+        if (idx !== -1) {
+          waiters.splice(idx, 1);
+        }
+        resolve({ ok: false, detail: "The stream didn't answer in time." });
+      }, timeoutMs);
+      waiters.push(finish);
+      send();
+    });
+  }
+
+  private createStreamController(): StreamController {
+    return {
+      start: (url, title) => this.streamRequest("stream_start", () => this.bridge.streamStart(url, title), 60_000),
+      stop: () => this.streamRequest("stream_stop", () => this.bridge.streamStop(), 10_000),
+      status: () => this.streamRequest("stream_status", () => this.bridge.streamStatus(), 10_000),
+    };
+  }
+
   private requestChannelTree(): Promise<ChannelInfo[]> {
     return new Promise((resolve) => {
       let settled = false;
