@@ -409,12 +409,14 @@ COPY image/universal/run-universal.sh /usr/local/bin/run-universal
 COPY image/universal/run-summoner.sh  /usr/local/bin/run-summoner
 COPY image/universal/run-insights.sh  /usr/local/bin/run-insights
 COPY image/universal/run-suno-api.sh  /usr/local/bin/run-suno-api
+COPY image/universal/lifecycle-log.py  /usr/local/bin/lifecycle-log
+COPY image/universal/lifecycle-mark.sh /usr/local/bin/lifecycle-mark
 COPY image/universal/healthcheck.sh   /usr/local/bin/universal-healthcheck
 COPY image/run-sexton.sh             /usr/local/bin/run-sexton
 COPY image/run-pot.sh                /usr/local/bin/run-pot
 COPY image/run-gateway.sh            /usr/local/bin/run-gateway
 COPY image/run-menace.sh             /usr/local/bin/run-menace
-RUN chmod 0755 /usr/local/bin/run-sexton /usr/local/bin/run-whisper-pool \
+RUN chmod 0755 /usr/local/bin/lifecycle-log /usr/local/bin/lifecycle-mark /usr/local/bin/run-sexton /usr/local/bin/run-whisper-pool \
                /usr/local/bin/run-pot /usr/local/bin/run-gateway \
                /usr/local/bin/run-menace /usr/local/bin/run-universal \
                /usr/local/bin/run-summoner /usr/local/bin/run-suno-api \
