@@ -66,7 +66,7 @@ use tsclientlib::messages::c2s::{
 };
 use tsclientlib::{
     events::{Event, PropertyId},
-    ChannelId, ClientId, Connection, Identity, MessageHandle, MessageTarget, Reason, ServerGroupId,
+    ChannelId, ClientId, Connection, DisconnectOptions, Identity, MessageHandle, MessageTarget, Reason, ServerGroupId,
     StreamItem,
 };
 
@@ -128,15 +128,20 @@ const NICKNAME_RECLAIM_RETRY_INTERVAL: Duration = Duration::from_secs(20);
 /// How long to wait, right after connecting, for our own `Client` book entry
 /// to appear before giving up on reading back the assigned nickname.
 const OWN_CLIENT_ENTRY_TIMEOUT: Duration = Duration::from_secs(10);
+/// #4875: a refused login that only means "a ghost session still holds this
+/// identity/nick" (`ClientTooManyClones`) clears on the server's own timer
+/// (~150 s), so retry on a short fixed interval instead of backing off 60 -> 240 s.
+const GHOST_RETRY: Duration = Duration::from_secs(15);
+/// Set by SIGTERM/SIGINT so the live connection can say goodbye (#4875).
+static SHUTDOWN: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "sexton", about = "The Sexton — persistent TeamSpeak channel chat logger")]
 struct Args {
-    /// Server address. Default is the in-cluster Docker network name for the
-    /// TS6 container (phattvip network) — connect by container name, not the
-    /// public hostname (RAID and the server share one public IP, so routing
-    /// through it gets flood-scored as if from the public internet).
-    #[arg(short = 'a', long, default_value = "teamspeak6-server")]
+    /// Server address (required; the stack passes it from /config/bots.json).
+    /// No baked-in default: the server moved once (PHA-4840) and a default
+    /// that quietly points at the old host is worse than a loud usage error.
+    #[arg(short = 'a', long)]
     address: String,
 
     /// Server port.
@@ -156,6 +161,12 @@ struct Args {
     /// Channel name to sit in (case-sensitive). Resolved from the tree at startup.
     #[arg(short = 'c', long)]
     channel: String,
+
+    /// Channel to sit in when `--channel` does not exist on the server (#4875).
+    /// Empty = the server's default channel (wherever the login lands us). Either
+    /// way the bot raises an alert instead of retrying forever.
+    #[arg(long, default_value = "")]
+    fallback_channel: String,
 
     /// Optional channel password.
     #[arg(short = 'w', long, default_value = "")]
@@ -965,12 +976,26 @@ async fn main() -> Result<()> {
         });
     }
 
+    tokio::spawn(async {
+        use tokio::signal::unix::{signal, SignalKind};
+        let (Ok(mut term), Ok(mut int)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) else {
+            return;
+        };
+        tokio::select! { _ = term.recv() => {}, _ = int.recv() => {} }
+        SHUTDOWN.notify_one();
+    });
+
     let mut backoff = BACKOFF_INITIAL;
     loop {
         match run_once(&args, &address, &mixer, &mut cmd_rx, &event_tx, &snapshot).await {
             Ok(()) => {
                 // Clean disconnect (shouldn't normally happen) — reset backoff.
                 backoff = BACKOFF_INITIAL;
+            }
+            Err(e) if is_ghost_session_error(&e) => {
+                warn!(error = %e, retry_in_secs = GHOST_RETRY.as_secs(), "a ghost session still holds this identity; retrying shortly");
+                tokio::time::sleep(GHOST_RETRY).await;
+                continue;
             }
             Err(e) => {
                 error!(error = %e, next_retry_in_secs = backoff.as_secs(), "connection died; will retry after backoff");
@@ -980,6 +1005,48 @@ async fn main() -> Result<()> {
             }
         }
         tokio::time::sleep(backoff).await;
+    }
+}
+
+/// True when the server refused (or garbled) a login only because a previous
+/// session of this identity has not been reaped yet.
+fn is_ghost_session_error(e: &anyhow::Error) -> bool {
+    let t = format!("{e:#}").to_lowercase();
+    t.contains("toomanyclones") || t.contains("too many clones") || t.contains("too_many_clones")
+}
+
+/// #4875: the configured channel is gone. Say so loudly (ERROR line with
+/// `alert=true`) and leave `<log-dir>/ALERT-channel-missing.json` for anything
+/// that watches the bot's log dir. Removed again once the channel resolves.
+fn channel_alert(args: &Args, resolved: Option<(&str, &str)>) {
+    let path = args.log_dir.join("ALERT-channel-missing.json");
+    match resolved {
+        Some((name, kind)) => {
+            error!(
+                alert = true,
+                configured = %args.channel,
+                resolved = %name,
+                "ALERT: configured channel {:?} does not exist on the server; sitting in the {} {:?} instead. Fix the channel in the Bots tab.",
+                args.channel, kind, name
+            );
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let body = serde_json::json!({
+                "alert": "channel-missing",
+                "nickname": args.nickname,
+                "configured": args.channel,
+                "resolved": name,
+                "resolvedKind": kind,
+                "unixTime": ts,
+            });
+            let _ = std::fs::create_dir_all(&args.log_dir);
+            let _ = std::fs::write(&path, format!("{body}\n"));
+        }
+        None => {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
 
@@ -1049,23 +1116,43 @@ async fn run_once(
     // `state.channels` empty and the channel unresolvable no matter how long
     // we wait.
     let deadline = tokio::time::Instant::now() + CHANNEL_TREE_TIMEOUT;
-    let (own_client_id, channel_id) = loop {
+    let (own_client_id, channel_id, channel_name) = loop {
         {
             let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
             if let Some((id, _)) = state.channels.iter().find(|(_, ch)| ch.name == args.channel) {
-                break (state.own_client, *id);
+                channel_alert(args, None);
+                break (state.own_client, *id, args.channel.clone());
             }
         }
-        match tokio::time::timeout_at(deadline, con.events().next()).await {
+        let polled = tokio::time::timeout_at(deadline, con.events().next()).await.map(|o| o.map(|r| r.map(|_| ()).map_err(|e| e.to_string())));
+        match polled {
             Ok(Some(Ok(_))) => {}
             Ok(Some(Err(e))) => return Err(anyhow!("waiting for channel list: {e}")),
             Ok(None) => return Err(anyhow!("stream ended while waiting for channel list")),
             Err(_) => {
-                return Err(anyhow!(
-                    "channel {:?} not found in channel tree after {}s",
-                    args.channel,
-                    CHANNEL_TREE_TIMEOUT.as_secs()
-                ))
+                // #4875: do not retry forever (backoff to 240 s) for a channel that is
+                // gone: fall back to the named fallback channel, else the channel the
+                // server dropped us into, and raise an alert.
+                let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
+                let named = (!args.fallback_channel.is_empty())
+                    .then(|| state.channels.iter().find(|(_, ch)| ch.name == args.fallback_channel))
+                    .flatten()
+                    .map(|(id, ch)| (*id, ch.name.clone(), "fallback channel"));
+                let default = || {
+                    state.clients.get(&state.own_client).map(|c| {
+                        let name = state.channels.get(&c.channel).map(|ch| ch.name.clone()).unwrap_or_default();
+                        (c.channel, name, "server default channel")
+                    })
+                };
+                let Some((id, name, kind)) = named.or_else(default) else {
+                    return Err(anyhow!(
+                        "channel {:?} not found in channel tree after {}s and no fallback is available",
+                        args.channel,
+                        CHANNEL_TREE_TIMEOUT.as_secs()
+                    ));
+                };
+                channel_alert(args, Some((&name, kind)));
+                break (state.own_client, id, name);
             }
         }
     };
@@ -1148,7 +1235,7 @@ async fn run_once(
     }
     let mut state = ChannelState::new(
         channel_id,
-        args.channel.clone(),
+        channel_name.clone(),
         args.log_dir.clone(),
         preexisting,
         no_catchup,
@@ -1226,6 +1313,7 @@ async fn run_once(
         Cmd(Option<bridge_proto::BridgeCommand>),
         Tick,
         Event(Option<std::result::Result<StreamItem, tsclientlib::Error>>),
+        Shutdown,
     }
 
     loop {
@@ -1233,6 +1321,7 @@ async fn run_once(
             let mut events = con.events();
             tokio::select! {
                 biased;
+                _ = SHUTDOWN.notified() => Wake::Shutdown,
                 cmd = cmd_rx.recv() => Wake::Cmd(cmd),
                 _ = tick.tick() => Wake::Tick,
                 ev = events.next() => Wake::Event(ev),
@@ -1240,6 +1329,21 @@ async fn run_once(
         };
 
         match wake {
+            Wake::Shutdown => {
+                // #4875: leave properly so the server frees the slot now, not ~150 s
+                // later (the ghost that causes ClientTooManyClones / "Sexton1").
+                info!("shutdown signal: disconnecting cleanly");
+                let _ = con.disconnect(DisconnectOptions::new());
+                let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                    while let Some(ev) = con.events().next().await {
+                        if matches!(ev, Err(_) | Ok(StreamItem::DisconnectedTemporarily(_))) {
+                            break;
+                        }
+                    }
+                })
+                .await;
+                std::process::exit(0);
+            }
             Wake::Cmd(cmd) => {
                 if let Some(cmd) = cmd {
                     handle_bridge_command(&mut con, own_client_id, mixer, &mut audio_state, event_tx, cmd)

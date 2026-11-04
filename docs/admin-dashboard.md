@@ -36,6 +36,7 @@ every bot goes text-only within seconds; on reloads whisper in about 20 s.
 | Add | a new entry for a persona pack that is on disk but not in the list; port = the next free one unless given | rewire seeds the home, workspace, agent, account and binding exactly as a boot would; summoner restart |
 | Remove | the entry is dropped and the id goes on `removed` | cores stopped, rewire switches the gateway account off (`enabled: false`, tuning kept), summoner restart. **Nothing on disk is deleted**: `config/bots/<id>/` (identity included) and the workspace stay, and Add brings it back with everything intact |
 | Summon / Dismiss | nothing | the summoner's `POST /summon|dismiss/<id>`, so shifts and overrides stay consistent |
+| Solo mode | top-level `solo: "<id>"`, or the key removed for Off. No bot entry is edited | rewire; every other core stops, the chosen bot's core starts and stays up 24/7 (shifts and `.off-duty` ignored); `config/.summoner-off` is written and the summoner stopped. Off removes the file, starts the summoner and restores the roster exactly as it was |
 | Voice (per bot) | nothing; `openclaw.json` `channels.teamspeak.accounts.<id>.voice.mode` = `off`, or back to the seed's lane (`stt-tts`) | the gateway applies it when it reloads its config |
 
 "Rewire" is `node /opt/universal/stack.mjs rewire` (= the boot's
@@ -80,6 +81,10 @@ tabs without a restart.
   binding, account switched off). `stack.mjs` honoured this before; the tab
   is just a switch for it. `autostart: false` is different: the program
   exists but only the summoner starts it (the guests).
+- `solo`: one bot id. An overlay: while it is set only that bot runs and the
+  summoner idles; clearing it brings back whatever the entries say.
+- `server.botTag` (default `" [BOT]"`) or per-bot `botTag`: appended to the
+  TeamSpeak nick. Wake words stay the plain nick. `""` turns it off.
 - `removed`: packs the tab removed. Without it, `stack.mjs` would add every
   pack it finds on disk straight back at the next boot. Add takes the id off
   the list again.
@@ -96,6 +101,7 @@ All under `/api/control/`, JSON, basic auth; writes need `X-Requested-With`.
 | `POST bots/<id>` (same body) | add `<id>` from its persona pack |
 | `DELETE bots/<id>` | remove |
 | `PUT bots/<id>/voice` `{mode: "on"\|"off"}` | per-bot voice.mode |
+| `PUT bots/_solo` `{bot: "<id>"\|""}` | solo mode on (one bot) or off; same as `stack.mjs solo <id>\|off` |
 | `POST bots/<id>/summon` / `dismiss` | via the summoner |
 | `POST voice/on` / `voice/off` | the stack-wide switch |
 

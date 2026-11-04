@@ -24,7 +24,7 @@ import { applyTurnOps, getMeta, openDb, parseRoomLog, setMeta, turnOps } from '.
 import { bots, logPage, overview, people } from './insights-stats.mjs';
 import {
   addBot, applyTools, cleanShifts, editBot, listBots, parseSupervisorStatus, personaFiles, personaHistory, readHistory,
-  readJson, readPersona, readTools, removeBot, scanSkills, setBotEnabled, writeAtomic, writePersona, writeShifts,
+  readJson, readPersona, readTools, removeBot, scanSkills, setBotEnabled, setSolo, editServer, writeAtomic, writePersona, writeShifts,
   writeSummonerNick,
 } from './control.mjs';
 
@@ -252,6 +252,25 @@ const programsOf = (id, entry) => [`core-${id}`, ...(entry?.menace ? [`menace-${
 
 async function controlBots(req, id, verb, send) {
   if (!id) return send(200, await botsSnapshot());
+  if (id === '_server') {
+    // #4875: the stack-wide server block. Cores whose address/channel env changed are restarted by `supervisorctl update`; stopped guests stay stopped.
+    if (req.method !== 'PUT') return send(405, { error: 'PUT only' });
+    const patch = await readBody(req);
+    const server = editBots((f) => editServer(f, patch));
+    const steps = await applyBots({ restartSummoner: true });
+    log(`control: bots server block: ${JSON.stringify(server)} ${JSON.stringify(steps)}`);
+    return send(200, { server, steps });
+  }
+  if (id === '_solo') {
+    // Solo mode: one bot 24/7, summoner idle. rewire writes or clears .summoner-off,
+    // `update` drops/restores the other cores, and the summoner restart picks the file up.
+    if (req.method !== 'PUT') return send(405, { error: 'PUT only' });
+    const { bot } = await readBody(req);
+    const solo = editBots((f) => setSolo(f, bot));
+    const steps = await applyBots({ restartSummoner: true });
+    log(`control: bots solo ${solo || 'off'} ${JSON.stringify(steps)}`);
+    return send(200, { solo, steps });
+  }
   if (verb === 'summon' || verb === 'dismiss') {
     need(id);
     return send(200, await summoner(`/${verb}/${id}?by=dashboard`, 'POST'));

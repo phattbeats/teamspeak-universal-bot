@@ -438,7 +438,7 @@ function botState(b) {
 }
 function botForm(b, packs) {
   // b = existing row (edit) or null (add). The pack picker only appears on add.
-  const v = b ?? { nick: '', channel: '', identity: '', port: '', autostart: true, noCatchup: false, noWelcome: false, menace: false, env: {} };
+  const v = b ?? { nick: '', channel: '', fallbackChannel: '', address: '', identity: '', port: '', autostart: true, noCatchup: false, noWelcome: false, menace: false, env: {} };
   const envText = Object.entries(v.env ?? {}).map(([k, x]) => `${k}=${x}`).join('\n');
   const chk = (k, label, note) => `<label class="chk"><input type="checkbox" data-f="${k}"${v[k] ? ' checked' : ''}> ${label}${note ? ` <span class="muted">${note}</span>` : ''}</label>`;
   return `<div class="card" id="bot-form"><h2>${b ? `Edit ${esc(b.nick)} <span class="muted">(${esc(b.id)})</span>` : 'Add a bot'}</h2>
@@ -446,7 +446,9 @@ function botForm(b, packs) {
     <div class="form-grid">
       ${b ? '' : `<label>Persona pack <select data-f="pack">${packs.map((p) => `<option value="${esc(p.id)}">${esc(p.id)} (${esc(p.nick)})</option>`).join('')}</select></label>`}
       <label>Nick <input type="text" data-f="nick" value="${esc(v.nickFromPack ? '' : v.nick)}" placeholder="${esc(b?.nickFromPack ? `${b.nick} (from the pack)` : 'from the pack')}"></label>
-      <label>Channel <input type="text" data-f="channel" value="${esc(v.channel)}" placeholder="General Shit (default)"></label>
+      <label>Channel <input type="text" data-f="channel" value="${esc(v.channel)}" placeholder="${esc(ctl.manage.server?.channel || 'stack default')} (stack default)"></label>
+      <label>Fallback channel <input type="text" data-f="fallbackChannel" value="${esc(v.fallbackChannel)}" placeholder="${esc(ctl.manage.server?.fallbackChannel || ctl.manage.server?.channel || 'stack default')} (used if Channel is missing)"></label>
+      <label>Server address <input type="text" data-f="address" value="${esc(v.address)}" placeholder="${esc(ctl.manage.server?.address || 'stack default')} (stack default)"></label>
       <label>Identity <input type="text" data-f="identity" value="${esc(v.identity)}" placeholder="own (empty) or a shared name, e.g. guest"></label>
       <label>Bridge port <input type="number" data-f="port" value="${esc(v.port ?? '')}" placeholder="${b ? '' : `next free: ${ctl.manage.nextPort}`}" min="1024" max="65535"></label>
       ${chk('autostart', 'Start at boot', 'off = only the summoner brings it in')}
@@ -466,7 +468,7 @@ function readBotForm() {
     env[t.slice(0, i).trim()] = t.slice(i + 1);
   }
   return {
-    patch: { nick: f('nick').value, channel: f('channel').value, identity: f('identity').value, port: f('port').value === '' ? null : Number(f('port').value),
+    patch: { nick: f('nick').value, channel: f('channel').value, fallbackChannel: f('fallbackChannel').value, address: f('address').value, identity: f('identity').value, port: f('port').value === '' ? null : Number(f('port').value),
       autostart: f('autostart').checked, noCatchup: f('noCatchup').checked, noWelcome: f('noWelcome').checked, menace: f('menace').checked, env },
     pack: f('pack')?.value,
   };
@@ -477,7 +479,7 @@ function renderManage() {
   const rows = m.bots.map((b) => `<tr class="${b.enabled ? '' : 'off'}" data-bot="${esc(b.id)}">
       <td><label title="${b.enabled ? 'Disable: stops it now and keeps it off after a restart' : 'Enable: adds it back and starts it'}"><input type="checkbox" data-act="enabled"${b.enabled ? ' checked' : ''}${!b.enabled && b.clash ? ' disabled' : ''}></label></td>
       <td><b>${esc(b.nick)}</b> <span class="muted">${esc(b.id)}</span>${b.pack ? '' : ' <span class="warn">no persona pack on disk</span>'}${!b.enabled && b.clash ? `<div class="warn">shares the identity '${esc(b.identity)}' with ${esc(b.clash)}; disable ${esc(b.clash)} first</div>` : ''}</td>
-      <td>${esc(b.channel) || '<span class="muted">default</span>'}</td>
+      <td>${esc(b.channel) || '<span class="muted">default</span>'}${b.address ? ` <span class="muted">@ ${esc(b.address)}</span>` : ''}</td>
       <td class="num">${b.port ?? ''}</td>
       <td>${b.identity ? `${esc(b.identity)} <span class="muted">(shared)</span>` : '<span class="muted">own</span>'}</td>
       <td>${b.enabled ? botState(b) : '<span class="muted">disabled</span>'}</td>
@@ -487,11 +489,44 @@ function renderManage() {
   $('#manage-body').innerHTML = `
     <div class="card"><div class="card-head"><div><h2>Voice, whole stack</h2><p class="sub">${voice ? `Voice is <b>${voice}</b>. Off = whisper stopped, every bot text-only within seconds; on = whisper reloads in about 20 s.` : m.summoner ? 'The summoner did not report the voice state.' : '<span class="warn">summoner not reachable: voice switch, summon and dismiss are unavailable</span>'}</p></div>
       <div class="btn-row"><button class="plain" data-voice="on"${voice === 'on' || !m.summoner ? ' disabled' : ''}>Voice on</button><button class="plain" data-voice="off"${voice === 'off' || !m.summoner ? ' disabled' : ''}>Voice off</button></div></div><span class="msg" id="voice-msg"></span></div>
+    <div class="card"><div class="card-head"><div><h2>Solo mode</h2><p class="sub">${m.solo ? `<b>On: ${esc(m.bots.find((b) => b.id === m.solo)?.nick ?? m.solo)}</b> runs around the clock; every other bot is parked and the summoner (shifts, summon, walk-outs) is idle.` : 'Off: the full roster runs with shifts and the summoner.'} A mode, not an edit: the bots' own settings are untouched, so turning it off restores the roster as it was.</p></div>
+      <div class="btn-row"><select id="solo-pick"><option value="">Off (full roster)</option>${m.bots.map((b) => `<option value="${esc(b.id)}"${m.solo === b.id ? ' selected' : ''}>${esc(b.nick)} only</option>`).join('')}</select><button class="plain" id="solo-apply">Apply</button></div></div><span class="msg" id="solo-msg"></span></div>
+    <div class="card"><div class="card-head"><div><h2>Server, whole stack</h2><p class="sub">Defaults for every bot that has no address or channel of its own. Saving restarts the cores it changes.</p></div></div>
+      <div class="form-grid" id="server-form">
+        <label>Server address <input type="text" data-s="address" value="${esc(m.server?.address ?? '')}" placeholder="teamspeak.example.com"></label>
+        <label>Server port <input type="number" data-s="port" value="${esc(m.server?.port ?? '')}" placeholder="9987" min="1" max="65535"></label>
+        <label>Default channel <input type="text" data-s="channel" value="${esc(m.server?.channel ?? '')}"></label>
+        <label>Fallback channel <input type="text" data-s="fallbackChannel" value="${esc(m.server?.fallbackChannel ?? '')}" placeholder="if a bot's channel is missing"></label>
+        <label>ServerQuery host <input type="text" data-s="qhost" value="${esc(m.server?.query?.host ?? '')}" placeholder="summoner presence/roster query"></label>
+        <label>ServerQuery port <input type="number" data-s="qport" value="${esc(m.server?.query?.port ?? '')}" placeholder="10022" min="1" max="65535"></label>
+      </div>
+      <div class="ctl-actions"><button class="primary" id="server-save">Save and apply</button><span class="msg" id="server-msg"></span></div></div>
     <div class="card"><div class="card-head"><div><h2>Bots</h2><p class="sub">Enabled = has a supervisor program and a gateway account. "In the room" is the summoner's view; Summon and Dismiss go through it so shifts stay consistent.</p></div>
       <div class="btn-row">${m.available.length ? '<button class="plain" id="bot-add">Add a bot from a pack…</button>' : '<span class="muted">every persona pack on disk is already a bot</span>'}</div></div>
       <table><tr><th>On</th><th>Bot</th><th>Channel</th><th class="num">Port</th><th>Identity</th><th>State</th><th>Voice</th><th></th></tr>${rows || '<tr><td colspan="8" class="empty">bots.json has no bots.</td></tr>'}</table>
       <div class="ctl-actions"><span class="msg" id="manage-msg"></span></div></div>
     <div id="bot-form-slot">${ctl.form ? botForm(ctl.form === 'add' ? null : m.bots.find((b) => b.id === ctl.form), m.available) : ''}</div>`;
+  const solo = $('#solo-apply'); if (solo) solo.onclick = async () => {
+    const bot = $('#solo-pick').value;
+    if (bot === (m.solo || '')) return say('#solo-msg', 'No change.');
+    solo.disabled = true;
+    try {
+      say('#solo-msg', bot ? `Switching to ${bot} only… (other cores stop, summoner idles)` : 'Restoring the full roster… (summoner restarts)');
+      const r = await send('PUT', 'api/control/bots/_solo', { bot });
+      ctl.manage = await api('api/control/bots'); renderManage();
+      say('#solo-msg', `${r.solo ? `Solo: ${r.solo}` : 'Solo off'}. ${stepsText(r.steps)}`);
+    } catch (e) { say('#solo-msg', e.message, true); solo.disabled = false; }
+  };
+  const ssave = $('#server-save'); if (ssave) ssave.onclick = async () => {
+    ssave.disabled = true;
+    const sv = (k) => $(`#server-form [data-s="${k}"]`).value;
+    try {
+      say('#server-msg', 'Applying… (rewire, supervisor update)');
+      const r = await send('PUT', 'api/control/bots/_server', { address: sv('address'), port: sv('port'), channel: sv('channel'), fallbackChannel: sv('fallbackChannel'), query: { host: sv('qhost'), port: sv('qport') } });
+      ctl.manage = await api('api/control/bots'); renderManage();
+      say('#server-msg', `Saved and applied. ${stepsText(r.steps)}`);
+    } catch (e) { say('#server-msg', e.message, true); ssave.disabled = false; }
+  };
   const add = $('#bot-add'); if (add) add.onclick = () => { ctl.form = 'add'; renderManage(); };
   const cancel = $('#bot-form-cancel'); if (cancel) cancel.onclick = () => { ctl.form = null; renderManage(); };
   const save = $('#bot-form-save'); if (save) save.onclick = async () => {
