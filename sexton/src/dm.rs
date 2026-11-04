@@ -39,6 +39,8 @@ pub struct DmConfig {
     pub quiet_notice: bool,
     pub include_bots: bool,
     pub max_lines: usize,
+    /// The core answers a human DM itself when no gateway is connected to.
+    pub fallback: bool,
     /// The `[BOT]` tag on TS nicks; empty means bots cannot be told apart.
     pub bot_tag: String,
 }
@@ -52,6 +54,7 @@ impl Default for DmConfig {
             quiet_notice: false,
             include_bots: true,
             max_lines: 15,
+            fallback: true,
             bot_tag: "[BOT]".to_string(),
         }
     }
@@ -78,7 +81,35 @@ impl DmConfig {
             quiet_notice: env_bool("SEXTON_DM_QUIET_NOTICE", d.quiet_notice),
             include_bots: env_bool("SEXTON_DM_INCLUDE_BOTS", d.include_bots),
             max_lines,
+            fallback: env_bool("SEXTON_DM_FALLBACK", d.fallback),
             bot_tag: std::env::var("SEXTON_BOT_TAG").unwrap_or(d.bot_tag),
+        }
+    }
+}
+
+/// Sent when a human DMs the bot and nothing is connected to the bridge to
+/// answer (the gateway is down). Same words as the plugin's own fallback.
+pub const DM_DOWN_REPLY: &str =
+    "I'm here, but I can't answer right now. Try again in a minute, or ask in the channel.";
+
+/// One fallback per person per window, so two bots or a bot and a person can
+/// never loop.
+pub const FALLBACK_WINDOW_SECS: i64 = 600;
+
+#[derive(Default, Debug)]
+pub struct FallbackCap {
+    last: HashMap<String, i64>,
+}
+
+impl FallbackCap {
+    /// True, and records `now`, when `key` has not had a fallback inside the window.
+    pub fn allow(&mut self, key: &str, now: i64) -> bool {
+        match self.last.get(key) {
+            Some(t) if now - *t < FALLBACK_WINDOW_SECS => false,
+            _ => {
+                self.last.insert(key.to_string(), now);
+                true
+            }
         }
     }
 }
@@ -407,6 +438,15 @@ mod tests {
         assert!(out.starts_with("l5\n"));
         assert!(out.contains("l19\n"));
         assert!(out.ends_with("+5 earlier lines. Ask me for the rest.\n"));
+    }
+
+    #[test]
+    fn fallback_is_capped_to_one_per_person_per_window() {
+        let mut c = FallbackCap::default();
+        assert!(c.allow("a", 1000));
+        assert!(!c.allow("a", 1000 + FALLBACK_WINDOW_SECS - 1));
+        assert!(c.allow("b", 1001));
+        assert!(c.allow("a", 1000 + FALLBACK_WINDOW_SECS));
     }
 
     #[test]

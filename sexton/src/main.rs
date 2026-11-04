@@ -316,6 +316,7 @@ struct ChannelState {
     own_nick: String,
     /// What the welcome may claim; see `current_caps`.
     caps_inputs: CapsInputs,
+    fallback_cap: dm::FallbackCap,
     /// uid -> when the last update/returning-welcome DM was sent. Persisted.
     notified: dm::UidClock,
     /// uid -> earliest leave not yet covered by a DM. Persisted.
@@ -358,6 +359,7 @@ impl ChannelState {
             bot_name: "the Sexton".to_string(),
             own_nick: String::new(),
             caps_inputs: CapsInputs::default(),
+            fallback_cap: dm::FallbackCap::default(),
             notified: dm::UidClock::at(PathBuf::new()),
             unreported_since: dm::UidClock::at(PathBuf::new()),
             present_spans: HashMap::new(),
@@ -531,6 +533,7 @@ impl ChannelState {
     fn digest_for(&self, uid: &str) -> Option<String> {
         let since = self.unreported_since.get(uid).or_else(|| self.notified.get(uid))?;
         let present = self.present_spans.get(uid).cloned().unwrap_or_default();
+        debug!(%uid, since, spans = ?present, history = self.history.len(), "building the digest");
         let rendered: Vec<String> = self.history.iter().map(|m| m.render_line()).collect();
         let lines: Vec<dm::DigestLine> = self
             .history
@@ -1418,6 +1421,25 @@ async fn run_once(
                             });
                         }
                     }
+                    // PHA-4917: nothing connected to the bridge means nobody can
+                    // answer a DM, so the core says so itself (capped per person).
+                    if state.dm.fallback && event_tx.receiver_count() == 0 {
+                        for ev in &events {
+                            if let Event::Message { target: MessageTarget::Client(_), invoker, .. } = ev {
+                                let is_bot = !state.dm.bot_tag.is_empty() && invoker.name.contains(&state.dm.bot_tag);
+                                if invoker.id == own_client_id || is_bot {
+                                    continue;
+                                }
+                                let key = invoker.uid.as_ref().map(|u| u.to_string()).unwrap_or_else(|| invoker.name.clone());
+                                if state.fallback_cap.allow(&key, unix_now()) {
+                                    match send_pm(&mut con, invoker.id, dm::DM_DOWN_REPLY) {
+                                        Ok(_) => info!(client_id = ?invoker.id, "no gateway connected; sent the can't-answer DM"),
+                                        Err(e) => warn!(error = %e, "fallback DM failed"),
+                                    }
+                                }
+                            }
+                        }
+                    }
                     for ev in events {
                         handle_event(&mut con, &mut state, own_client_id, ev)?;
                     }
@@ -1682,6 +1704,7 @@ fn note_client_left(state: &mut ChannelState, client_id: ClientId, uid_hint: Opt
     state.pending_catchup.remove(&client_id);
     let uid = state.uid_of.remove(&client_id).or(uid_hint);
     if let Some(uid) = uid {
+        info!(?client_id, %uid, "left the watched channel");
         state.note_leave(&uid, unix_now());
     }
 }
