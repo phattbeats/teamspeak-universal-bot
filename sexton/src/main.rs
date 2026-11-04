@@ -533,7 +533,7 @@ impl ChannelState {
     fn digest_for(&self, uid: &str) -> Option<String> {
         let since = self.unreported_since.get(uid).or_else(|| self.notified.get(uid))?;
         let present = self.present_spans.get(uid).cloned().unwrap_or_default();
-        debug!(%uid, since, spans = ?present, history = self.history.len(), "building the digest");
+        info!(%uid, since, spans = ?present, history = self.history.len(), "building the digest");
         let rendered: Vec<String> = self.history.iter().map(|m| m.render_line()).collect();
         let lines: Vec<dm::DigestLine> = self
             .history
