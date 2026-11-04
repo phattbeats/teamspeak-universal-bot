@@ -24,7 +24,7 @@ import { applyTurnOps, getMeta, openDb, parseRoomLog, setMeta, turnOps } from '.
 import { bots, logPage, overview, people } from './insights-stats.mjs';
 import {
   addBot, applyTools, cleanShifts, editBot, listBots, parseSupervisorStatus, personaFiles, personaHistory, readHistory,
-  readJson, readPersona, readTools, removeBot, scanSkills, setBotEnabled, setSolo, editServer, writeAtomic, writePersona, writeShifts,
+  readJson, readPersona, readTools, removeBot, scanSkills, setBotEnabled, editServer, writeAtomic, writePersona, writeShifts,
   writeSummonerNick,
 } from './control.mjs';
 
@@ -260,16 +260,6 @@ async function controlBots(req, id, verb, send) {
     const steps = await applyBots({ restartSummoner: true });
     log(`control: bots server block: ${JSON.stringify(server)} ${JSON.stringify(steps)}`);
     return send(200, { server, steps });
-  }
-  if (id === '_solo') {
-    // Solo mode: one bot 24/7, summoner idle. rewire writes or clears .summoner-off,
-    // `update` drops/restores the other cores, and the summoner restart picks the file up.
-    if (req.method !== 'PUT') return send(405, { error: 'PUT only' });
-    const { bot } = await readBody(req);
-    const solo = editBots((f) => setSolo(f, bot));
-    const steps = await applyBots({ restartSummoner: true });
-    log(`control: bots solo ${solo || 'off'} ${JSON.stringify(steps)}`);
-    return send(200, { solo, steps });
   }
   if (verb === 'summon' || verb === 'dismiss') {
     need(id);

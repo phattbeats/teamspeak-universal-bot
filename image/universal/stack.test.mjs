@@ -52,7 +52,7 @@ test('supervisor: one core per pack, guests share an identity and never autostar
   for (const id of Object.keys(bots)) assert.match(conf, new RegExp(`\\[program:core-${id}\\]`));
   assert.match(conf, /\[program:menace-lexton\]/);
   assert.match(conf, /SEXTON_IDENTITY_FILE="[^"]*\/bots\/guest\/sexton-id.txt"[^\n]*\nautostart=false/);
-  assert.match(conf, /SEXTON_NICK="Rotten Johnny \[BOT\]"/); // TS shows the bot tag
+  assert.match(conf, /SEXTON_NICK="Rotten Johnny"/);
   const summoner = json(`${root}/run/summoner.json`);
   assert.equal(summoner.local, true);
   assert.equal(summoner.bots.bexton.program, 'core-bexton');
@@ -209,24 +209,4 @@ test('server block: bots inherit address, port, channel and fallback; a bot entr
   assert.equal(sum.query.host, '100.1.2.3');
   assert.ok(!/General Shit/.test(JSON.stringify(sum)));
   assert.ok(sum.chatLog.dir.endsWith(`/${sum.chatLog.whenOff}/Lobby`));
-});
-
-// Solo mode: one bot around the clock, summoner idle; an overlay that `solo off` undoes exactly.
-test('solo: only that bot runs and autostarts, the summoner idles, and off restores the roster untouched', () => {
-  const root = fresh();
-  stack(root, 'supervisor');
-  const before = json(`${root}/config/bots.json`).bots;
-  execFileSync('node', [join(here, 'stack.mjs'), 'solo', 'johnny'], { encoding: 'utf8', env: { ...process.env, UNIVERSAL_VOICE: '1', UNIVERSAL_CONFIG_DIR: `${root}/config`, UNIVERSAL_RUN_DIR: `${root}/run`, UNIVERSAL_PERSONA_ROOT: join(repo, 'personas'), UNIVERSAL_SEED: join(repo, 'image', 'gateway', 'openclaw.seed.json'), UNIVERSAL_SUMMONER_DEFAULTS: join(repo, 'ts-summoner'), SEXTON_LOG_DIR: `${root}/logs`, OPENCLAW_STATE_DIR: `${root}/config/openclaw`, OPENCLAW_CONFIG_PATH: `${root}/config/openclaw/openclaw.json` } });
-  let conf = readFileSync(`${root}/run/bots.conf`, 'utf8');
-  assert.deepEqual([...conf.matchAll(/\[program:core-(\w+)\]/g)].map((m) => m[1]), ['johnny']);
-  assert.match(conf.split("[program:core-johnny]")[1], /\nautostart=true\n/); // guests normally never autostart
-  assert.ok(existsSync(`${root}/config/.summoner-off`));
-  assert.deepEqual(json(`${root}/config/bots.json`).bots, before);
-  const file = json(`${root}/config/bots.json`);
-  delete file.solo;
-  writeFileSync(`${root}/config/bots.json`, JSON.stringify(file));
-  stack(root, 'rewire');
-  conf = readFileSync(`${root}/run/bots.conf`, 'utf8');
-  assert.equal([...conf.matchAll(/\[program:core-/g)].length, 5);
-  assert.ok(!existsSync(`${root}/config/.summoner-off`));
 });

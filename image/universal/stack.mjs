@@ -427,7 +427,7 @@ else if (mode === 'solo') {
   const f = readJson(BOTS_FILE, null);
   if (!arg || !f?.bots || (arg !== 'off' && !f.bots[arg])) { console.error('usage: stack.mjs solo <bot-id in bots.json>|off'); process.exit(2); }
   copyFileSync(BOTS_FILE, `${BOTS_FILE}.pre-solo`);
-  if (arg === 'off') delete f.solo; else f.solo = arg; // an overlay: no bot entry changes
+  if (arg === 'off') delete f.solo; else { f.solo = arg; delete f.bots[arg].enabled; delete f.bots[arg].autostart; }
   writeJson(BOTS_FILE, f);
   supervisor(); gateway();
   log(arg === 'off' ? 'solo off' : `solo ${arg}`);

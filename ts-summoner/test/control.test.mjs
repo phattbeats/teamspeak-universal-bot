@@ -183,17 +183,3 @@ test('editServer validates the stack-wide server block and drops empties', async
   const b = cleanBot({}, 'sexton', { address: 'ts.example.net', fallbackChannel: 'Spare' }, {});
   assert.deepEqual(b, { address: 'ts.example.net', fallbackChannel: 'Spare' });
 });
-
-test('solo is an overlay: setting and clearing it leaves every bot entry as it was', async () => {
-  const { setSolo } = await import('../control.mjs');
-  const f = botsFile();
-  const before = JSON.stringify(f.bots);
-  assert.equal(setSolo(f, 'johnny'), 'johnny'); // even a disabled bot can go solo
-  assert.equal(f.solo, 'johnny');
-  assert.equal(listBots(f, {}, {}).solo, 'johnny');
-  assert.throws(() => setSolo(f, 'nobody'), /unknown bot/);
-  assert.equal(setSolo(f, ''), '');
-  assert.equal('solo' in f, false);
-  assert.equal(JSON.stringify(f.bots), before);
-  assert.equal(listBots(f, {}, {}).solo, '');
-});

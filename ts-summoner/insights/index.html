@@ -488,8 +488,6 @@ function renderManage() {
   $('#manage-body').innerHTML = `
     <div class="card"><div class="card-head"><div><h2>Voice, whole stack</h2><p class="sub">${voice ? `Voice is <b>${voice}</b>. Off = whisper stopped, every bot text-only within seconds; on = whisper reloads in about 20 s.` : m.summoner ? 'The summoner did not report the voice state.' : '<span class="warn">summoner not reachable: voice switch, summon and dismiss are unavailable</span>'}</p></div>
       <div class="btn-row"><button class="plain" data-voice="on"${voice === 'on' || !m.summoner ? ' disabled' : ''}>Voice on</button><button class="plain" data-voice="off"${voice === 'off' || !m.summoner ? ' disabled' : ''}>Voice off</button></div></div><span class="msg" id="voice-msg"></span></div>
-    <div class="card"><div class="card-head"><div><h2>Solo mode</h2><p class="sub">${m.solo ? `<b>On: ${esc(m.bots.find((b) => b.id === m.solo)?.nick ?? m.solo)}</b> runs around the clock; every other bot is parked and the summoner (shifts, summon, walk-outs) is idle.` : 'Off: the full roster runs with shifts and the summoner.'} A mode, not an edit: the bots' own settings are untouched, so turning it off restores the roster as it was.</p></div>
-      <div class="btn-row"><select id="solo-pick"><option value="">Off (full roster)</option>${m.bots.map((b) => `<option value="${esc(b.id)}"${m.solo === b.id ? ' selected' : ''}>${esc(b.nick)} only</option>`).join('')}</select><button class="plain" id="solo-apply">Apply</button></div></div><span class="msg" id="solo-msg"></span></div>
     <div class="card"><div class="card-head"><div><h2>Server, whole stack</h2><p class="sub">Defaults for every bot that has no address or channel of its own. Saving restarts the cores it changes.</p></div></div>
       <div class="form-grid" id="server-form">
         <label>Server address <input type="text" data-s="address" value="${esc(m.server?.address ?? '')}" placeholder="teamspeak.example.com"></label>
@@ -505,17 +503,6 @@ function renderManage() {
       <table><tr><th>On</th><th>Bot</th><th>Channel</th><th class="num">Port</th><th>Identity</th><th>State</th><th>Voice</th><th></th></tr>${rows || '<tr><td colspan="8" class="empty">bots.json has no bots.</td></tr>'}</table>
       <div class="ctl-actions"><span class="msg" id="manage-msg"></span></div></div>
     <div id="bot-form-slot">${ctl.form ? botForm(ctl.form === 'add' ? null : m.bots.find((b) => b.id === ctl.form), m.available) : ''}</div>`;
-  const solo = $('#solo-apply'); if (solo) solo.onclick = async () => {
-    const bot = $('#solo-pick').value;
-    if (bot === (m.solo || '')) return say('#solo-msg', 'No change.');
-    solo.disabled = true;
-    try {
-      say('#solo-msg', bot ? `Switching to ${bot} only… (other cores stop, summoner idles)` : 'Restoring the full roster… (summoner restarts)');
-      const r = await send('PUT', 'api/control/bots/_solo', { bot });
-      ctl.manage = await api('api/control/bots'); renderManage();
-      say('#solo-msg', `${r.solo ? `Solo: ${r.solo}` : 'Solo off'}. ${stepsText(r.steps)}`);
-    } catch (e) { say('#solo-msg', e.message, true); solo.disabled = false; }
-  };
   const ssave = $('#server-save'); if (ssave) ssave.onclick = async () => {
     ssave.disabled = true;
     const sv = (k) => $(`#server-form [data-s="${k}"]`).value;

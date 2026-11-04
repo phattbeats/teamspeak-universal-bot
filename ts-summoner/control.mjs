@@ -435,18 +435,6 @@ export function setBotEnabled(file, id, on) {
   return bots[id];
 }
 
-/**
- * Solo mode: `id` runs alone around the clock and the summoner idles; '' or
- * null turns it off. It is an overlay: no bot entry is touched, so turning it
- * off brings back exactly the roster (enabled flags, shifts) that was there.
- */
-export function setSolo(file, id) {
-  if (id === '' || id === null || id === undefined) { delete file.solo; return ''; }
-  if (!file.bots?.[id]) throw Object.assign(new Error(`unknown bot ${id}`), { code: 404 });
-  file.solo = id;
-  return id;
-}
-
 export function editBot(file, id, patch) {
   const bots = file.bots ?? {};
   if (!bots[id]) throw Object.assign(new Error(`unknown bot ${id}`), { code: 404 });
@@ -521,5 +509,5 @@ export function listBots(file, packs, { programs = {}, live = null, accounts = {
   }));
   const inUse = new Set(Object.keys(bots));
   const available = Object.entries(packs).filter(([id]) => !inUse.has(id)).map(([id, p]) => ({ id, nick: p.nick || title(id), dir: p.dir }));
-  return { server: file?.server ?? {}, solo: bots[file?.solo] ? file.solo : '', bots: rows, available, removed: file?.removed ?? [], nextPort: nextFreePort(bots) };
+  return { server: file?.server ?? {}, bots: rows, available, removed: file?.removed ?? [], nextPort: nextFreePort(bots) };
 }

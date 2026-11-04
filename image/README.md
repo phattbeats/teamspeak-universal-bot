@@ -30,9 +30,8 @@ image/gateway/                 the gateway's seed config and core patches
 
 | path | holds |
 | --- | --- |
-| `config/bots.json` | which bots run; bridge ports (assigned once, never move); `identity` sharing (the guests share one); `menace`, `noCatchup`, `noWelcome`, `autostart`, `nick`, `env`, `enabled: false`; top-level `removed` (packs the dashboard removed), `server` (stack-wide address/port/channel/fallbackChannel/query/`botTag`, default tag ` [BOT]` on TS nicks) and `solo` (one bot id: only it runs, 24/7, summoner idle; an overlay, so clearing it restores the roster as it was; Bots tab "Solo mode" or `stack.mjs solo <id>\|off`). Edited live from the dashboard's Bots tab (#4374, `docs/universal-bot/ADMIN-DASHBOARD.md`) |
+| `config/bots.json` | which bots run; bridge ports (assigned once, never move); `identity` sharing (the guests share one); `menace`, `noCatchup`, `noWelcome`, `autostart`, `nick`, `env`, `enabled: false`; top-level `removed` (packs the dashboard removed). Edited live from the dashboard's Bots tab (#4374, `docs/universal-bot/ADMIN-DASHBOARD.md`) |
 | `config/bots/<id>/` | `sexton-id.txt` (the TeamSpeak identity), `.announce`, `.off-duty`, band songs, villain state |
-| `config/.summoner-off` | written by stack.mjs while `solo` is set; `run-summoner.sh` idles while it exists |
 | `config/.voice-off` | the voice kill switch (#4372): exists = voice off for the whole stack; `POST /voice/off\|on` on the summoner writes/removes it |
 | `config/openclaw/` | the gateway's `openclaw.json`, agents (transcripts), workspaces |
 | `config/summoner/` | `config.json` (shifts etc., editable), `live/`, `state/`, `query-pass.txt` |
