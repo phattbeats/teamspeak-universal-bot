@@ -36,6 +36,8 @@ MAIN_CONFIG_PATH=${MAIN_CONFIG_PATH:-/root/.openclaw/openclaw.json}
 EXTRA_ARGS=${EXTRA_ARGS:-}
 # Host port for the insights dashboard (#3963); empty publishes nothing.
 INSIGHTS_PUBLISH=${INSIGHTS_PUBLISH-8097}
+# PHA-4499: UDP port viewers connect to for screen-share video (SEXTON_STREAM_PORT); empty publishes nothing.
+STREAM_PUBLISH=${STREAM_PUBLISH-40000}
 
 log() { printf '\n== %s\n' "$*"; }
 
@@ -65,6 +67,7 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 # --shm-size: chromium (suno-api) falls over on Docker's 64 MB default.
 publish=""
 [ -n "$INSIGHTS_PUBLISH" ] && publish="-p $INSIGHTS_PUBLISH:8097"
+[ -n "$STREAM_PUBLISH" ] && publish="$publish -p $STREAM_PUBLISH:$STREAM_PUBLISH/udp"
 # shellcheck disable=SC2086
 docker run -d \
   --name "$NAME" \
