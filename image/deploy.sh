@@ -65,6 +65,11 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 # --shm-size: chromium (suno-api) falls over on Docker's 64 MB default.
 publish=""
 [ -n "$INSIGHTS_PUBLISH" ] && publish="-p $INSIGHTS_PUBLISH:8097"
+# PHA-4364: retain the configured, reviewed generator override across recreation.
+stack_override_args=()
+if [ -s "$APPDATA/config/universal/stack.mjs" ]; then
+  stack_override_args=(--mount "type=bind,src=$APPDATA/config/universal/stack.mjs,dst=/opt/universal/stack.mjs,readonly")
+fi
 # shellcheck disable=SC2086
 docker run -d \
   --name "$NAME" \
@@ -75,6 +80,7 @@ docker run -d \
   -v "$APPDATA/logs:/var/sexton-logs" \
   $publish \
   $EXTRA_ARGS \
+  "${stack_override_args[@]}" \
   "$IMAGE:$TAG" >/dev/null
 
 log "waiting for the gateway"
