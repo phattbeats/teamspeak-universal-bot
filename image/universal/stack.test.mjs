@@ -230,3 +230,25 @@ test('solo: only that bot runs and autostarts, the summoner idles, and off resto
   assert.equal([...conf.matchAll(/\[program:core-/g)].length, 5);
   assert.ok(!existsSync(`${root}/config/.summoner-off`));
 });
+
+test('PHA-4917: dm settings reach each core as env, per bot over stack-wide, aliases honoured', () => {
+  const root = fresh();
+  stack(root, 'supervisor');
+  const file = json(`${root}/config/bots.json`);
+  file.dm = { cooldownMin: 90, maxLines: 10 };
+  file.bots.sexton.dm = { cooldownMin: 30, quietNotice: true };
+  file.server = { ...file.server, timezone: 'America/New_York' };
+  writeFileSync(`${root}/config/bots.json`, JSON.stringify(file));
+  stack(root, 'supervisor');
+  const conf = readFileSync(`${root}/run/bots.conf`, 'utf8');
+  const prog = (id) => conf.split('[program:').find((p) => p.startsWith(`core-${id}]`));
+  const sexton = prog('sexton');
+  assert.match(sexton, /SEXTON_DM_COOLDOWN_MIN="30"/);
+  assert.match(sexton, /SEXTON_DM_QUIET_NOTICE="1"/);
+  assert.match(sexton, /SEXTON_DM_MAX_LINES="10"/);
+  assert.match(sexton, /SEXTON_WELCOME_FILE="[^"]*personas\/sexton\/welcome.json"/);
+  assert.match(sexton, /TZ="America\/New_York"/);
+  assert.match(prog('bexton'), /SEXTON_DM_COOLDOWN_MIN="90"/);
+  assert.match(prog('lexton'), /SEXTON_DM_WELCOME="0"/, 'noWelcome is an alias for dm.welcome=false');
+  assert.match(prog('lexton'), /SEXTON_DM_CATCHUP="0"/);
+});

@@ -32,7 +32,7 @@ every bot goes text-only within seconds; on reloads whisper in about 20 s.
 |---|---|---|
 | Disable | `enabled: false` | `supervisorctl stop core-<id>` (+ `menace-<id>`), rewire, summoner restart |
 | Enable | drops `enabled` | rewire (the program comes back), `supervisorctl start core-<id>` unless `autostart` is off (guests: Summon or the shift brings them in), summoner restart |
-| Edit | nick, channel, identity, port, autostart, noCatchup, noWelcome, menace, env | rewire; `supervisorctl update` restarts **only** the core whose program changed. A nick change is also written to `config/summoner/config.json` (the summoner finds a bot in the room by nick) and restarts the summoner |
+| Edit | nick, channel, identity, port, autostart, noCatchup, noWelcome, dm, menace, env | rewire; `supervisorctl update` restarts **only** the core whose program changed. A nick change is also written to `config/summoner/config.json` (the summoner finds a bot in the room by nick) and restarts the summoner |
 | Add | a new entry for a persona pack that is on disk but not in the list; port = the next free one unless given | rewire seeds the home, workspace, agent, account and binding exactly as a boot would; summoner restart |
 | Remove | the entry is dropped and the id goes on `removed` | cores stopped, rewire switches the gateway account off (`enabled: false`, tuning kept), summoner restart. **Nothing on disk is deleted**: `config/bots/<id>/` (identity included) and the workspace stay, and Add brings it back with everything intact |
 | Summon / Dismiss | nothing | the summoner's `POST /summon|dismiss/<id>`, so shifts and overrides stay consistent |
@@ -97,7 +97,7 @@ All under `/api/control/`, JSON, basic auth; writes need `X-Requested-With`.
 |---|---|
 | `GET bots` | `{ bots: [row…], available: [packs not in the list], removed, nextPort, summoner, voice, seedVoiceMode }` |
 | `PUT bots/<id>/enabled` `{on}` | enable / disable |
-| `PUT bots/<id>` `{nick?, channel?, identity?, port?, autostart?, noCatchup?, noWelcome?, menace?, env?}` | edit; only the keys sent change |
+| `PUT bots/<id>` `{nick?, channel?, identity?, port?, autostart?, noCatchup?, noWelcome?, dm?, menace?, env?}` | edit; only the keys sent change |
 | `POST bots/<id>` (same body) | add `<id>` from its persona pack |
 | `DELETE bots/<id>` | remove |
 | `PUT bots/<id>/voice` `{mode: "on"\|"off"}` | per-bot voice.mode |

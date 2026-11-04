@@ -8,32 +8,33 @@ fact — and tells the room he is doing it.
 
 ## Behaviour
 
-1. **Catch-up PM.** When a client arrives in the watched channel — either by connecting straight
-   into it or by moving in from elsewhere — it gets a private message with whatever it missed
-   since its *last* catch-up (or the last 15 messages / a "nothing logged yet" note, for a uid
-   never caught up before), capped at 15 messages either way. The message ring behind it is in
-   memory only (last 200), so on connect it is **rehydrated from the disk log below** —
-   yesterday's file then today's, newest lines kept (#3217). Without that the first catch-up
-   after every container restart is empty. The disk format *is* the wire format, so this is a
-   parse of `HH:MM  nickname: message`, not a second serialisation, and it is fail-open: a
-   missing, unreadable or malformed log is skipped and never stops the bot connecting.
-   Each uid's catch-up position is persisted to `<log-dir>/<channel-name>/.caught_up`
-   (#3573), so a container restart does not forget who has seen what and re-blast the whole
-   window — a uid that has seen everything gets no PM at all, not an empty one. tsclientlib does
-   not always have a client's uid populated the instant it joins/moves; the catch-up defers
-   until the uid shows up rather than falling back to a session-bound key that would orphan the
-   index on every reconnect. Suppressed for the first five seconds after the bot itself connects
-   so a restart does not PM everyone already in the room. A second bot instance sitting in the
-   same channel (Bexton) runs with `--no-catchup` / `SEXTON_NO_CATCHUP=1` to suppress this PM
-   entirely — otherwise a joiner gets the same recap twice, once from each bot — while its
-   welcome PM (below) still fires.
-2. **Welcome PM.** The first time a client is ever caught up, and only the first time, the
-   catch-up is preceded by a one-time notice saying what the Sexton does — that the channel is
-   logged, and that he will fetch older ones on request. Announced, not discovered (#3177
-   draft B, #3305). This is *not* the catch-up PM: it is keyed on the client's TeamSpeak uid,
-   which survives reconnects, and the list of welcomed uids is written to
-   `<log-dir>/<channel-name>/.welcomed` so a container restart does not re-introduce the Sexton
-   to the whole room. Fail-open: a lost list costs one repeated welcome, never a failed connect.
+1. **Welcome PM (first time).** The first time a TeamSpeak uid walks in, and only then, it gets
+   a private message saying what the bot is, what it **can't** do (hear or speak, while voice is
+   off), and what it can. The copy is a persona-pack template (`personas/<id>/welcome.json`,
+   `{bot}` and `{digest}` placeholders, lines gated by `when` tokens `voice-on|voice-off|stream|
+   no-stream|music|no-music|catchup`), built from the live config: `voice.mode`, the
+   `/config/.voice-off` kill switch, `--no-audio`, and whether the stream and music tools are on
+   (`SEXTON_CAP_STREAM` / `SEXTON_CAP_MUSIC`, set by `stack.mjs`). A pack without a
+   `welcome.json` gets the generic built-in. The `dm` module's test fails if "can't hear you"
+   is ever rendered while voice is on (PHA-3305's rule, kept). The welcomed uid list is
+   `<log-dir>/<channel-name>/.welcomed`; fail-open, a lost list costs one repeated welcome.
+2. **Returning-user update (PHA-4917).** When a known uid comes back, it gets one message:
+   the returning greeting and a digest of what it missed, **only if** something new was said.
+   The digest covers lines since the uid last *left* (not since the last digest), minus lines
+   said while it was present; includes every bot's channel lines (labelled by nick, our own
+   channel replies are logged at send time), newest 15 (`dm.maxLines`) then
+   `+N earlier lines. Ask me for the rest.`; times are in the process time zone (`server.timezone`
+   in bots.json sets `TZ`). Nothing new means nothing sent; `dm.quietNotice: true` brings back
+   "All quiet since you left." and still obeys the cooldown. At most one update or returning
+   welcome per uid per `dm.cooldownMin` (default 240), keyed on the **uid** and persisted to
+   `<log-dir>/<channel-name>/.lastnotified` so restarts do not reset it; joins inside the window
+   send nothing and the next DM after it covers them (the earliest unreported leave is kept in
+   `.lastleft`). Fail-open like `.welcomed`. The message ring behind the digest is memory-only
+   (last 200) and is **rehydrated from the disk log** on connect (#3217): the disk format *is*
+   the wire format, a parse of `HH:MM  nickname: message`. tsclientlib may not have a uid the
+   instant a client joins/moves; the update defers until it does. Suppressed for the first five
+   seconds after the bot connects. Config: `bots.json` `dm` block, stack-wide and per bot
+   (`noWelcome` / `noCatchup` still work as aliases), passed to the core as `SEXTON_DM_*` env.
 3. **Full log on disk.** Every message is appended to `<log-dir>/<channel-name>/YYYY-MM-DD.md`
    as markdown, one line per message, same format.
 
@@ -43,20 +44,16 @@ above already cover the same ground. There is no longer any per-message or on-co
 `channeledit` at all — the channel description is untouched by the bot. The on-connect
 rehydration survives the removal: it feeds the catch-up PM, not just the old description.
 
-### HARD RULE: the welcome PM ships in two stages
+### HARD RULE: the welcome never promises what the config does not do
 
-The welcome PM above is **stage 1**. Stage 2 — the voice paragraph and the line
-`your voice doesn't leave the house` — ships in the same commit as the voice lane going live
-(#3228), and not before. Both stage-2 sentences are promises: the first is false while the
-Sexton is text-only, and the second is false if any metered hosted STT is ever in the path,
-which is the $0-ceiling constraint from #3177 restated as a wording rule. The exact stage-2
-text is in the #3099 banner; `the_welcome_pm_is_stage_one_and_carries_nothing_from_stage_two`
-in `src/main.rs` fails if it arrives early.
+Capability lines come from the live config, not fixed text. Nothing in the welcome may say the
+voice never leaves the box while a hosted STT sits anywhere in the path (the $0-ceiling constraint
+from #3177 as a wording rule), and it may not mention the channel description (removed, #3424).
 
 ### HARD RULE: content only
 
 Only user-authored text messages targeted at the watched channel, sent by a client actually in
-that channel, and not the bot's own messages, are logged or displayed. Joins, leaves, moves,
+that channel, (and the bot's own channel replies, logged when it sends them) are logged or displayed. Joins, leaves, moves,
 mutes, unmutes, away changes, kicks, bans, pokes, channel edits and server messages never reach
 the PM or the disk log.
 

@@ -1,0 +1,21 @@
+{
+  "first": [
+    { "text": "Welcome in. I'm the Sexton, the bot that keeps this hall." },
+    { "text": "" },
+    { "text": "Worth knowing first: I can't hear you, and I can't speak. Voice chat goes right past me.", "when": ["voice-off"] },
+    { "text": "" , "when": ["voice-off"] },
+    { "text": "What I can do:" },
+    { "text": "• Read what you type, here or in the channel, and answer." },
+    { "text": "• Stream a Twitch, Kick or YouTube link for the room, or play music. Just ask.", "when": ["stream", "music"] },
+    { "text": "• Stream a Twitch, Kick or YouTube link for the room. Just ask.", "when": ["stream", "no-music"] },
+    { "text": "• Play music for the room. Just ask.", "when": ["no-stream", "music"] },
+    { "text": "• Catch you up when you come back on what was said while you were gone.", "when": ["catchup"] }
+  ],
+  "returning": [
+    { "text": "Welcome back. Still can't hear you or talk back, but type and I'll answer.", "when": ["voice-off"] },
+    { "text": "Welcome back. Type or talk and I'll answer.", "when": ["voice-on"] },
+    { "text": "" },
+    { "text": "While you were gone:" },
+    { "text": "{digest}" }
+  ]
+}

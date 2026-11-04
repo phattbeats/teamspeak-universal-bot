@@ -309,7 +309,7 @@ const HOST = /^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/;
 const ENV_KEY = /^[A-Z_][A-Z0-9_]*$/;
 const FIRST_PORT = 9101;
 /** Keys the edit form may set. `enabled` has its own switch; `port` is checked against the others. */
-const BOT_KEYS = ['nick', 'channel', 'address', 'fallbackChannel', 'identity', 'port', 'autostart', 'noCatchup', 'noWelcome', 'menace', 'env'];
+const BOT_KEYS = ['nick', 'channel', 'address', 'fallbackChannel', 'identity', 'port', 'autostart', 'noCatchup', 'noWelcome', 'menace', 'env', 'dm'];
 
 const title = (id) => id[0].toUpperCase() + id.slice(1);
 const str = (v, what, max) => {
@@ -319,6 +319,26 @@ const str = (v, what, max) => {
   if (s.length > max) throw new Error(`${what} is too long (max ${max})`);
   return s;
 };
+
+/** PHA-4917: the per-bot `dm` block. Only known keys, only sane values; {} means "stack default". */
+export function cleanDm(v) {
+  if (v === null || v === undefined) return {};
+  if (typeof v !== 'object' || Array.isArray(v)) throw new Error('dm must be a map of setting to value');
+  const out = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (['welcome', 'catchup', 'quietNotice', 'includeBots', 'dmFallback'].includes(k)) {
+      if (typeof val !== 'boolean') throw new Error(`dm.${k} must be true or false`);
+      out[k] = val;
+    } else if (k === 'cooldownMin') {
+      if (!Number.isInteger(val) || val < 0 || val > 10080) throw new Error('dm.cooldownMin must be whole minutes from 0 to 10080');
+      out[k] = val;
+    } else if (k === 'maxLines') {
+      if (!Number.isInteger(val) || val < 1 || val > 100) throw new Error('dm.maxLines must be a whole number from 1 to 100');
+      out[k] = val;
+    } else throw new Error(`unknown dm setting ${k}`);
+  }
+  return out;
+}
 
 /** The identity a bot logs in with: its own home, or the shared one it names. */
 export const identityOf = (b) => (b?.identity ? String(b.identity) : null);
@@ -364,6 +384,10 @@ export function cleanBot(bots, id, patch, cur = bots[id] ?? {}) {
     if (typeof patch[k] !== 'boolean') throw new Error(`${k} must be true or false`);
     // autostart defaults to true, the rest to false: only the non-default is written.
     if (patch[k] === (k === 'autostart')) delete out[k]; else out[k] = patch[k];
+  }
+  if ('dm' in patch) {
+    const dm = cleanDm(patch.dm);
+    if (Object.keys(dm).length) out.dm = dm; else delete out.dm;
   }
   if ('env' in patch) {
     const env = patch.env ?? {};
@@ -511,6 +535,7 @@ export function listBots(file, packs, { programs = {}, live = null, accounts = {
     autostart: b.autostart !== false,
     noCatchup: !!b.noCatchup,
     noWelcome: !!b.noWelcome,
+    dm: b.dm ?? {},
     menace: !!b.menace,
     env: b.env ?? {},
     core: programs[`core-${id}`] ?? 'ABSENT',

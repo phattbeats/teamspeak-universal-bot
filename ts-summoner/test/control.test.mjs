@@ -197,3 +197,13 @@ test('solo is an overlay: setting and clearing it leaves every bot entry as it w
   assert.equal(JSON.stringify(f.bots), before);
   assert.equal(listBots(f, {}, {}).solo, '');
 });
+
+test('PHA-4917: cleanBot validates the dm block and drops it when empty', () => {
+  const bots = { sexton: { port: 9101 } };
+  const e = cleanBot(bots, 'sexton', { dm: { cooldownMin: 90, quietNotice: false, maxLines: 10 } });
+  assert.deepEqual(e.dm, { cooldownMin: 90, quietNotice: false, maxLines: 10 });
+  assert.equal('dm' in cleanBot(bots, 'sexton', { dm: {} }, e), false);
+  assert.throws(() => cleanBot(bots, 'sexton', { dm: { cooldownMin: -1 } }), /cooldownMin/);
+  assert.throws(() => cleanBot(bots, 'sexton', { dm: { welcome: 'yes' } }), /true or false/);
+  assert.throws(() => cleanBot(bots, 'sexton', { dm: { nope: 1 } }), /unknown dm setting/);
+});
