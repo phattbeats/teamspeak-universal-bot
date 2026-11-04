@@ -17,6 +17,7 @@
 #   config/insights/            the insights db + auth.txt, the dashboard login (#3963)
 #   config/personas/<id>/       optional: add or override a persona pack without a rebuild
 #   logs/<id>/                  each bot's room log
+#   logs/lifecycle/             PHA-4919: start/stop/exit + cause + last 50 lines, daily, 14 days
 #
 # First deploy on an empty APPDATA imports model credentials from the main
 # OpenClaw gateway (models/auth/agents/tts/env/tools only, never its channels).
@@ -61,6 +62,11 @@ if [ ! -s "$gw_config" ] && [ ! -s "$APPDATA/config/openclaw/credentials.import.
 fi
 
 log "starting $NAME from $IMAGE:$TAG"
+# PHA-4919: say why the old container is about to stop (read by lifecycle-log).
+if docker ps -q --filter "name=^$NAME\$" | grep -q .; then
+  echo "deploy $(date +%s)" > "$APPDATA/logs/.lifecycle-mark"
+  docker stop -t 40 "$NAME" >/dev/null 2>&1 || true
+fi
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 # --shm-size: chromium (suno-api) falls over on Docker's 64 MB default.
 publish=""

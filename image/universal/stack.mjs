@@ -228,6 +228,7 @@ function supervisor() {
     conf += `
 [program:core-${b.id}]
 command=/usr/local/bin/run-sexton
+stdout_events_enabled=true
 environment=${Object.entries(vars).map(([k, v]) => `${k}=${q(v)}`).join(',')}
 autostart=${off ? 'false' : 'true'}
 autorestart=true
