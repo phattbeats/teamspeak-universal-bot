@@ -13,6 +13,9 @@ const DEFAULT_MUSIC_RESOLVE_TIMEOUT_MS = 2e4;
 function areTeamSpeakToolsEnabled(config) {
   return config?.tools?.enabled !== false;
 }
+function isTeamSpeakStreamEnabled(config) {
+  return areTeamSpeakToolsEnabled(config) && config?.tools?.stream?.enabled === true;
+}
 function isTeamSpeakMusicEnabled(config) {
   return areTeamSpeakToolsEnabled(config) && config?.tools?.music?.enabled === true;
 }
@@ -274,6 +277,7 @@ export {
   areTeamSpeakToolsEnabled,
   isTeamSpeakBandEnabled,
   isTeamSpeakMusicEnabled,
+  isTeamSpeakStreamEnabled,
   isTeamSpeakVoiceEnabled,
   resolveAnnouncePaths,
   resolveSextonLogDir,

@@ -24,6 +24,9 @@ import {
   TYPE_MODERATION_RESULT,
   TYPE_LIST_CHANNELS,
   TYPE_SET_DESCRIPTION,
+  TYPE_STREAM_START,
+  TYPE_STREAM_STATUS,
+  TYPE_STREAM_STOP,
   TYPE_MUSIC_AUDIO,
   TYPE_MUSIC_GAIN,
   TYPE_MUTE,
@@ -166,6 +169,16 @@ class TeamSpeakBridgeClient {
    */
   setDescription(description) {
     this.send(encodeFrame(TYPE_SET_DESCRIPTION, { description }));
+  }
+  /** Screen-share a media URL (PHA-4499). The answer is a `stream_start` moderation result. */
+  streamStart(url, title) {
+    this.send(encodeFrame(TYPE_STREAM_START, title ? { url, title } : { url }));
+  }
+  streamStop() {
+    this.send(encodeFrame(TYPE_STREAM_STOP, {}));
+  }
+  streamStatus() {
+    this.send(encodeFrame(TYPE_STREAM_STATUS, {}));
   }
   send(frame) {
     if (!this.socket || !this.connected) {

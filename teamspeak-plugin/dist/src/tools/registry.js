@@ -60,6 +60,9 @@ const MODERATION_FLAG = {
   [EDIT_SERVER_TOOL]: "edit",
   [ADD_TO_SERVER_GROUP_TOOL]: "edit"
 };
+const STREAM_URL_TOOL = "stream_url";
+const STOP_STREAM_TOOL = "stop_stream";
+const STREAM_STATUS_TOOL = "stream_status";
 const NOW_PLAYING_TOOL = "now_playing";
 const SHOW_QUEUE_TOOL = "show_queue";
 const SKIP_TOOL = "skip";
@@ -93,6 +96,7 @@ function createTeamSpeakToolRegistration(deps) {
   return {
     tools: buildTeamSpeakTools({
       music: deps.music !== void 0,
+      stream: deps.stream !== void 0,
       band: deps.band !== void 0,
       moderation: moderationOptions(deps.config),
       villain: deps.villain !== void 0
@@ -102,6 +106,35 @@ function createTeamSpeakToolRegistration(deps) {
 }
 function buildTeamSpeakTools(options) {
   const tools = [];
+  if (options.stream) {
+    tools.push(
+      {
+        type: "function",
+        name: STREAM_URL_TOOL,
+        description: 'Screen-share a live stream or video into the channel so people can click Watch and see it with sound. Use when someone says "stream this" with a Twitch, Kick or YouTube link. Only those sites work. Starting a new one replaces the current one. Tell them to click Watch on your share; the video takes a few seconds to appear after they do. Confirm in a few words.',
+        parameters: {
+          type: "object",
+          properties: {
+            url: { type: "string", description: "The http(s) link to a Twitch, Kick or YouTube stream or video." },
+            title: { type: "string", description: "Optional label for the share; defaults to the stream's title." }
+          },
+          required: ["url"]
+        }
+      },
+      {
+        type: "function",
+        name: STOP_STREAM_TOOL,
+        description: "Stop the screen share. Confirm in a few words.",
+        parameters: { type: "object", properties: {} }
+      },
+      {
+        type: "function",
+        name: STREAM_STATUS_TOOL,
+        description: "Say what is being screen-shared right now and how many are watching.",
+        parameters: { type: "object", properties: {} }
+      }
+    );
+  }
   if (options.music) {
     tools.push(
       {
@@ -779,6 +812,10 @@ async function dispatch(deps, name, args, context) {
       return editServerTool(deps, args, context);
     case ADD_TO_SERVER_GROUP_TOOL:
       return addToServerGroupTool(deps, args, context);
+    case STREAM_URL_TOOL:
+    case STOP_STREAM_TOOL:
+    case STREAM_STATUS_TOOL:
+      return await streamTool(deps, name, args);
     case LIST_CHANNELS_TOOL:
       return await listChannelsTool(deps);
     case MOVE_TO_CHANNEL_TOOL:
@@ -1543,6 +1580,42 @@ function editServerTool(deps, args, context) {
   auditModeration(deps, context, "edited server settings");
   return { ok: true, name: name ?? null, welcomeMessage: welcomeMessage ?? null };
 }
+const STREAM_HOSTS = /^(?:[a-z0-9-]+\.)*(?:twitch\.tv|kick\.com|youtube\.com|youtu\.be)$/iu;
+async function streamTool(deps, name, args) {
+  const stream = deps.stream;
+  if (!stream) {
+    return { ok: false, error: "Screen sharing isn't set up here." };
+  }
+  if (name === STOP_STREAM_TOOL) {
+    const r2 = await stream.stop();
+    return { ok: r2.ok, detail: r2.detail };
+  }
+  if (name === STREAM_STATUS_TOOL) {
+    const r2 = await stream.status();
+    try {
+      return { ok: r2.ok, ...JSON.parse(r2.detail) };
+    } catch {
+      return { ok: r2.ok, detail: r2.detail };
+    }
+  }
+  const raw = readString(args.url)?.trim();
+  let host;
+  try {
+    const u = raw ? new URL(raw) : void 0;
+    host = u && (u.protocol === "https:" || u.protocol === "http:") ? u.hostname : void 0;
+  } catch {
+    host = void 0;
+  }
+  if (!raw || !host || !STREAM_HOSTS.test(host)) {
+    return { ok: false, error: "I can only stream Twitch, Kick or YouTube links." };
+  }
+  const r = await stream.start(raw, readString(args.title));
+  if (!r.ok) {
+    return { ok: false, error: r.detail };
+  }
+  deps.log?.(`stream: started ${raw}`);
+  return { ok: true, note: "Share is up in the channel. Tell them to click Watch; video appears a few seconds after." };
+}
 function addToServerGroupTool(deps, args, context) {
   if (!isAuthorizedForModeration(deps, context)) {
     return NOT_AUTHORIZED;
@@ -1760,6 +1833,9 @@ export {
   SKIP_TOOL,
   SONG_LYRICS_TOOL,
   STOP_MUSIC_TOOL,
+  STOP_STREAM_TOOL,
+  STREAM_STATUS_TOOL,
+  STREAM_URL_TOOL,
   SUMMON_BOT_TOOL,
   SUMMON_TOOL,
   UNBAN_CLIENT_TOOL,

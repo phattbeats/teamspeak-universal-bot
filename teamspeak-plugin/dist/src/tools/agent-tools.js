@@ -6,6 +6,7 @@ import {
 } from "./turn-context.js";
 const ALL_TOOL_OPTIONS = {
   music: true,
+  stream: true,
   band: true,
   moderation: { kick: true, ban: true, edit: true },
   villain: true
