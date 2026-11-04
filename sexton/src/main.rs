@@ -531,6 +531,7 @@ impl ChannelState {
     fn digest_for(&self, uid: &str) -> Option<String> {
         let since = self.unreported_since.get(uid).or_else(|| self.notified.get(uid))?;
         let present = self.present_spans.get(uid).cloned().unwrap_or_default();
+        info!(%uid, since, spans = ?present, history = self.history.len(), "building the digest");
         let rendered: Vec<String> = self.history.iter().map(|m| m.render_line()).collect();
         let lines: Vec<dm::DigestLine> = self
             .history
@@ -1682,6 +1683,7 @@ fn note_client_left(state: &mut ChannelState, client_id: ClientId, uid_hint: Opt
     state.pending_catchup.remove(&client_id);
     let uid = state.uid_of.remove(&client_id).or(uid_hint);
     if let Some(uid) = uid {
+        info!(?client_id, %uid, "left the watched channel");
         state.note_leave(&uid, unix_now());
     }
 }
