@@ -5,6 +5,7 @@
 //!
 //! The script is a comma-separated list of steps:
 //!   `say:<text>`   send <text> to the watched channel
+//!   `pm:<text>`    private-message the Sexton
 //!   `mute`         set client_input_muted=1
 //!   `unmute`       set client_input_muted=0
 //!   `hop`          create/join a temporary side channel
@@ -182,6 +183,21 @@ async fn run_step(
             };
             cmd.send(con).map_err(|e| anyhow!("sending text message: {e}"))?;
             info!(message = %text, "step: say");
+        }
+        Some(("pm", text)) => {
+            // A private message to the first client whose nickname starts with
+            // "Sexton" (PHA-4917 criterion 7: every human DM gets a reply).
+            let cmd = {
+                let state = con.get_state().map_err(|e| anyhow!("get_state: {e}"))?;
+                let target = state
+                    .clients
+                    .values()
+                    .find(|c| c.name.starts_with("Sexton"))
+                    .ok_or_else(|| anyhow!("no client named Sexton* to message"))?;
+                target.send_textmessage(text)
+            };
+            cmd.send(con).map_err(|e| anyhow!("sending private message: {e}"))?;
+            info!(message = %text, "step: pm");
         }
         Some(("wait", ms)) => {
             let ms: u64 = ms.parse().with_context(|| format!("parsing wait:{ms}"))?;

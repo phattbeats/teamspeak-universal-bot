@@ -173,6 +173,7 @@ function dmVars(b, bots) {
     SEXTON_DM_QUIET_NOTICE: flag(dm.quietNotice),
     SEXTON_DM_INCLUDE_BOTS: flag(dm.includeBots),
     SEXTON_DM_MAX_LINES: String(dm.maxLines),
+    SEXTON_DM_FALLBACK: flag(dm.dmFallback),
     SEXTON_BOT_NAME: b.voice?.welcomeName || `the ${b.nick}`,
     SEXTON_BOT_TAG: bots.botTag ?? '[BOT]',
     SEXTON_VOICE_MODE: voiceMode,
