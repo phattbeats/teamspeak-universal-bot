@@ -976,11 +976,11 @@ async fn main() -> Result<()> {
         SHUTDOWN.notify_one();
     });
     // PHA-4499: screen-share actor. Opt-in per bot (`SEXTON_STREAM=1`) — it
-    // binds a UDP port, and the bots share a host. `_stream_out_tx` is kept
+    // binds a UDP port, and the bots share a host. Follows `tools.stream.enabled` (SEXTON_CAP_STREAM) so config alone turns it on. `_stream_out_tx` is kept
     // alive so a disabled bot's `stream_out_rx` stays pending instead of
     // returning `None` in a hot loop.
     let (stream_out_tx, mut stream_out_rx) = mpsc::unbounded_channel::<String>();
-    let stream_ctl: Option<mpsc::UnboundedSender<stream::Ctl>> = if env_flag("SEXTON_STREAM") {
+    let stream_ctl: Option<mpsc::UnboundedSender<stream::Ctl>> = if env_flag("SEXTON_STREAM") || env_flag("SEXTON_CAP_STREAM") {
         info!("SEXTON_STREAM set: screen-share lane enabled");
         Some(stream::spawn(stream::Config::from_env(), stream_out_tx.clone(), event_tx.clone()))
     } else {
