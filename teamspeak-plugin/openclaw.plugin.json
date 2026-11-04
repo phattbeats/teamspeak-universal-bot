@@ -65,6 +65,9 @@
     "tools": [
       "play_music",
       "stop_music",
+      "stream_url",
+      "stop_stream",
+      "stream_status",
       "set_volume",
       "what_did_i_miss",
       "who_is_here",
