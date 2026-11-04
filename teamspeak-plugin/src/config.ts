@@ -421,6 +421,10 @@ export type TeamSpeakAccountConfig = {
   channel?: string;
   /** Prefix for in-channel chat commands. Default: "!". */
   commandPrefix?: string;
+  /** PHA-4917: always answer a human DM, with a fixed fallback line when the agent cannot. Default: true. */
+  dmFallback?: boolean;
+  /** PHA-4917: the tag on bot nicks (no DM fallback goes to a bot, so two bots cannot loop). Default: "[BOT]". */
+  botTag?: string;
   /** TeamSpeak client ids allowed to issue `!vc` / `!sexton` commands. Unset allows anyone in the channel. */
   commandAllowFrom?: number[];
   voice?: TeamSpeakVoiceConfig;

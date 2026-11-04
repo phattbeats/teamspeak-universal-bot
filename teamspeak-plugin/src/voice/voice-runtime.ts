@@ -131,6 +131,10 @@ export type TeamSpeakVoiceRuntimeParams = {
    * message arrived on; undefined disables the text lane entirely.
    */
   onChatMessage?: ((message: TextMessageHeader) => Promise<string | undefined>) | undefined;
+  /** PHA-4917: how long a DM may wait on the agent before the fallback line goes out. Default 25 s. */
+  dmReplyTimeoutMs?: number | undefined;
+  /** Clock for the fallback cap; tests inject one. */
+  now?: (() => number) | undefined;
   /** Bridge socket up/down, so the gateway's account status is not a guess. */
   onConnectionChange?: ((connected: boolean) => void) | undefined;
   /**
@@ -162,6 +166,15 @@ const DEFAULT_VOICE_OFF_POLL_MS = 2_000;
  */
 const CHANNEL_TREE_TIMEOUT_MS = 4_000;
 
+/** PHA-4917: the lines a human DM gets when there is no answer to give. */
+export const DM_DOWN_REPLY = "I'm here, but I can't answer right now. Try again in a minute, or ask in the channel.";
+export const DM_VOICE_REPLY = "I can't hear voice chat or talk. Type it out and I'll take it from there.";
+const DM_FALLBACK_COOLDOWN_MS = 10 * 60 * 1000;
+const DM_REPLY_TIMEOUT_MS = 25_000;
+/** Asks that only make sense with a working voice path. */
+const DM_VOICE_ASK =
+  /\b(?:can|could|will|do|did) you (?:hear|speak|talk|say)\b|\bhear me\b|\b(?:talk|speak) to me\b|\bsay (?:it |that |something )?(?:out loud|aloud)\b|\bvoice chat\b|\bjoin (?:the )?(?:voice|vc)\b|\bunmute\b/i;
+
 /** Marks a tool call that came from an agent turn rather than a realtime session. */
 const AGENT_TOOL_ITEM_ID = "teamspeak-agent-turn";
 
@@ -186,6 +199,8 @@ export class TeamSpeakVoiceRuntime {
    * the only things still answered are `!vc join` / `join_voice`.
    */
   private parked = false;
+  /** PHA-4917: when each person last got a fallback line, by lowercased nick. */
+  private readonly dmFallbackAt = new Map<string, number>();
   /**
    * Voice off (#4372): deaf and mute, but present. Unlike parked, chat still
    * gets a turn and the tools still run; only audio in and speech out stop.
@@ -936,35 +951,59 @@ export class TeamSpeakVoiceRuntime {
    * make the bot unbearable, and the voice lane already gates the same way.
    */
   private handleChatMessage(message: TextMessageHeader): void {
-    const run = this.params.onChatMessage;
-    if (!run) {
-      return;
-    }
     if (this.selfClientId !== undefined && message.clientId === this.selfClientId) {
-      return;
-    }
-    // Sitting out is sitting out on both lanes. `!vc join` is a command and was
-    // already dispatched before this, so there is still a way back in.
-    if (this.parked) {
       return;
     }
     if (!message.text.trim()) {
       return;
     }
-    if (message.target !== "client" && !this.isAddressed(message.text)) {
+    const isDm = message.target === "client";
+    const run = this.params.onChatMessage;
+    if (!run) {
+      if (isDm) {
+        this.dmFallback(message, DM_DOWN_REPLY);
+      }
+      return;
+    }
+    // Sitting out is sitting out on both lanes. `!vc join` is a command and was
+    // already dispatched before this, so there is still a way back in. A DM is
+    // the exception: a person who typed to the bot always hears something back.
+    if (this.parked) {
+      if (isDm) {
+        this.dmFallback(message, DM_DOWN_REPLY);
+      }
+      return;
+    }
+    if (!isDm && !this.isAddressed(message.text)) {
+      return;
+    }
+    // PHA-4917: an ask that needs ears or a mouth never reaches the agent while
+    // voice is off, because the agent would promise what the bot cannot do.
+    if (isDm && this.voiceOff && DM_VOICE_ASK.test(message.text)) {
+      this.dmFallback(message, DM_VOICE_REPLY);
       return;
     }
     if (this.chatTurnsInFlight.has(message.clientId)) {
       this.params.log?.(
         `teamspeak text: dropping message, a turn is already running clientId=${message.clientId}`,
       );
+      if (isDm) {
+        this.dmFallback(message, DM_DOWN_REPLY);
+      }
       return;
     }
     this.chatTurnsInFlight.add(message.clientId);
+    // The agent has until the timer to answer; after that the fallback goes out
+    // once and a late answer is still delivered.
+    const timer = isDm
+      ? setTimeout(() => this.dmFallback(message, DM_DOWN_REPLY), this.params.dmReplyTimeoutMs ?? DM_REPLY_TIMEOUT_MS)
+      : undefined;
     void run(message)
       .then((reply) => {
         if (reply) {
           this.reply(message, reply);
+        } else if (isDm) {
+          this.dmFallback(message, DM_DOWN_REPLY);
         }
       })
       .catch((error: unknown) => {
@@ -973,10 +1012,40 @@ export class TeamSpeakVoiceRuntime {
             error instanceof Error ? error.message : String(error)
           }`,
         );
+        if (isDm) {
+          this.dmFallback(message, DM_DOWN_REPLY);
+        }
       })
       .finally(() => {
+        if (timer) {
+          clearTimeout(timer);
+        }
         this.chatTurnsInFlight.delete(message.clientId);
       });
+  }
+
+  /**
+   * PHA-4917: the fixed line a human DM gets when the agent cannot answer. At
+   * most one per person per 10 minutes, and never to a bot, so a bot and a
+   * person (or two bots) cannot ping-pong.
+   */
+  private dmFallback(message: TextMessageHeader, line: string): void {
+    if (this.params.config.dmFallback === false) {
+      return;
+    }
+    const tag = (this.params.config.botTag ?? "[BOT]").trim();
+    if (tag && message.nickname.includes(tag)) {
+      return;
+    }
+    const key = message.nickname.toLowerCase();
+    const now = (this.params.now ?? Date.now)();
+    const last = this.dmFallbackAt.get(key);
+    if (last !== undefined && now - last < DM_FALLBACK_COOLDOWN_MS) {
+      return;
+    }
+    this.dmFallbackAt.set(key, now);
+    this.params.log?.(`teamspeak text: dm fallback to ${message.nickname}`);
+    this.reply(message, line);
   }
 
   /** Does this line name us? Same wake names the voice lane gates on. */

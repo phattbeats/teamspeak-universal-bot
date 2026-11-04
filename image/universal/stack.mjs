@@ -62,6 +62,17 @@ const DEFAULT_BOTS = {
   trixie: { identity: 'guest', autostart: false, noCatchup: true, noWelcome: true },
 };
 
+// PHA-4917: the `dm` block. Stack-wide under bots.json "dm", overridden per bot;
+// noWelcome / noCatchup stay as aliases for dm.welcome / dm.catchup = false.
+const DM_DEFAULTS = { welcome: true, catchup: true, cooldownMin: 240, quietNotice: false, includeBots: true, maxLines: 15, dmFallback: true };
+function resolveDm(stackDm, b) {
+  const dm = { ...DM_DEFAULTS, ...(stackDm ?? {}), ...(b.dm ?? {}) };
+  if (b.noWelcome && b.dm?.welcome === undefined) dm.welcome = false;
+  if (b.noCatchup && b.dm?.catchup === undefined) dm.catchup = false;
+  return dm;
+}
+const flag = (v) => (v ? '1' : '0');
+
 const log = (...a) => console.log('stack:', ...a);
 const readJson = (p, fallback) => {
   try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return fallback; }
@@ -139,11 +150,39 @@ function loadBots() {
     });
   }
   list.solo = soloId;
+  list.dm = file?.dm && typeof file.dm === 'object' ? file.dm : {};
+  list.timezone = typeof file?.server?.timezone === 'string' ? file.server.timezone : '';
+  list.botTag = file?.server?.botTag ?? '[BOT]';
   list.serverQuery = file?.server?.query && typeof file.server.query === 'object' ? file.server.query : null;
   return list;
 }
 
 // ------------------------------------------------------------- supervisor --
+
+/** PHA-4917: env for the core's DM behaviour; the welcome copy is built from what is really on. */
+function dmVars(b, bots) {
+  const dm = resolveDm(bots.dm, b);
+  const cfg = readJson(CFG_PATH, {});
+  const voiceMode = cfg?.channels?.teamspeak?.accounts?.[b.id]?.voice?.mode ?? cfg?.channels?.teamspeak?.voice?.mode ?? '';
+  const stream = b.tools?.stream?.enabled === true;
+  const welcome = `${b.pack}/welcome.json`;
+  return {
+    SEXTON_DM_WELCOME: flag(dm.welcome),
+    SEXTON_DM_CATCHUP: flag(dm.catchup),
+    SEXTON_DM_COOLDOWN_MIN: String(dm.cooldownMin),
+    SEXTON_DM_QUIET_NOTICE: flag(dm.quietNotice),
+    SEXTON_DM_INCLUDE_BOTS: flag(dm.includeBots),
+    SEXTON_DM_MAX_LINES: String(dm.maxLines),
+    SEXTON_BOT_NAME: b.voice?.welcomeName || `the ${b.nick}`,
+    SEXTON_BOT_TAG: bots.botTag ?? '[BOT]',
+    SEXTON_VOICE_MODE: voiceMode,
+    SEXTON_VOICE_OFF_FILE: VOICE_OFF_FILE,
+    SEXTON_CAP_STREAM: flag(stream),
+    SEXTON_CAP_MUSIC: flag(b.tools?.music?.enabled !== false),
+    ...(existsSync(welcome) ? { SEXTON_WELCOME_FILE: welcome } : {}),
+    ...(bots.timezone ? { TZ: bots.timezone } : {}),
+  };
+}
 
 const q = (v) => `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`;
 
@@ -177,6 +216,7 @@ function supervisor() {
       SEXTON_FALLBACK_CHANNEL: b.fallbackChannel,
       SEXTON_NO_CATCHUP: b.noCatchup ? '1' : '0',
       SEXTON_NO_WELCOME: b.noWelcome ? '1' : '0',
+      ...dmVars(b, bots),
       SEXTON_GUEST_ENV: '/nonexistent',
       ...(VOICE_SWITCH_OFF ? { SEXTON_NO_AUDIO: '1' } : {}),
       ...(b.env || {}),
@@ -333,6 +373,9 @@ function gateway() {
     // itself stays the operator's (an account pinned to "off" stays off).
     a.voice ??= {};
     a.voice.offFile = VOICE_OFF_FILE;
+    // PHA-4917: a human DM always gets a reply; the fallback line is bots.json's call.
+    a.dmFallback = resolveDm(bots.dm, b).dmFallback !== false;
+    a.botTag = bots.botTag ?? '[BOT]';
     if (a.tools.villain) {
       a.tools.villain.stateFile = `${b.home}/villain-pending.json`;
       a.tools.villain.transcriptDb = `${STATE}/agents/${b.id}/agent/openclaw-agent.sqlite`;

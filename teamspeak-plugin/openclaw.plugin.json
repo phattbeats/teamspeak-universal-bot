@@ -19,6 +19,8 @@
           "bridgeUrl": { "type": "string" },
           "channel": { "type": "string" },
           "commandPrefix": { "type": "string" },
+          "dmFallback": { "type": "boolean" },
+          "botTag": { "type": "string" },
           "commandAllowFrom": { "type": "array", "items": { "type": "number" } },
           "voice": { "type": "object", "additionalProperties": true },
           "tools": { "type": "object", "additionalProperties": true },
@@ -32,6 +34,8 @@
                 "bridgeUrl": { "type": "string" },
                 "channel": { "type": "string" },
                 "commandPrefix": { "type": "string" },
+                "dmFallback": { "type": "boolean" },
+                "botTag": { "type": "string" },
                 "commandAllowFrom": { "type": "array", "items": { "type": "number" } },
                 "voice": { "type": "object", "additionalProperties": true },
                 "tools": { "type": "object", "additionalProperties": true }

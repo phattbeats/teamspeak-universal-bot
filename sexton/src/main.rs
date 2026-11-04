@@ -71,6 +71,7 @@ use tsclientlib::{
 };
 
 mod audio;
+mod dm;
 mod mixer;
 mod protocol;
 mod ws_server;
@@ -78,28 +79,8 @@ mod ws_server;
 use audio::AudioState;
 use mixer::Mixer;
 
-/// First-contact PM: sent once per client, ever, immediately before their first
-/// catch-up (#3305). Not the catch-up PM — see `catchup_text_from`.
-///
-/// One line, by Brandon's call on #3428 item 5. The staged wording this
-/// replaces explained the log and trailed a stage 2 that would describe the
-/// voice path; both are gone. Anything added back here is a promise the Sexton
-/// has to keep, so the bar for a second sentence is a behaviour that already
-/// ships — in particular, nothing may claim a transcript stays on the box while
-/// a hosted STT sits anywhere in the path (the #3228 constraint, restated as
-/// a wording rule).
-const WELCOME_PM: &str = "The Sexton keeps this hall.";
-/// Sent instead of a catch-up when nothing was said since the last one (#3830).
-const QUIET_PM: &str = "All quiet since you left.";
-/// How many messages the catch-up PM includes, and the cap on how much of a
-/// delta it will ever show — a uid who has been away for a week still gets
-/// the last `CATCHUP_PM_COUNT`, not the whole gap (#3573).
-const CATCHUP_PM_COUNT: usize = 15;
 /// Where the welcomed-client list lives, inside the channel's log directory.
 const WELCOMED_FILE: &str = ".welcomed";
-/// Where the per-uid catch-up delta index lives (#3573), alongside
-/// `WELCOMED_FILE`.
-const CAUGHT_UP_FILE: &str = ".caught_up";
 /// How many messages we keep in memory (comfortably covers the catch-up PM
 /// window).
 const HISTORY_CAP: usize = 200;
@@ -236,6 +217,8 @@ struct Args {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LoggedMessage {
+    /// Unix seconds; 0 when unknown. Only the digest's window logic reads it.
+    ts: i64,
     time_label: String, // HH:MM, local time
     nickname: String,
     text: String,
@@ -274,10 +257,40 @@ fn parse_log_line(line: &str) -> Option<LoggedMessage> {
         return None;
     }
     Some(LoggedMessage {
+        ts: 0,
         time_label: time_label.to_string(),
         nickname: nickname.to_string(),
         text: text.strip_prefix(' ').unwrap_or(text).to_string(),
     })
+}
+
+/// The config the welcome copy is built from. `voice_off_file` is re-checked on
+/// every use, so the live kill switch is honoured without a restart.
+#[derive(Clone, Default)]
+struct CapsInputs {
+    no_audio: bool,
+    voice_mode: String,
+    voice_off_file: PathBuf,
+    stream: bool,
+    music: bool,
+}
+
+/// Epoch seconds for a log line's `HH:MM` on `day`, in the process's local zone
+/// (the zone the line was written in). 0 if it cannot be placed.
+fn ts_from_log(day: chrono::NaiveDate, hhmm: &str) -> i64 {
+    use chrono::TimeZone;
+    let Some((h, m)) = hhmm.split_once(':') else { return 0 };
+    let (Ok(h), Ok(m)) = (h.parse::<u32>(), m.parse::<u32>()) else { return 0 };
+    day.and_hms_opt(h, m, 0)
+        .and_then(|naive| Local.from_local_datetime(&naive).earliest())
+        .map_or(0, |dt| dt.timestamp())
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 struct ChannelState {
@@ -288,22 +301,32 @@ struct ChannelState {
     /// TeamSpeak uid (stable across reconnects and restarts) and persisted to
     /// disk.
     welcomed: HashSet<String>,
-    /// Per-uid catch-up delta index (#3573): `history.len()` at the uid's
-    /// last catch-up, persisted to disk alongside `welcomed`. A uid absent
-    /// from this map has never been caught up (equivalent to `0`). See
-    /// `catchup_text_from` for how a stale or clamped value degrades — never
-    /// a crash, at worst a restart re-sends up to `CATCHUP_PM_COUNT` messages
-    /// a uid already saw, which is strictly better than the whole-window
-    /// re-blast an in-memory rate limit used to cause on every restart.
-    caught_up: HashMap<String, usize>,
     /// Clients whose join/move event fired before tsclientlib had populated
     /// their uid. `maybe_send_catchup` defers rather than falling back to a
     /// session-bound key; `handle_event`'s generic `PropertyChanged` arm
     /// retries everyone here on the next event.
     pending_catchup: HashSet<ClientId>,
-    /// #3573: suppress the catch-up recap for this bot instance (the
-    /// welcome PM still fires). Set from `--no-catchup` / `SEXTON_NO_CATCHUP`.
-    no_catchup: bool,
+    /// PHA-4917: the `dm` config block (welcome, digest, cooldown), from env.
+    dm: dm::DmConfig,
+    /// Persona-pack welcome copy.
+    template: dm::WelcomeTemplate,
+    /// What the bot calls itself in the welcome ({bot}).
+    bot_name: String,
+    /// Our own TS nickname (with the bot tag), for logging our channel replies.
+    own_nick: String,
+    /// What the welcome may claim; see `current_caps`.
+    caps_inputs: CapsInputs,
+    /// uid -> when the last update/returning-welcome DM was sent. Persisted.
+    notified: dm::UidClock,
+    /// uid -> earliest leave not yet covered by a DM. Persisted.
+    unreported_since: dm::UidClock,
+    /// uid -> spans spent in the channel since the last DM (their own lines).
+    present_spans: HashMap<String, dm::Spans>,
+    /// uid -> when they last entered the channel (open span).
+    present_since: HashMap<String, i64>,
+    /// Connected clients' uids by id, so a leave can be attributed after the
+    /// book entry is gone.
+    uid_of: HashMap<ClientId, String>,
     log_dir: PathBuf,
     /// Clients that were already connected when the bot came up — never PM'd
     /// on account of our own connect.
@@ -330,9 +353,17 @@ impl ChannelState {
             channel_name,
             history: VecDeque::with_capacity(HISTORY_CAP),
             welcomed: HashSet::new(),
-            caught_up: HashMap::new(),
+            dm: dm::DmConfig { catchup: !no_catchup, ..dm::DmConfig::default() },
+            template: dm::WelcomeTemplate::builtin(),
+            bot_name: "the Sexton".to_string(),
+            own_nick: String::new(),
+            caps_inputs: CapsInputs::default(),
+            notified: dm::UidClock::at(PathBuf::new()),
+            unreported_since: dm::UidClock::at(PathBuf::new()),
+            present_spans: HashMap::new(),
+            present_since: HashMap::new(),
+            uid_of: HashMap::new(),
             pending_catchup: HashSet::new(),
-            no_catchup,
             log_dir,
             preexisting,
             quiet_until: tokio::time::Instant::now() + STARTUP_GRACE,
@@ -343,7 +374,7 @@ impl ChannelState {
     fn push(&mut self, nickname: String, raw_message: &str) -> LoggedMessage {
         let text = sanitize_message(raw_message);
         let time_label = Local::now().format("%H:%M").to_string();
-        let entry = LoggedMessage { time_label, nickname, text };
+        let entry = LoggedMessage { ts: unix_now(), time_label, nickname, text };
         self.history.push_back(entry.clone());
         while self.history.len() > HISTORY_CAP {
             self.history.pop_front();
@@ -385,7 +416,10 @@ impl ChannelState {
                     continue;
                 }
                 match parse_log_line(line) {
-                    Some(entry) => parsed.push(entry),
+                    Some(mut entry) => {
+                        entry.ts = ts_from_log(day, &entry.time_label);
+                        parsed.push(entry);
+                    }
                     None => skipped += 1,
                 }
             }
@@ -467,103 +501,56 @@ impl ChannelState {
         Ok(())
     }
 
-    fn caught_up_path(&self) -> PathBuf {
-        self.log_dir.join(&self.channel_name).join(CAUGHT_UP_FILE)
-    }
-
-    /// Read back each uid's catch-up delta position (#3573). Fail-open by
-    /// contract, like `load_welcomed_from_disk`: a missing or unreadable
-    /// index costs everyone one full recap, never a failed connect.
-    fn load_caught_up_from_disk(&mut self) {
-        let path = self.caught_up_path();
-        match std::fs::read_to_string(&path) {
-            Ok(body) => {
-                for line in body.lines() {
-                    let Some((uid, count)) = line.split_once('\t') else { continue };
-                    let uid = uid.trim();
-                    if uid.is_empty() {
-                        continue;
-                    }
-                    if let Ok(count) = count.trim().parse::<usize>() {
-                        self.caught_up.insert(uid.to_string(), count);
-                    }
-                }
-                info!(
-                    known = self.caught_up.len(),
-                    path = %path.display(),
-                    "loaded the catch-up delta index"
-                );
-            }
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    warn!(
-                        error = %e,
-                        path = %path.display(),
-                        "reading the catch-up delta index failed; everyone may get a full recap once"
-                    );
-                }
-            }
-        }
-    }
-
-    /// Record that `uid` has been shown the history through `count` entries,
-    /// and persist the whole index — a value map, unlike the append-only
-    /// `.welcomed` list, since a uid's position changes on every catch-up
-    /// rather than only ever being added once.
-    fn remember_caught_up(&mut self, uid: String, count: usize) {
-        self.caught_up.insert(uid, count);
-        if let Err(e) = self.save_caught_up() {
-            warn!(
-                error = %e,
-                "saving the catch-up delta index failed; a restart may re-send up to the last {CATCHUP_PM_COUNT} messages"
-            );
-        }
-    }
-
-    /// Sorted by uid so the file is deterministic across writes (diffable,
-    /// and trivial to assert against in tests) — the map's own iteration
-    /// order is not.
-    fn save_caught_up(&self) -> Result<()> {
+    /// Point the two uid clocks at `<log dir>/<channel>/` and read them back.
+    fn load_dm_clocks(&mut self) {
         let dir = self.log_dir.join(&self.channel_name);
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating log dir {}", dir.display()))?;
-        let mut entries: Vec<(&String, &usize)> = self.caught_up.iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(b.0));
-        let mut body = String::new();
-        for (uid, count) in entries {
-            body.push_str(&format!("{uid}\t{count}\n"));
-        }
-        std::fs::write(self.caught_up_path(), body)
-            .with_context(|| format!("writing catch-up delta index {}", self.caught_up_path().display()))?;
-        Ok(())
+        self.notified = dm::UidClock::at(dir.join(dm::LASTNOTIFIED_FILE));
+        self.notified.load();
+        self.unreported_since = dm::UidClock::at(dir.join(dm::LASTLEFT_FILE));
+        self.unreported_since.load();
     }
 
-    /// Delta-rendered catch-up: only the messages not already covered by
-    /// `start` (a prior `history.len()`, `0` for a uid never caught up),
-    /// capped at the last `CATCHUP_PM_COUNT` regardless of how large the gap
-    /// is. Returns `None` when there is nothing new to send — the caller
-    /// sends no PM at all rather than an empty one (#3573).
-    ///
-    /// `history` is rebuilt fresh from the on-disk log on every restart
-    /// (never persisted itself, see `seed_history_from_disk`), so a `start`
-    /// saved before a restart is a lower bound at best against the rebuilt
-    /// ring. That is fine: worst case a restart re-sends up to
-    /// `CATCHUP_PM_COUNT` already-seen messages — never more, and strictly
-    /// better than the whole-window re-blast this replaces.
-    fn catchup_text_from(&self, start: usize) -> Option<String> {
-        let n = self.history.len();
-        if n == 0 {
-            return (start == 0).then(|| format!("Nothing logged yet in \"{}\".", self.channel_name));
+    /// `uid` is sitting in the channel from `now` on.
+    fn note_join(&mut self, uid: &str, now: i64) {
+        self.present_since.entry(uid.to_string()).or_insert(now);
+    }
+
+    /// `uid` stopped being in the channel. Closes their span and, if nothing
+    /// is outstanding, starts the clock on what they will have missed.
+    fn note_leave(&mut self, uid: &str, now: i64) {
+        if let Some(start) = self.present_since.remove(uid) {
+            self.present_spans.entry(uid.to_string()).or_default().push((start, now));
         }
-        let floor = n.saturating_sub(CATCHUP_PM_COUNT);
-        let effective_start = start.max(floor).min(n);
-        if effective_start >= n {
-            return None;
+        if self.unreported_since.get(uid).is_none() {
+            self.unreported_since.set(uid, now);
         }
-        let mut out = String::new();
-        for entry in self.history.iter().skip(effective_start) {
-            out.push_str(&entry.render_line());
-        }
-        Some(out)
+    }
+
+    /// The digest for `uid` as of `now`, or `None` when nothing was said that
+    /// they have not already seen.
+    fn digest_for(&self, uid: &str) -> Option<String> {
+        let since = self.unreported_since.get(uid).or_else(|| self.notified.get(uid))?;
+        let present = self.present_spans.get(uid).cloned().unwrap_or_default();
+        let rendered: Vec<String> = self.history.iter().map(|m| m.render_line()).collect();
+        let lines: Vec<dm::DigestLine> = self
+            .history
+            .iter()
+            .zip(rendered.iter())
+            .map(|(m, r)| dm::DigestLine { ts: m.ts, rendered: r, nickname: &m.nickname })
+            .collect();
+        dm::build_digest(&lines, since, &present, &self.dm)
+    }
+
+    /// A DM went out: restart the cooldown and forget what it covered.
+    fn mark_notified(&mut self, uid: &str, now: i64) {
+        self.notified.set(uid, now);
+        self.unreported_since.remove(uid);
+        self.present_spans.remove(uid);
+    }
+
+    fn current_caps(&self) -> dm::Caps {
+        let c = &self.caps_inputs;
+        dm::Caps::resolve(c.no_audio, &c.voice_mode, &c.voice_off_file, c.stream, c.music, self.dm.catchup)
     }
 
     fn append_disk_log(&self, entry: &LoggedMessage) -> Result<()> {
@@ -1230,9 +1217,6 @@ async fn run_once(
     .map_err(|e| anyhow!("joining channel: {e}"))?;
 
     let no_catchup = args.no_catchup || env_flag("SEXTON_NO_CATCHUP");
-    if no_catchup {
-        info!("SEXTON_NO_CATCHUP / --no-catchup set: catch-up recap PMs suppressed, welcome still fires");
-    }
     let mut state = ChannelState::new(
         channel_id,
         channel_name.clone(),
@@ -1240,6 +1224,27 @@ async fn run_once(
         preexisting,
         no_catchup,
     );
+    // PHA-4917: the `dm` block (stack.mjs resolves bots.json into env).
+    state.dm = dm::DmConfig::from_env(no_catchup);
+    info!(
+        welcome = state.dm.welcome,
+        catchup = state.dm.catchup,
+        cooldown_min = state.dm.cooldown_secs / 60,
+        quiet_notice = state.dm.quiet_notice,
+        include_bots = state.dm.include_bots,
+        max_lines = state.dm.max_lines,
+        "dm config"
+    );
+    state.own_nick = args.nickname.clone();
+    state.bot_name = std::env::var("SEXTON_BOT_NAME").ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| "the Sexton".to_string());
+    state.template = dm::WelcomeTemplate::load(std::env::var("SEXTON_WELCOME_FILE").ok().map(PathBuf::from).as_deref());
+    state.caps_inputs = CapsInputs {
+        no_audio: args.no_audio || env_flag("SEXTON_NO_AUDIO"),
+        voice_mode: std::env::var("SEXTON_VOICE_MODE").unwrap_or_default(),
+        voice_off_file: PathBuf::from(std::env::var("SEXTON_VOICE_OFF_FILE").unwrap_or_else(|_| "/config/.voice-off".to_string())),
+        stream: env_flag("SEXTON_CAP_STREAM"),
+        music: std::env::var("SEXTON_CAP_MUSIC").map(|v| v != "0").unwrap_or(true),
+    };
 
     // Rehydrate the ring from disk so a restart still has history to catch
     // joiners up with (#3217). The description is gone, but the catch-up PM
@@ -1249,9 +1254,9 @@ async fn run_once(
     // And who has already been introduced to the Sexton, so a restart does not
     // re-welcome the room (#3305).
     state.load_welcomed_from_disk();
-    // And each uid's catch-up delta position, so a restart does not re-blast
-    // the whole window either (#3573).
-    state.load_caught_up_from_disk();
+    // And the notification clock and unreported leaves, so a restart does not
+    // reset anyone's cooldown or forget what they missed (PHA-4917).
+    state.load_dm_clocks();
 
     // Kick off the avatar upload (if configured). We track the handle and
     // finish the two-step process (upload, then set_avatar_hash) once the
@@ -1346,8 +1351,24 @@ async fn run_once(
             }
             Wake::Cmd(cmd) => {
                 if let Some(cmd) = cmd {
+                    // PHA-4917: our own channel replies never come back as a
+                    // server Message event, so log them at send time or the
+                    // digest and `what_did_i_miss` show a question with no answer.
+                    let own_line = match &cmd {
+                        bridge_proto::BridgeCommand::SendText { target: bridge_proto::SendTarget::Channel, text } => {
+                            Some(text.clone())
+                        }
+                        _ => None,
+                    };
                     handle_bridge_command(&mut con, own_client_id, mixer, &mut audio_state, event_tx, cmd)
                         .await;
+                    if let Some(text) = own_line {
+                        let nick = state.own_nick.clone();
+                        let entry = state.push(nick, &text);
+                        if let Err(e) = state.append_disk_log(&entry) {
+                            error!(error = %e, "disk log append failed");
+                        }
+                    }
                 }
                 // `None` means every `cmd_tx` clone (the WS server's) is
                 // gone, which only happens if the WS server task itself
@@ -1526,8 +1547,23 @@ fn handle_event(
         // A client moved. If they moved INTO the watched channel (and it's
         // not us), send the catch-up PM. This is a plain move event, never a
         // join/leave/mute/away — those don't touch this path.
-        Event::PropertyChanged { id: PropertyId::ClientChannel(client_id), .. } => {
+        Event::PropertyChanged { id: PropertyId::ClientChannel(client_id), old, .. } => {
+            if matches!(old, tsclientlib::events::PropertyValue::ChannelId(c) if c == state.channel_id) {
+                let uid = con
+                    .get_state()
+                    .ok()
+                    .and_then(|s| s.clients.get(&client_id).and_then(|c| c.uid.as_ref().map(|u| u.to_string())));
+                note_client_left(state, client_id, uid);
+            }
             maybe_send_catchup(con, state, own_client_id, client_id);
+        }
+        // A client left the server altogether.
+        Event::PropertyRemoved { id: PropertyId::Client(client_id), old, .. } => {
+            let uid = match old {
+                tsclientlib::events::PropertyValue::Client(c) => c.uid.as_ref().map(|u| u.to_string()),
+                _ => None,
+            };
+            note_client_left(state, client_id, uid);
         }
         // Any other property change is a nudge to retry whoever is still
         // waiting on their uid (#3573) — tsclientlib does not always have
@@ -1583,66 +1619,70 @@ fn maybe_send_catchup(
     };
     state.pending_catchup.remove(&client_id);
 
-    // The announced notice (#3305): before this client's *first* catch-up,
-    // and only ever before the first, say what the Sexton is doing.
-    // #3818: a persona bot that isn't the Sexton (Lexton) must not greet
-    // joiners with "The Sexton keeps this hall." SEXTON_NO_WELCOME drops the
-    // welcome PM entirely, same env-flag convention as SEXTON_NO_CATCHUP.
-    if !state.welcomed.contains(&uid) && !env_flag("SEXTON_NO_WELCOME") {
-        match send_pm(con, client_id, WELCOME_PM) {
+    state.uid_of.insert(client_id, uid.clone());
+    // One join is one event, however many nudges retry it.
+    if state.present_since.contains_key(&uid) {
+        return;
+    }
+    let now = unix_now();
+    state.note_join(&uid, now);
+
+    // PHA-4917: at most one DM per join, and none at all unless it says
+    // something. A first-time uid gets the welcome (once, ever). A returning
+    // uid gets the greeting and the digest as one message, only when there is
+    // something new, and at most once per cooldown window, keyed on the uid
+    // (ClientId is reissued on every reconnect, which is how hops re-fired it).
+    if !state.welcomed.contains(&uid) {
+        if !state.dm.welcome {
+            return;
+        }
+        let text = state.template.first_time(&state.current_caps(), &state.bot_name);
+        match send_pm(con, client_id, &text) {
             Ok(handle) => {
-                info!(?client_id, %uid, "welcome PM sent");
+                info!(?client_id, %uid, "welcome PM sent (first time)");
                 state.pending_cmds.insert(handle.0, format!("welcome PM to {client_id:?}"));
                 state.remember_welcomed(uid.clone(), true);
+                state.mark_notified(&uid, now);
             }
-            // Not fatal, and deliberately not remembered: an unsent welcome
-            // should be retried on their next join, not marked as delivered.
+            // Not remembered: an unsent welcome is retried on their next join.
             Err(e) => warn!(error = %e, ?client_id, "welcome PM failed"),
         }
-    }
-
-    // #3573: a second bot instance in the same channel (Bexton) still
-    // sends the welcome above, but never the recap — otherwise a joiner gets
-    // the same recap twice, once from each bot.
-    if state.no_catchup {
         return;
     }
 
-    let start = state.caught_up.get(&uid).copied().unwrap_or(0);
-    match state.catchup_text_from(start) {
-        Some(text) => match send_pm(con, client_id, &text) {
-            Ok(handle) => {
-                info!(?client_id, "catch-up PM sent");
-                state.pending_cmds.insert(handle.0, format!("catch-up PM to {client_id:?}"));
-                // Only advance the index on a confirmed send: same rule the
-                // welcome PM above follows, and for the same reason — an
-                // unsent catch-up must be retried on the next join, not
-                // marked as delivered.
-                state.remember_caught_up(uid, state.history.len());
-            }
-            Err(e) => warn!(error = %e, ?client_id, "catch-up PM failed"),
-        },
-        // Nothing to send, so nothing to retry either — still worth
-        // normalising the stored position in case it predates a log
-        // rotation that shrank `history.len()`.
-        //
-        // #3830: a returning uid still gets one line, so silence doesn't
-        // read as a broken bot. A never-caught-up uid on an empty log already
-        // got the welcome above and has nothing to hear "since" anything.
+    if !state.dm.catchup {
+        return;
+    }
+    if state.notified.in_cooldown(&uid, now, state.dm.cooldown_secs) {
+        info!(?client_id, %uid, "inside the update cooldown; no DM (the next one after the window covers it)");
+        return;
+    }
+    let text = match state.digest_for(&uid) {
+        Some(digest) => state.template.returning(&state.current_caps(), &state.bot_name, &digest),
+        None if state.dm.quiet_notice => "All quiet since you left.".to_string(),
         None => {
-            if state.caught_up.contains_key(&uid) {
-                match send_pm(con, client_id, QUIET_PM) {
-                    Ok(handle) => {
-                        info!(?client_id, %uid, "nothing new since their last catch-up; all-quiet PM sent");
-                        state.pending_cmds.insert(handle.0, format!("all-quiet PM to {client_id:?}"));
-                    }
-                    Err(e) => warn!(error = %e, ?client_id, "all-quiet PM failed"),
-                }
-            } else {
-                info!(?client_id, %uid, "no history and no prior catch-up; skipping the PM");
-            }
-            state.remember_caught_up(uid, state.history.len());
+            info!(?client_id, %uid, "nothing new since they left; no DM");
+            return;
         }
+    };
+    match send_pm(con, client_id, &text) {
+        Ok(handle) => {
+            info!(?client_id, %uid, "returning-welcome PM sent");
+            state.pending_cmds.insert(handle.0, format!("update PM to {client_id:?}"));
+            state.mark_notified(&uid, now);
+        }
+        Err(e) => warn!(error = %e, ?client_id, "update PM failed"),
+    }
+}
+
+/// `client_id` is no longer in the watched channel (moved out or left the
+/// server). Closes their presence span so the digest knows what they missed.
+fn note_client_left(state: &mut ChannelState, client_id: ClientId, uid_hint: Option<String>) {
+    state.preexisting.remove(&client_id);
+    state.pending_catchup.remove(&client_id);
+    let uid = state.uid_of.remove(&client_id).or(uid_hint);
+    if let Some(uid) = uid {
+        state.note_leave(&uid, unix_now());
     }
 }
 
@@ -2121,6 +2161,7 @@ mod tests {
 
     fn msg(time: &str, nick: &str, text: &str) -> LoggedMessage {
         LoggedMessage {
+            ts: 0,
             time_label: time.to_string(),
             nickname: nick.to_string(),
             text: text.to_string(),
@@ -2164,7 +2205,17 @@ mod tests {
             false,
         );
         state.seed_history_from_disk();
-        state.history.into_iter().collect()
+        // Seeded lines carry a real timestamp (the digest windows on it); the
+        // tests below compare content, so check it here and zero it.
+        state
+            .history
+            .into_iter()
+            .map(|mut m| {
+                assert!(m.ts > 0, "a seeded line has no timestamp: {m:?}");
+                m.ts = 0;
+                m
+            })
+            .collect()
     }
 
     /// A scratch dir under the OS temp dir, keyed by test name so parallel
@@ -2244,24 +2295,6 @@ mod tests {
         ChannelState::new(ChannelId(0), channel.to_string(), dir.to_path_buf(), HashSet::new(), false)
     }
 
-    /// The welcome PM is one line, by Brandon's call on #3428 item 5. The
-    /// staging guards below outlive the staged wording: they exist so a
-    /// well-meaning edit cannot quietly add a promise the Sexton does not keep.
-    #[test]
-    fn the_welcome_pm_is_stage_one_and_carries_nothing_from_stage_two() {
-        assert_eq!(WELCOME_PM, "The Sexton keeps this hall.");
-
-        // #3424 removed the rolling channel description; the welcome must
-        // not keep pointing people at it.
-        assert!(!WELCOME_PM.contains("description"), "welcome still points at the description");
-
-        // #3228 has not landed: nothing here may promise voice, or that the
-        // voice never leaves the box.
-        for stage_two in ["out loud", "listening", "voice", "say my name"] {
-            assert!(!WELCOME_PM.contains(stage_two), "stage-2 wording {stage_two:?} in the welcome");
-        }
-    }
-
     #[test]
     fn the_welcome_goes_out_once_and_stays_out_across_a_restart() {
         let dir = scratch("welcomed");
@@ -2301,107 +2334,65 @@ mod tests {
         assert!(restarted.welcomed.is_empty(), "a runtime client id was persisted");
     }
 
-    /// `start` at (or past) the current history length means the uid has
-    /// already seen everything: no PM at all, not an empty one (#3573,
-    /// replacing the old in-memory rate limit's job).
-    #[test]
-    fn catchup_text_from_with_full_coverage_is_empty() {
-        let mut state = state_in(&scratch("catchup-full-coverage"), "chan");
-        for i in 0..5 {
-            state.push("nick".to_string(), &format!("message {i}"));
-        }
-        let n = state.history.len();
-        assert!(state.catchup_text_from(n).is_none(), "full coverage must skip the PM entirely");
+    fn push_at(state: &mut ChannelState, ts: i64, nick: &str, text: &str) {
+        let e = state.push(nick.to_string(), text);
+        state.history.back_mut().unwrap().ts = ts;
+        let _ = e;
     }
 
-    /// The normal case: a uid rejoins after missing a handful of messages and
-    /// gets exactly those, not the last 15 and not the ones it already saw.
+    /// PHA-4917 criteria 3-5: lines since the user left, bots included, lines
+    /// said while they were present excluded; nothing new means no digest.
     #[test]
-    fn catchup_text_from_sends_only_new_messages_since_start() {
-        let mut state = state_in(&scratch("catchup-delta"), "chan");
-        for i in 0..5 {
-            state.push("nick".to_string(), &format!("message {i}"));
-        }
-        let text = state.catchup_text_from(3).expect("2 new messages exist");
-        for already_seen in ["message 0", "message 1", "message 2"] {
-            assert!(!text.contains(already_seen), "{already_seen:?} was already seen");
-        }
-        for new in ["message 3", "message 4"] {
-            assert!(text.contains(new), "{new:?} is new and must be included");
-        }
+    fn digest_covers_only_what_was_missed_and_includes_bots() {
+        let mut state = state_in(&scratch("digest-missed"), "chan");
+        let uid = "uidA=";
+        push_at(&mut state, 100, "Kyle", "before they left");
+        state.note_join(uid, 50);
+        state.note_leave(uid, 110);
+        assert_eq!(state.digest_for(uid), None, "nothing said since they left");
+        push_at(&mut state, 120, "Kyle", "anyone up for cs");
+        push_at(&mut state, 130, "Ledger [BOT]", "Now playing");
+        let d = state.digest_for(uid).expect("two new lines");
+        assert!(d.contains("Kyle: anyone up for cs") && d.contains("Ledger [BOT]: Now playing"));
+        assert!(!d.contains("before they left"));
     }
 
-    /// A uid never caught up (`start == 0`) gets the same last-15 window the
-    /// old unconditional `catchup_text` always sent — the "brand new joiner"
-    /// case must not regress into an unbounded dump of the whole channel.
+    /// A hop inside the cooldown sends nothing, and the lines are not lost: the
+    /// next DM covers the first absence too, but not the time spent present.
     #[test]
-    fn catchup_text_from_zero_returns_last_15() {
-        let mut state = state_in(&scratch("catchup-zero"), "chan");
-        for i in 0..40 {
-            state.push("nick".to_string(), &format!("message {i:03}"));
-        }
-        let text = state.catchup_text_from(0).expect("history is not empty");
-        assert_eq!(text.lines().count(), CATCHUP_PM_COUNT);
-        assert!(text.contains("message 039"), "must include the newest message");
-        assert!(text.contains("message 025"), "must include exactly the last 15");
-        assert!(!text.contains("message 024"), "must not include more than the last 15");
-    }
-
-    /// Regression target for #3573: the whole point of persisting the
-    /// index is that a bot restart does not forget a uid's position and
-    /// re-blast the window, the way the in-memory-only rate limit used to.
-    #[test]
-    fn caught_up_survives_restart() {
-        let dir = scratch("caught-up-restart");
-        let channel = "chan";
-        let uid = "aQm5FQ0RfBBBhP0Cw0S1FCxjnbg=".to_string();
-
-        let mut state = state_in(&dir, channel);
-        for i in 0..5 {
-            state.push("nick".to_string(), &format!("message {i}"));
-        }
-        assert!(state.caught_up.get(&uid).is_none(), "nothing caught up on a cold start");
-        state.remember_caught_up(uid.clone(), state.history.len());
-        assert_eq!(state.caught_up.get(&uid), Some(&5));
-
-        // A restart: fresh state, same log dir.
-        let mut restarted = state_in(&dir, channel);
-        restarted.load_caught_up_from_disk();
-        assert_eq!(restarted.caught_up.get(&uid), Some(&5), "restart forgot the uid's position");
+    fn a_skipped_join_does_not_lose_lines_or_include_present_ones() {
+        let mut state = state_in(&scratch("digest-hop"), "chan");
+        let uid = "uidA=";
+        state.note_join(uid, 0);
+        state.note_leave(uid, 10);
+        push_at(&mut state, 15, "Kyle", "said while away one");
+        state.note_join(uid, 20); // rejoined inside the cooldown: no DM
+        push_at(&mut state, 25, "Kyle", "said while present");
+        state.note_leave(uid, 30);
+        push_at(&mut state, 35, "Kyle", "said while away two");
+        let d = state.digest_for(uid).unwrap();
+        assert!(d.contains("away one") && d.contains("away two"));
+        assert!(!d.contains("while present"));
+        state.mark_notified(uid, 40);
+        assert_eq!(state.digest_for(uid), None, "a sent DM clears the debt");
     }
 
     #[test]
-    fn an_unreadable_caught_up_file_is_fail_open() {
-        // A directory where the index file should be: read_to_string errors
-        // and the bot must still connect, at the cost of one repeated recap.
-        let dir = scratch("caught-up-unreadable");
-        let channel = "chan";
-        std::fs::create_dir_all(dir.join(channel).join(CAUGHT_UP_FILE)).unwrap();
-        let mut state = state_in(&dir, channel);
-        state.load_caught_up_from_disk();
-        assert!(state.caught_up.is_empty());
-    }
-
-    #[test]
-    fn missing_caught_up_file_is_fail_open() {
-        let dir = scratch("caught-up-missing");
+    fn the_notification_clock_survives_a_restart_and_is_keyed_on_uid() {
+        let dir = scratch("notified-restart");
         let mut state = state_in(&dir, "chan");
-        state.load_caught_up_from_disk();
-        assert!(state.caught_up.is_empty());
-    }
+        state.load_dm_clocks();
+        state.mark_notified("uidA=", 1_000);
+        state.note_leave("uidA=", 2_000);
 
-    #[test]
-    fn caught_up_save_is_sorted_by_uid() {
-        let dir = scratch("caught-up-sorted");
-        let channel = "chan";
-        let mut state = state_in(&dir, channel);
-        state.remember_caught_up("zzz-last".to_string(), 3);
-        state.remember_caught_up("aaa-first".to_string(), 7);
-        state.remember_caught_up("mmm-middle".to_string(), 1);
-
-        let body = std::fs::read_to_string(dir.join(channel).join(CAUGHT_UP_FILE)).unwrap();
-        let uids: Vec<&str> = body.lines().map(|l| l.split('\t').next().unwrap()).collect();
-        assert_eq!(uids, vec!["aaa-first", "mmm-middle", "zzz-last"]);
+        let mut restarted = state_in(&dir, "chan");
+        restarted.load_dm_clocks();
+        let window = restarted.dm.cooldown_secs;
+        assert_eq!(window, 240 * 60);
+        assert!(restarted.notified.in_cooldown("uidA=", 1_000 + 300, window));
+        assert!(!restarted.notified.in_cooldown("uidA=", 1_000 + window, window));
+        assert!(!restarted.notified.in_cooldown("uidB=", 1_300, window));
+        assert_eq!(restarted.unreported_since.get("uidA="), Some(2_000));
     }
 
     /// `SEXTON_NO_CATCHUP` is exported by the Bexton deploy config as `1`,
