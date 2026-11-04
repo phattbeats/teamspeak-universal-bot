@@ -1,0 +1,630 @@
+//! PHA-3289 stream watcher + headless receive test.
+//!
+//! Sits in Lobby as a fixed identity. When a TS6 screen share starts in its
+//! own channel it joins, hands the WebRTC offer to a Python/aiortc viewer
+//! helper over stdin/stdout JSON lines, relays the viewer's answer and ICE as
+//! legacy `streamsignaling` text commands, captures one video frame + ~10s of
+//! audio, logs the negotiated codec/resolution/ICE pair, then hangs up.
+//!
+//! Raw text hook: a tsproto `Event::ReceivePacket`/`SendPacket` listener on the
+//! raw connection (tsclientlib `unstable` feature) sees every reassembled,
+//! decompressed command before tsclientlib parses (and drops) the TS6-only
+//! notifystream*/error frames. Full raw text incl. long offer/json is logged.
+
+use std::collections::{HashMap, HashSet};
+use std::io::Write as _;
+use std::process::Stdio;
+use std::time::{Duration as StdDuration, Instant};
+
+use anyhow::{anyhow, Result};
+use clap::Parser;
+use futures::prelude::*;
+use serde_json::json;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, Command};
+use tokio::sync::mpsc;
+
+use tsclientlib::messages::c2s::{OutClientMoveMessage, OutClientMovePart};
+use tsclientlib::prelude::*;
+use tsclientlib::{ChannelId, ClientId, Connection, Identity, StreamItem};
+use tsproto::connection::Event as RawEvent;
+use tsproto_packets::packets::{Direction, Flags, OutCommand, PacketType};
+
+/// Answer shapes to try, one per stream id, advancing only when a capture
+/// produced no media. (cmd, args-key).
+const VARIANTS: &[(&str, &str)] =
+    &[("answer", "answer"), ("answer", "sdp")];
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short = 'a', long, default_value = "teamspeak6-server:9987")]
+    address: String,
+    #[arg(short = 'n', long, default_value = "PLNT stream probe")]
+    nickname: String,
+    #[arg(short = 'c', long, default_value = "Lobby")]
+    channel: String,
+    #[arg(long, default_value = "/data/watch/identity.txt")]
+    identity_file: String,
+    #[arg(long, default_value = "/data/watch.log")]
+    log_file: String,
+    #[arg(long, default_value = "/data/capture")]
+    capture_dir: String,
+    #[arg(long, env = "VIEWER_PY", default_value = "python3")]
+    viewer_py: String,
+    #[arg(long, env = "VIEWER_SCRIPT", default_value = "/data/watch/viewer.py")]
+    viewer_script: String,
+    #[arg(long, default_value_t = 30)]
+    poll_seconds: u64,
+    #[arg(long, default_value_t = 2000)]
+    cmd_gap_ms: u64,
+    /// Hard cap on a single capture before forced hang-up.
+    #[arg(long, default_value_t = 90)]
+    capture_cap_seconds: u64,
+}
+
+struct Log(std::fs::File);
+impl Log {
+    fn line(&mut self, tag: &str, s: &str) {
+        let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let _ = writeln!(self.0, "{ts} {tag} {s}");
+        let _ = self.0.flush();
+        println!("{ts} {tag} {}", s.chars().take(300).collect::<String>());
+    }
+}
+
+fn unescape(v: &str) -> String {
+    let mut o = String::new();
+    let mut it = v.chars();
+    while let Some(c) = it.next() {
+        if c == '\\' {
+            match it.next() {
+                Some('s') => o.push(' '),
+                Some('p') => o.push('|'),
+                Some('/') => o.push('/'),
+                Some('n') => o.push('\n'),
+                Some('r') => o.push('\r'),
+                Some('t') => o.push('\t'),
+                Some('v') => o.push('\x0b'),
+                Some('f') => o.push('\x0c'),
+                Some('a') => o.push('\x07'),
+                Some('b') => o.push('\x08'),
+                Some(x) => o.push(x),
+                None => {}
+            }
+        } else {
+            o.push(c)
+        }
+    }
+    o
+}
+
+fn ts_escape(v: &str) -> String {
+    let mut o = String::new();
+    for c in v.chars() {
+        match c {
+            '\\' => o.push_str("\\\\"),
+            '/' => o.push_str("\\/"),
+            ' ' => o.push_str("\\s"),
+            '|' => o.push_str("\\p"),
+            '\n' => o.push_str("\\n"),
+            '\r' => o.push_str("\\r"),
+            '\t' => o.push_str("\\t"),
+            '\x0b' => o.push_str("\\v"),
+            '\x0c' => o.push_str("\\f"),
+            '\x07' => o.push_str("\\a"),
+            '\x08' => o.push_str("\\b"),
+            c => o.push(c),
+        }
+    }
+    o
+}
+
+/// Split "name k=v k=v|k=v" into (name, parts).
+fn parse_cmd(raw: &str) -> (String, Vec<HashMap<String, String>>) {
+    let mut name = String::new();
+    let mut parts = vec![HashMap::new()];
+    for (pi, part) in raw.split('|').enumerate() {
+        if pi > 0 {
+            parts.push(HashMap::new());
+        }
+        for (i, tok) in part.split(' ').enumerate() {
+            if pi == 0 && i == 0 && !tok.contains('=') {
+                name = tok.to_string();
+                continue;
+            }
+            if tok.is_empty() {
+                continue;
+            }
+            let (k, v) = tok.split_once('=').unwrap_or((tok, ""));
+            parts.last_mut().unwrap().insert(k.to_string(), unescape(v));
+        }
+    }
+    (name, parts)
+}
+
+fn load_identity(path: &str, log: &mut Log) -> Result<Identity> {
+    if let Ok(s) = std::fs::read_to_string(path) {
+        let s = s.trim();
+        if !s.is_empty() {
+            let id = Identity::new_from_str(s).map_err(|e| anyhow!("parse identity: {e:?}"))?;
+            log.line("INFO", &format!("loaded identity from {path}"));
+            return Ok(id);
+        }
+    }
+    if let Some(p) = std::path::Path::new(path).parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    let id = Identity::create();
+    let s = format!("{}V{}", id.counter(), id.key().to_ts());
+    std::fs::write(path, &s)?;
+    log.line("INFO", &format!("created new identity, saved to {path}"));
+    Ok(id)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+    let args = Args::parse();
+    let _ = std::fs::create_dir_all(&args.capture_dir);
+    let f = std::fs::OpenOptions::new().create(true).append(true).open(&args.log_file)?;
+    let mut log = Log(f);
+    let identity = load_identity(&args.identity_file, &mut log)?;
+    let mut shared = Shared { joined: HashSet::new(), next_variant: 0 };
+    let mut backoff = 5u64;
+    loop {
+        let started = Instant::now();
+        match session(&args, identity.clone(), &mut log, &mut shared).await {
+            Ok(()) => log.line("WARN", "session ended"),
+            Err(e) => log.line("WARN", &format!("session error: {e}")),
+        }
+        if started.elapsed() > StdDuration::from_secs(300) {
+            backoff = 5;
+        }
+        log.line("INFO", &format!("reconnecting in {backoff}s"));
+        tokio::time::sleep(StdDuration::from_secs(backoff)).await;
+        backoff = (backoff * 2).min(300);
+    }
+}
+
+/// Survives reconnects.
+struct Shared {
+    joined: HashSet<String>,
+    next_variant: usize,
+}
+
+enum Pending {
+    Info(u16),
+    Join { id: String, clid: u16 },
+    Raw(String),
+}
+
+struct Capture {
+    sid: String,
+    clid: u16,
+    variant: usize,
+    stdin: ChildStdin,
+    child: Child,
+    started: Instant,
+    got_media: bool,
+    answered: bool,
+}
+
+struct State {
+    own: ClientId,
+    lobby: Option<ChannelId>,
+    rc_to_clid: HashMap<String, u16>,
+    queue: Vec<Pending>,
+    last_send: Instant,
+    next_poll: Instant,
+    next_rc: u16,
+    capture: Option<Capture>,
+}
+
+async fn session(
+    args: &Args, identity: Identity, log: &mut Log, shared: &mut Shared,
+) -> Result<()> {
+    log.line("INFO", &format!("connecting to {} as {:?}", args.address, args.nickname));
+    let mut con = Connection::build(args.address.clone())
+        .identity(identity)
+        .name(args.nickname.clone())
+        .connect()
+        .map_err(|e| anyhow!("connect: {e}"))?;
+    loop {
+        match tokio::time::timeout(StdDuration::from_secs(30), con.events().next()).await {
+            Ok(Some(Ok(StreamItem::BookEvents(_)))) => break,
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(e))) => return Err(anyhow!("connect wait: {e}")),
+            Ok(None) => return Err(anyhow!("stream ended before connect")),
+            Err(_) => return Err(anyhow!("connect timeout")),
+        }
+    }
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<(bool, String)>();
+    {
+        let raw = con.get_tsproto_client_mut().map_err(|e| anyhow!("raw client: {e}"))?;
+        raw.event_listeners.push(Box::new(move |ev: &RawEvent| match ev {
+            RawEvent::ReceivePacket(p) if p.header().packet_type().is_command() => {
+                let _ = tx.send((true, String::from_utf8_lossy(p.content()).into_owned()));
+            }
+            RawEvent::SendPacket(p) if p.header().packet_type().is_command() => {
+                let _ = tx.send((false, String::from_utf8_lossy(p.content()).into_owned()));
+            }
+            _ => {}
+        }));
+    }
+    let own = con.get_state().map_err(|e| anyhow!("{e}"))?.own_client;
+    log.line("INFO", &format!("connected, own clid={}", own.0));
+    {
+        let st0 = con.get_state().map_err(|e| anyhow!("{e}"))?;
+        st0.server.set_subscribed(true).send(&mut con).map_err(|e| anyhow!("{e}"))?;
+    }
+
+    // Child stdout lines: (sid, json-line | __EOF__ | __ERR__..).
+    let (child_tx, mut child_rx) = mpsc::unbounded_channel::<(String, String)>();
+
+    let mut st = State {
+        own,
+        lobby: None,
+        rc_to_clid: HashMap::new(),
+        queue: Vec::new(),
+        last_send: Instant::now(),
+        next_poll: Instant::now() + StdDuration::from_secs(5),
+        next_rc: 60000,
+        capture: None,
+    };
+
+    loop {
+        match tokio::time::timeout(StdDuration::from_millis(200), con.events().next()).await {
+            Ok(Some(Ok(StreamItem::DisconnectedTemporarily(r)))) => {
+                return Err(anyhow!("disconnected temporarily: {r:?}"));
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(e))) => return Err(anyhow!("event stream: {e}")),
+            Ok(None) => return Ok(()),
+            Err(_) => {}
+        }
+
+        while let Ok((inbound, text)) = rx.try_recv() {
+            handle_raw(args, log, &mut st, shared, &child_tx, inbound, &text).await;
+        }
+        while let Ok((sid, line)) = child_rx.try_recv() {
+            handle_child(log, &mut st, shared, &sid, &line);
+        }
+
+        // Join Lobby once it appears.
+        if st.lobby.is_none() {
+            let cid = con
+                .get_state()
+                .map_err(|e| anyhow!("{e}"))?
+                .channels
+                .iter()
+                .find(|(_, c)| c.name == args.channel)
+                .map(|(id, _)| *id);
+            if let Some(cid) = cid {
+                OutClientMoveMessage::new(&mut std::iter::once(OutClientMovePart {
+                    client_id: own,
+                    channel_id: cid,
+                    channel_password: None,
+                }))
+                .send(&mut con)
+                .map_err(|e| anyhow!("{e}"))?;
+                st.lobby = Some(cid);
+                st.last_send = Instant::now();
+                log.line("INFO", &format!("moved to {:?} cid={}", args.channel, cid.0));
+            }
+        }
+
+        // Forced hang-up if a capture overran.
+        let overran = st
+            .capture
+            .as_ref()
+            .map(|c| c.started.elapsed() > StdDuration::from_secs(args.capture_cap_seconds))
+            .unwrap_or(false);
+        if overran {
+            log.line("WARN", "capture overran, forcing hangup");
+            finish_capture(log, &mut st, shared);
+        }
+
+        // Poll requeststreaminfo for clients in our channel (only when idle).
+        if Instant::now() >= st.next_poll && st.queue.is_empty() && st.capture.is_none() {
+            let state = con.get_state().map_err(|e| anyhow!("{e}"))?;
+            let mut clids: Vec<u16> = state
+                .clients
+                .iter()
+                .filter(|(id, c)| **id != own && Some(c.channel) == st.lobby)
+                .map(|(id, _)| id.0)
+                .collect();
+            clids.sort();
+            for c in clids {
+                st.queue.push(Pending::Info(c));
+            }
+            st.next_poll = Instant::now() + StdDuration::from_secs(args.poll_seconds);
+        }
+
+        if !st.queue.is_empty()
+            && st.last_send.elapsed() >= StdDuration::from_millis(args.cmd_gap_ms)
+        {
+            let p = st.queue.remove(0);
+            let rc = st.next_rc;
+            st.next_rc = st.next_rc.wrapping_add(1).max(60000);
+            let (text, log_it) = match &p {
+                Pending::Info(c) => {
+                    st.rc_to_clid.insert(rc.to_string(), *c);
+                    (format!("requeststreaminfo clid={c} return_code={rc}"), false)
+                }
+                Pending::Join { id, clid } => (
+                    format!(
+                        "joinstreamrequest id={} clid={clid} msg=PLNT\\sprobe is_remove=0 return_code={rc}",
+                        ts_escape(id)
+                    ),
+                    true,
+                ),
+                Pending::Raw(t) => (format!("{t} return_code={rc}"), true),
+            };
+            if text.len() > 8000 {
+                log.line("WARN", &format!("command {} bytes exceeds ~8KB limit", text.len()));
+            }
+            let cmd = OutCommand::new(Direction::C2S, Flags::empty(), PacketType::Command, &text);
+            cmd.send(&mut con).map_err(|e| anyhow!("send: {e}"))?;
+            st.last_send = Instant::now();
+            if log_it {
+                log.line("OUT", &text);
+            }
+        }
+    }
+}
+
+async fn handle_raw(
+    args: &Args, log: &mut Log, st: &mut State, shared: &mut Shared,
+    child_tx: &mpsc::UnboundedSender<(String, String)>, inbound: bool, text: &str,
+) {
+    if !inbound {
+        return; // our own sends are already logged at send time
+    }
+    let name = text.split(|c| c == ' ' || c == '|').next().unwrap_or("").to_string();
+    let capturing = st.capture.is_some();
+    let streamish = name.starts_with("notifystream")
+        || name.starts_with("notifyjoinstream")
+        || name.starts_with("notifyrespondjoinstream");
+
+    let (_, parts) = parse_cmd(text);
+    let first = parts.first().cloned().unwrap_or_default();
+    let is_err = name == "error";
+    let quiet_poll = (name == "notifystreaminfo" && first.keys().all(|k| k == "return_code"))
+        || (is_err
+            && first.get("id").map(|s| s.as_str()) == Some("0")
+            && first.get("return_code").map(|r| st.rc_to_clid.contains_key(r)).unwrap_or(false));
+
+    if capturing || (streamish && !quiet_poll) || (is_err && !quiet_poll) {
+        log.line(if capturing { "IN*" } else { "IN" }, text);
+    }
+
+    // Discovery: schedule a join once per new stream in our channel.
+    if name == "notifystreamstarted" || name == "notifystreaminfo" || name == "notifystreamupdated"
+    {
+        for p in &parts {
+            let id = p.get("id").or_else(|| p.get("stream_id")).or_else(|| p.get("streamid"));
+            let clid = p
+                .get("clid")
+                .or_else(|| p.get("streamer_clid"))
+                .and_then(|c| c.parse::<u16>().ok())
+                .or_else(|| first.get("return_code").and_then(|r| st.rc_to_clid.get(r)).copied());
+            if let (Some(id), Some(clid)) = (id, clid) {
+                if clid != st.own.0 && !shared.joined.contains(id) && st.capture.is_none() {
+                    shared.joined.insert(id.clone());
+                    log.line("INFO", &format!("new stream id={id} streamer clid={clid} -> join"));
+                    st.queue.insert(0, Pending::Join { id: id.clone(), clid });
+                }
+            }
+        }
+    }
+
+    // Offer -> spawn viewer.
+    if name == "notifyrespondjoinstreamrequest" {
+        let approved = first.get("decision").map(|d| d == "1").unwrap_or(false);
+        let id = first.get("id").cloned();
+        let clid = first.get("clid").and_then(|c| c.parse::<u16>().ok()).unwrap_or(0);
+        let offer = first.get("offer").cloned();
+        if approved {
+            match (id, offer) {
+                (Some(id), Some(offer)) if st.capture.is_none() => {
+                    match spawn_viewer(args, log, child_tx, &id, clid, &offer).await {
+                        Ok(cap) => st.capture = Some(cap),
+                        Err(e) => log.line("WARN", &format!("spawn viewer failed: {e}")),
+                    }
+                }
+                _ => log.line("WARN", "approved join but no usable offer / already capturing"),
+            }
+        }
+    }
+
+    // Remote ICE and any other streamer reactions.
+    if name == "notifystreamsignaling" {
+        if let Some(cap) = &mut st.capture {
+            if let Some(js) = first.get("json") {
+                match serde_json::from_str::<serde_json::Value>(js) {
+                    Ok(v) => {
+                        let cmd = v.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
+                        if cmd == "iceCandidate" {
+                            let a = &v["args"];
+                            let line = json!({
+                                "type": "candidate",
+                                "candidate": a.get("sdp").and_then(|x| x.as_str()).unwrap_or(""),
+                                "mid": a.get("mid").and_then(|x| x.as_str()),
+                                "mLine": a.get("mLine").and_then(|x| x.as_i64()).unwrap_or(0),
+                            })
+                            .to_string();
+                            let _ = cap.stdin.write_all(line.as_bytes()).await;
+                            let _ = cap.stdin.write_all(b"\n").await;
+                            let _ = cap.stdin.flush().await;
+                        } else {
+                            log.line("INFO", &format!("streamer signaling cmd={cmd}: {v}"));
+                        }
+                    }
+                    Err(e) => log.line("WARN", &format!("bad signaling json: {e}")),
+                }
+            }
+        }
+    }
+}
+
+async fn spawn_viewer(
+    args: &Args, log: &mut Log, child_tx: &mpsc::UnboundedSender<(String, String)>, sid: &str,
+    clid: u16, offer_sdp: &str,
+) -> Result<Capture> {
+    let mut child = Command::new(&args.viewer_py)
+        .arg(&args.viewer_script)
+        .arg("--sid")
+        .arg(sid)
+        .arg("--outdir")
+        .arg(&args.capture_dir)
+        .arg("--first-media-timeout")
+        .arg("20")
+        .arg("--media-seconds")
+        .arg("30")
+        .arg("--audio-seconds")
+        .arg("10")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| anyhow!("spawn {}: {e}", args.viewer_py))?;
+
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    let offer_line = json!({"type": "offer", "sdp": offer_sdp}).to_string();
+    stdin.write_all(offer_line.as_bytes()).await?;
+    stdin.write_all(b"\n").await?;
+    stdin.flush().await?;
+
+    let tx = child_tx.clone();
+    let sid1 = sid.to_string();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = tx.send((sid1.clone(), line));
+        }
+        let _ = tx.send((sid1.clone(), "__EOF__".to_string()));
+    });
+    let tx2 = child_tx.clone();
+    let sid2 = sid.to_string();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = tx2.send((sid2.clone(), format!("__ERR__{line}")));
+        }
+    });
+
+    log.line("INFO", &format!("spawned viewer for sid={sid} clid={clid}"));
+    Ok(Capture {
+        sid: sid.to_string(),
+        clid,
+        variant: 0,
+        stdin,
+        child,
+        started: Instant::now(),
+        got_media: false,
+        answered: false,
+    })
+}
+
+fn handle_child(log: &mut Log, st: &mut State, shared: &mut Shared, sid: &str, line: &str) {
+    let active = st.capture.as_ref().map(|c| c.sid == sid).unwrap_or(false);
+    if !active {
+        return;
+    }
+    if line == "__EOF__" {
+        log.line("INFO", &format!("viewer sid={sid} exited"));
+        finish_capture(log, st, shared);
+        return;
+    }
+    if let Some(rest) = line.strip_prefix("__ERR__") {
+        log.line("PYERR", rest);
+        return;
+    }
+    let v: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => {
+            log.line("PY", line);
+            return;
+        }
+    };
+    match v.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+        "log" => log.line("PY", v.get("msg").and_then(|m| m.as_str()).unwrap_or("")),
+        "media" => {
+            if let Some(cap) = &mut st.capture {
+                cap.got_media = true;
+            }
+            log.line(
+                "PY",
+                &format!("MEDIA {}", v.get("kind").and_then(|k| k.as_str()).unwrap_or("")),
+            );
+        }
+        "result" => log.line("PY", &format!("RESULT {v}")),
+        "answer" => {
+            let sdp = v.get("sdp").and_then(|s| s.as_str()).unwrap_or("").to_string();
+            let (clid, variant) = match &mut st.capture {
+                Some(c) => {
+                    c.answered = true;
+                    c.variant = shared.next_variant % VARIANTS.len();
+                    (c.clid, c.variant)
+                }
+                None => return,
+            };
+            let (cmd, keyname) = VARIANTS[variant];
+            let payload = json!({"cmd": cmd, "args": {keyname: sdp}}).to_string();
+            let text = format!(
+                "streamsignaling id={} clid={clid} json={}",
+                ts_escape(sid),
+                ts_escape(&payload)
+            );
+            log.line(
+                "INFO",
+                &format!(
+                    "sending answer variant {variant} cmd={cmd} key={keyname} ({} bytes)",
+                    text.len()
+                ),
+            );
+            st.queue.push(Pending::Raw(text));
+        }
+        _ => {}
+    }
+}
+
+fn finish_capture(log: &mut Log, st: &mut State, shared: &mut Shared) {
+    if let Some(mut cap) = st.capture.take() {
+        let _ = cap.child.start_kill();
+        if cap.answered && !cap.got_media {
+            shared.next_variant = shared.next_variant.wrapping_add(1);
+            log.line(
+                "INFO",
+                &format!(
+                    "no media for sid={} (variant {}); next stream tries variant {}",
+                    cap.sid,
+                    cap.variant,
+                    shared.next_variant % VARIANTS.len()
+                ),
+            );
+        } else if cap.got_media {
+            log.line("INFO", &format!("capture ok sid={} variant={}", cap.sid, cap.variant));
+        } else {
+            log.line("INFO", &format!("capture sid={} ended before answer", cap.sid));
+        }
+        // Hang up both ways we know work.
+        st.queue.push(Pending::Raw(format!(
+            "joinstreamrequest id={} clid={} msg=PLNT\\sprobe is_remove=1",
+            ts_escape(&cap.sid),
+            cap.clid
+        )));
+        st.queue.push(Pending::Raw(format!(
+            "removeclientfromstream id={} clid={} reason=1",
+            ts_escape(&cap.sid),
+            st.own.0
+        )));
+    }
+}

@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+# PHA-3289 headless TS6 screen-share viewer.
+#
+# JSON lines on stdin:
+#   {"type":"offer","sdp": "..."}
+#   {"type":"candidate","candidate":"candidate:...","mid":"0","mLine":0}
+#   {"type":"stop"}
+# JSON lines on stdout:
+#   {"type":"answer","sdp":"..."}       non-trickle: candidates already inline
+#   {"type":"log","msg":"..."}
+#   {"type":"media","kind":"video|audio"}
+#   {"type":"result", ...}
+#   {"type":"done"}
+import argparse
+import asyncio
+import json
+import os
+import sys
+import wave
+
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
+from aiortc.sdp import candidate_from_sdp
+
+try:
+    from av import VideoFrame  # noqa
+    HAVE_AV = True
+except Exception:
+    HAVE_AV = False
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def log(msg):
+    emit({"type": "log", "msg": str(msg)})
+
+
+async def stdin_lines():
+    loop = asyncio.get_event_loop()
+    reader = asyncio.StreamReader()
+    await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
+    while True:
+        raw = await reader.readline()
+        if not raw:
+            return
+        line = raw.decode().strip()
+        if line:
+            yield line
+
+
+async def run(a):
+    os.makedirs(a.outdir, exist_ok=True)
+    pc = RTCPeerConnection(
+        RTCConfiguration(iceServers=[RTCIceServer("stun:stun.l.google.com:19302")])
+    )
+    first_media = asyncio.Event()
+    info = {"sid": a.sid, "video_codec": None, "audio_codec": None,
+            "width": None, "height": None, "frames": 0, "frame_saved": False}
+
+    async def consume_video(track):
+        end = None
+        while True:
+            try:
+                frame = await track.recv()
+            except Exception as e:
+                log("video ended: %r" % e)
+                return
+            info["frames"] += 1
+            if not first_media.is_set():
+                first_media.set()
+                emit({"type": "media", "kind": "video"})
+            if not info["frame_saved"]:
+                try:
+                    img = frame.to_image()
+                    img.save(os.path.join(a.outdir, "%s-frame.png" % a.sid))
+                    info["width"], info["height"] = frame.width, frame.height
+                    info["frame_saved"] = True
+                    log("saved frame %dx%d" % (frame.width, frame.height))
+                except Exception as e:
+                    log("frame save failed: %r" % e)
+            if end is None:
+                end = asyncio.get_event_loop().time() + a.media_seconds
+            if asyncio.get_event_loop().time() > end:
+                return
+
+    async def consume_audio(track):
+        path = os.path.join(a.outdir, "%s.wav" % a.sid)
+        wav = None
+        end = None
+        while True:
+            try:
+                frame = await track.recv()
+            except Exception as e:
+                log("audio ended: %r" % e)
+                break
+            if not first_media.is_set():
+                first_media.set()
+            emit_once_audio(info)
+            try:
+                arr = frame.to_ndarray()
+                if wav is None:
+                    wav = wave.open(path, "wb")
+                    wav.setnchannels(arr.shape[0] if arr.ndim > 1 else 1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(frame.sample_rate)
+                    end = asyncio.get_event_loop().time() + a.audio_seconds
+                wav.writeframes(arr.tobytes())
+            except Exception as e:
+                log("audio write failed: %r" % e)
+            if end and asyncio.get_event_loop().time() > end:
+                break
+        if wav:
+            wav.close()
+            log("saved wav")
+
+    def emit_once_audio(info):
+        if not info.get("_audio_emitted"):
+            info["_audio_emitted"] = True
+            emit({"type": "media", "kind": "audio"})
+
+    @pc.on("track")
+    def on_track(track):
+        log("track %s codec hint" % track.kind)
+        if track.kind == "video":
+            asyncio.ensure_future(consume_video(track))
+        else:
+            asyncio.ensure_future(consume_audio(track))
+
+    @pc.on("connectionstatechange")
+    async def on_cs():
+        log("connectionState=%s" % pc.connectionState)
+
+    @pc.on("iceconnectionstatechange")
+    async def on_ics():
+        log("iceConnectionState=%s" % pc.iceConnectionState)
+
+    # Read offer first.
+    agen = stdin_lines()
+    offer_sdp = None
+    async for line in agen:
+        msg = json.loads(line)
+        if msg.get("type") == "offer":
+            offer_sdp = msg["sdp"]
+            break
+    if offer_sdp is None:
+        emit({"type": "result", "ok": False, "reason": "no offer"})
+        emit({"type": "done"})
+        return
+
+    await pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type="offer"))
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    # Non-trickle: localDescription already has gathered candidates inline.
+    emit({"type": "answer", "sdp": pc.localDescription.sdp})
+    report_negotiated(pc, info)
+
+    async def reader_task():
+        async for line in agen:
+            msg = json.loads(line)
+            t = msg.get("type")
+            if t == "candidate":
+                try:
+                    cand = candidate_from_sdp(msg["candidate"].split(":", 1)[1]
+                                              if msg["candidate"].startswith("candidate:")
+                                              else msg["candidate"])
+                    cand.sdpMid = msg.get("mid")
+                    cand.sdpMLineIndex = msg.get("mLine", 0)
+                    await pc.addIceCandidate(cand)
+                    log("added remote candidate")
+                except Exception as e:
+                    log("addIceCandidate failed: %r" % e)
+            elif t == "stop":
+                return
+
+    rt = asyncio.ensure_future(reader_task())
+    try:
+        await asyncio.wait_for(first_media.wait(), timeout=a.first_media_timeout)
+        got = True
+    except asyncio.TimeoutError:
+        got = False
+    report_negotiated(pc, info)
+    ice_pair = selected_pair(pc)
+    emit({"type": "result", "ok": got, "video_codec": info["video_codec"],
+          "audio_codec": info["audio_codec"], "width": info["width"],
+          "height": info["height"], "ice_pair": ice_pair,
+          "frame_saved": info["frame_saved"]})
+    if got:
+        await asyncio.sleep(a.media_seconds)
+    rt.cancel()
+    await pc.close()
+    emit({"type": "done"})
+
+
+def report_negotiated(pc, info):
+    for t in pc.getTransceivers():
+        try:
+            codec = None
+            rp = getattr(t.receiver, "_RTCRtpReceiver__codecs", None)
+            if t.receiver and t.receiver.track:
+                pass
+            cps = getattr(t, "_codecs", None)
+            if cps:
+                codec = cps[0].name
+        except Exception:
+            codec = None
+        kind = t.kind
+        if kind == "video" and info["video_codec"] is None and codec:
+            info["video_codec"] = codec
+        if kind == "audio" and info["audio_codec"] is None and codec:
+            info["audio_codec"] = codec
+
+
+def selected_pair(pc):
+    try:
+        for t in pc.getTransceivers():
+            ice = t.receiver.transport.transport
+            pair = getattr(ice, "_nominated", None) or getattr(ice, "_selected_pair", None)
+            if pair is not None:
+                local = getattr(pair, "local", None)
+                remote = getattr(pair, "remote", None)
+                return {"local": getattr(local, "type", None),
+                        "remote": getattr(remote, "type", None)}
+    except Exception as e:
+        return {"err": repr(e)}
+    return None
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--sid", required=True)
+    ap.add_argument("--outdir", required=True)
+    ap.add_argument("--first-media-timeout", type=float, default=20)
+    ap.add_argument("--media-seconds", type=float, default=30)
+    ap.add_argument("--audio-seconds", type=float, default=10)
+    args = ap.parse_args()
+    try:
+        asyncio.get_event_loop().run_until_complete(run(args))
+    except Exception as e:
+        emit({"type": "result", "ok": False, "reason": "exception: %r" % e})
+        emit({"type": "done"})

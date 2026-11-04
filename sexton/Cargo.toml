@@ -32,7 +32,7 @@ path = "src/bin/bridge-test.rs"
 # (unchanged from PHA-3099): the Sexton's avatar upload already runs over
 # the in-cluster Docker network with plain reqwest, and turning it on would
 # add a native-TLS build dependency for no behavioural gain.
-tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5", default-features = false, features = ["audio"] }
+tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5", default-features = false, features = ["audio", "unstable"] }
 # Needed directly (not just via tsclientlib) for the `AudioData`/`CodecType`/
 # `OutAudio` types the outbound Opus tick builds by hand — same pin, so this
 # is the exact crate version tsclientlib itself compiles against.
@@ -40,6 +40,7 @@ tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45
 # duration fields (e.g. `OutBanClientPart::time`); needed to build a ban length.
 time = "0.3"
 tsproto-packets = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5" }
+tsproto = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5" }
 
 # PHA-3342: bridge-proto's BridgeEvent/BridgeCommand/Snapshot vocabulary is
 # reused in-process now — see the workspace Cargo.toml for why the crate
@@ -50,11 +51,11 @@ bridge-proto = { path = "../bridge-proto" }
 # out against this TS6 server; do not bump independently of that history.
 audiopus = "0.3.0-rc.0"
 
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process"] }
 tokio-tungstenite = "0.21"
 futures = "0.3"
 futures-util = "0.3"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 md-5 = "0.10"

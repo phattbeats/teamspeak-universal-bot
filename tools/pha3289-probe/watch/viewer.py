@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+# PHA-3289 headless TS6 screen-share viewer.
+#
+# JSON lines on stdin:
+#   {"type":"offer","sdp": "..."}
+#   {"type":"candidate","candidate":"candidate:...","mid":"0","mLine":0}
+#   {"type":"stop"}
+# JSON lines on stdout:
+#   {"type":"answer","sdp":"..."}       non-trickle: candidates already inline
+#   {"type":"log","msg":"..."}
+#   {"type":"media","kind":"video|audio"}
+#   {"type":"result", ...}
+#   {"type":"done"}
+import argparse
+import asyncio
+import json
+import os
+import sys
+import wave
+import logging
+logging.basicConfig(filename="/data/aioice-debug.log", level=logging.DEBUG, format="%(asctime)s %(name)s %(message)s")
+
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
+from aiortc.sdp import candidate_from_sdp
+import aiortc.rtcpeerconnection as _rpc
+
+# TS6 streamers send H264 High (profile-level-id 640c1f) no matter what the
+# answer prefers; aiortc only negotiates Baseline. The ffmpeg decoder copes with
+# High fine, so match H264 on packetization-mode only.
+_orig_compat = _rpc.is_codec_compatible
+def _h264_any_profile(a, b):
+    if a.mimeType.lower() == "video/h264" and b.mimeType.lower() == "video/h264":
+        return a.clockRate == b.clockRate and int(a.parameters.get("packetization-mode", "0")) == int(b.parameters.get("packetization-mode", "0"))
+    return _orig_compat(a, b)
+_rpc.is_codec_compatible = _h264_any_profile
+
+try:
+    from av import VideoFrame  # noqa
+    HAVE_AV = True
+except Exception:
+    HAVE_AV = False
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def log(msg):
+    emit({"type": "log", "msg": str(msg)})
+
+
+async def stdin_lines():
+    loop = asyncio.get_event_loop()
+    reader = asyncio.StreamReader()
+    await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
+    while True:
+        raw = await reader.readline()
+        if not raw:
+            return
+        line = raw.decode().strip()
+        if line:
+            yield line
+
+
+async def run(a):
+    os.makedirs(a.outdir, exist_ok=True)
+    flags = set()
+    try:
+        flags = set(open("/data/watch/viewer.flags").read().split())
+    except Exception:
+        pass
+    log("flags=%s" % sorted(flags))
+    global flags_global
+    flags_global = flags
+    servers = [RTCIceServer("stun:stun.l.google.com:19302")] if "stun" in flags else []
+    pc = RTCPeerConnection(RTCConfiguration(iceServers=servers))
+    first_media = asyncio.Event()
+    info = {"sid": a.sid, "video_codec": None, "audio_codec": None,
+            "width": None, "height": None, "frames": 0, "frame_saved": False}
+
+    async def consume_video(track):
+        end = None
+        while True:
+            try:
+                frame = await track.recv()
+            except Exception as e:
+                log("video ended: %r" % e)
+                return
+            info["frames"] += 1
+            if not first_media.is_set():
+                first_media.set()
+                emit({"type": "media", "kind": "video"})
+            if not info["frame_saved"]:
+                try:
+                    img = frame.to_image()
+                    img.save(os.path.join(a.outdir, "%s-frame.png" % a.sid))
+                    info["width"], info["height"] = frame.width, frame.height
+                    info["frame_saved"] = True
+                    log("saved frame %dx%d" % (frame.width, frame.height))
+                except Exception as e:
+                    log("frame save failed: %r" % e)
+            if end is None:
+                end = asyncio.get_event_loop().time() + a.media_seconds
+            if asyncio.get_event_loop().time() > end:
+                return
+
+    async def consume_audio(track):
+        path = os.path.join(a.outdir, "%s.wav" % a.sid)
+        wav = None
+        end = None
+        while True:
+            try:
+                frame = await track.recv()
+            except Exception as e:
+                log("audio ended: %r" % e)
+                break
+            if not first_media.is_set():
+                first_media.set()
+            emit_once_audio(info)
+            try:
+                arr = frame.to_ndarray()
+                if wav is None:
+                    wav = wave.open(path, "wb")
+                    wav.setnchannels(arr.shape[0] if arr.ndim > 1 else 1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(frame.sample_rate)
+                    end = asyncio.get_event_loop().time() + a.audio_seconds
+                wav.writeframes(arr.tobytes())
+            except Exception as e:
+                log("audio write failed: %r" % e)
+            if end and asyncio.get_event_loop().time() > end:
+                break
+        if wav:
+            wav.close()
+            log("saved wav")
+
+    def emit_once_audio(info):
+        if not info.get("_audio_emitted"):
+            info["_audio_emitted"] = True
+            emit({"type": "media", "kind": "audio"})
+
+    @pc.on("track")
+    def on_track(track):
+        log("track %s codec hint" % track.kind)
+        if track.kind == "video":
+            asyncio.ensure_future(consume_video(track))
+        else:
+            asyncio.ensure_future(consume_audio(track))
+
+    @pc.on("connectionstatechange")
+    async def on_cs():
+        log("connectionState=%s" % pc.connectionState)
+
+    @pc.on("iceconnectionstatechange")
+    async def on_ics():
+        log("iceConnectionState=%s" % pc.iceConnectionState)
+
+    # Read offer first.
+    agen = stdin_lines()
+    offer_sdp = None
+    async for line in agen:
+        msg = json.loads(line)
+        if msg.get("type") == "offer":
+            offer_sdp = msg["sdp"]
+            break
+    if offer_sdp is None:
+        emit({"type": "result", "ok": False, "reason": "no offer"})
+        emit({"type": "done"})
+        return
+
+    await pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type="offer"))
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    # Non-trickle: localDescription already has gathered candidates inline.
+    sdp = pc.localDescription.sdp
+    if "minimal" in flags:
+        out = []
+        for line in sdp.split("\r\n"):
+            if line.startswith("a=fingerprint:") and not line.startswith("a=fingerprint:sha-256"):
+                continue
+            if line.startswith("a=candidate:") and " 10.0.0.100 " not in line:
+                continue
+            out.append(line)
+        sdp = "\r\n".join(out)
+    if "nomsid" in flags:
+        sdp = "\r\n".join(l for l in sdp.split("\r\n") if not l.startswith(("a=msid:", "a=ssrc", "a=msid-semantic")))
+    if "trickle" in flags:
+        sdp = sdp.replace("a=ice-ufrag:", "a=ice-options:trickle\r\na=ice-ufrag:")
+    if "mirror" in flags:
+        sdp = mirror_answer(offer_sdp, sdp, log)
+    log("answer %d bytes, %d candidates" % (len(sdp), sdp.count("a=candidate:")))
+    emit({"type": "answer", "sdp": sdp})
+    report_negotiated(pc, info)
+
+    async def reader_task():
+        async for line in agen:
+            msg = json.loads(line)
+            t = msg.get("type")
+            if t == "candidate":
+                try:
+                    cand = candidate_from_sdp(msg["candidate"].split(":", 1)[1]
+                                              if msg["candidate"].startswith("candidate:")
+                                              else msg["candidate"])
+                    cand.sdpMid = msg.get("mid")
+                    cand.sdpMLineIndex = msg.get("mLine", 0)
+                    await pc.addIceCandidate(cand)
+                    log("added remote candidate")
+                except Exception as e:
+                    log("addIceCandidate failed: %r" % e)
+            elif t == "offer":
+                # Renegotiation: the streamer re-offers right after our answer
+                # (codec realign). Answer it the same way or media never starts.
+                try:
+                    new_offer = msg["sdp"]
+                    await pc.setRemoteDescription(RTCSessionDescription(sdp=new_offer, type="offer"))
+                    ans = await pc.createAnswer()
+                    await pc.setLocalDescription(ans)
+                    sdp2 = pc.localDescription.sdp
+                    if "mirror" in flags:
+                        sdp2 = mirror_answer(new_offer, sdp2, log)
+                    log("re-offer answered: %d bytes" % len(sdp2))
+                    emit({"type": "answer", "sdp": sdp2})
+                except Exception as e:
+                    log("re-offer handling failed: %r" % e)
+            elif t == "stop":
+                return
+
+    rt = asyncio.ensure_future(reader_task())
+    try:
+        await asyncio.wait_for(first_media.wait(), timeout=a.first_media_timeout)
+        got = True
+    except asyncio.TimeoutError:
+        got = False
+    report_negotiated(pc, info)
+    ice_pair = selected_pair(pc)
+    emit({"type": "result", "ok": got, "video_codec": info["video_codec"],
+          "audio_codec": info["audio_codec"], "width": info["width"],
+          "height": info["height"], "ice_pair": ice_pair,
+          "frame_saved": info["frame_saved"]})
+    if got:
+        await asyncio.sleep(a.media_seconds)
+    rt.cancel()
+    await pc.close()
+    emit({"type": "done"})
+
+
+flags_global = set()
+
+def mirror_answer(offer, local, log):
+    """Build the wire answer the way a real TS6 viewer does: the offer echoed
+    back verbatim with direction flipped, setup:active, our ICE/DTLS creds and
+    our host candidates. aiortc keeps its own local description internally."""
+    L = local.split("\r\n")
+    ufrag = next(l for l in L if l.startswith("a=ice-ufrag:"))
+    pwd = next(l for l in L if l.startswith("a=ice-pwd:"))
+    fp = next(l for l in L if l.startswith("a=fingerprint:sha-256"))
+    cands = []
+    for l in L:
+        if l.startswith("a=candidate:") and " 10.0.0.100 " in l and l not in cands:
+            cands.append(l)
+    port = cands[0].split()[5] if cands else "9"
+    # Payload types aiortc actually negotiated for video (first m=video line).
+    local_pts = []
+    for l in L:
+        if l.startswith("m=video "):
+            local_pts = l.split()[3:]
+            break
+    out = []
+    msec = -1
+    for l in offer.split("\r\n"):
+        if l.startswith("m="):
+            msec += 1
+            parts = l.split()
+            if msec == 0:
+                parts[1] = port
+                if "reorder" in flags_global and local_pts:
+                    rest = [p for p in parts[3:] if p not in local_pts]
+                    parts = parts[:3] + [p for p in local_pts if p in parts[3:]] + rest
+            out.append(" ".join(parts))
+            continue
+        if l.startswith("c=IN IP4") and msec == 0 and cands:
+            out.append("c=IN IP4 10.0.0.100")
+            continue
+        if l.startswith("a=rtcp:") and msec == 0 and cands:
+            out.append(l)
+            for c in cands:
+                out.append(c + " generation 0 network-id 1")
+            continue
+        if l.startswith("a=ice-ufrag:"):
+            out.append(ufrag); continue
+        if l.startswith("a=ice-pwd:"):
+            out.append(pwd); continue
+        if l.startswith("a=fingerprint:"):
+            out.append(fp); continue
+        if l == "a=setup:actpass":
+            out.append("a=setup:active"); continue
+        if l == "a=sendonly":
+            out.append("a=recvonly"); continue
+        if l.startswith("a=msid-semantic:"):
+            out.append("a=msid-semantic: WMS"); continue
+        if l.startswith(("a=ssrc", "a=msid:", "a=candidate:", "a=end-of-candidates")):
+            continue
+        if l.startswith("o="):
+            out.append("o=- 6861648340837783149 2 IN IP4 127.0.0.1"); continue
+        out.append(l)
+    log("mirror answer built: %d lines, %d cands" % (len(out), len(cands)))
+    return "\r\n".join(out)
+
+
+def report_negotiated(pc, info):
+    for t in pc.getTransceivers():
+        try:
+            codec = None
+            rp = getattr(t.receiver, "_RTCRtpReceiver__codecs", None)
+            if t.receiver and t.receiver.track:
+                pass
+            cps = getattr(t, "_codecs", None)
+            if cps:
+                codec = cps[0].name
+        except Exception:
+            codec = None
+        kind = t.kind
+        if kind == "video" and info["video_codec"] is None and codec:
+            info["video_codec"] = codec
+        if kind == "audio" and info["audio_codec"] is None and codec:
+            info["audio_codec"] = codec
+
+
+def selected_pair(pc):
+    try:
+        for t in pc.getTransceivers():
+            ice = t.receiver.transport.transport
+            pair = getattr(ice, "_nominated", None) or getattr(ice, "_selected_pair", None)
+            if pair is not None:
+                local = getattr(pair, "local", None)
+                remote = getattr(pair, "remote", None)
+                return {"local": getattr(local, "type", None),
+                        "remote": getattr(remote, "type", None)}
+    except Exception as e:
+        return {"err": repr(e)}
+    return None
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--sid", required=True)
+    ap.add_argument("--outdir", required=True)
+    ap.add_argument("--first-media-timeout", type=float, default=45)
+    ap.add_argument("--media-seconds", type=float, default=30)
+    ap.add_argument("--audio-seconds", type=float, default=10)
+    args = ap.parse_args()
+    try:
+        asyncio.get_event_loop().run_until_complete(run(args))
+    except Exception as e:
+        emit({"type": "result", "ok": False, "reason": "exception: %r" % e})
+        emit({"type": "done"})

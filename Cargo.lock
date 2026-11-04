@@ -1859,6 +1859,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tsclientlib",
+ "tsproto",
  "tsproto-packets",
 ]
 
