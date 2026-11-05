@@ -187,6 +187,8 @@ export class TeamSpeakVoiceRuntime {
   private readonly music: MusicController | undefined;
   /** Last description sent to the bridge; undefined = unknown, send the next one. */
   private publishedDescription: string | undefined;
+  /** PHA-4499: the screen share's current video title; wins the overlay line over music. */
+  private streamTitle: string | undefined;
   private readonly band: BandController | undefined;
   private readonly announcer: Announcer | undefined;
   private readonly tools: TeamSpeakRealtimeToolRegistration | undefined;
@@ -284,6 +286,7 @@ export class TeamSpeakVoiceRuntime {
           this.music?.stop(`bridge-disconnected:${reason}`);
           // The clear above went nowhere; the next session re-publishes.
           this.publishedDescription = undefined;
+          this.streamTitle = undefined;
           this.state = { ...this.state, connected: false };
         },
         onState: (state) => {
@@ -328,6 +331,11 @@ export class TeamSpeakVoiceRuntime {
           waiter?.(channels);
         },
         onModerationResult: (result) => {
+          if (result.action === "stream_now_playing") {
+            this.streamTitle = result.detail || undefined;
+            this.publishNowPlaying(this.music?.nowPlaying);
+            return;
+          }
           if (result.action.startsWith("stream_")) {
             const waiter = this.streamWaiters.get(result.action)?.shift();
             waiter?.({ ok: result.ok, detail: result.detail });
@@ -485,14 +493,20 @@ export class TeamSpeakVoiceRuntime {
     this.sessions.applyRoster(this.sessions.rosterEntries());
     // TeamSpeak keeps a client's description across sessions, so a bot that
     // died mid-track would come back still claiming it. Re-state it.
-    if (this.music) {
-      this.publishNowPlaying(this.music.nowPlaying);
+    if (this.music || this.streamTitle !== undefined) {
+      this.publishNowPlaying(this.music?.nowPlaying);
     }
   }
 
-  /** The bot's `♪ <title>` description for the PLNT overlay (#3857). */
+  /**
+   * The bot's `♪ <title>` description for the PLNT overlay (#3857). A
+   * playing screen share (PHA-4499) takes the line; music gets it back when
+   * the share ends.
+   */
   private publishNowPlaying(track: MusicTrack | undefined): void {
-    const description = formatNowPlayingDescription(track);
+    const description = formatNowPlayingDescription(
+      this.streamTitle !== undefined ? { title: this.streamTitle } : track,
+    );
     if (description === this.publishedDescription) {
       return;
     }

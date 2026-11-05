@@ -101,6 +101,7 @@ class TeamSpeakVoiceRuntime {
           this.playback.handleBargeIn("bridge-disconnected", { force: true });
           this.music?.stop(`bridge-disconnected:${reason}`);
           this.publishedDescription = void 0;
+          this.streamTitle = void 0;
           this.state = { ...this.state, connected: false };
         },
         onState: (state) => {
@@ -140,6 +141,11 @@ class TeamSpeakVoiceRuntime {
           waiter?.(channels);
         },
         onModerationResult: (result) => {
+          if (result.action === "stream_now_playing") {
+            this.streamTitle = result.detail || void 0;
+            this.publishNowPlaying(this.music?.nowPlaying);
+            return;
+          }
           if (result.action.startsWith("stream_")) {
             const waiter = this.streamWaiters.get(result.action)?.shift();
             waiter?.({ ok: result.ok, detail: result.detail });
@@ -190,6 +196,8 @@ class TeamSpeakVoiceRuntime {
   music;
   /** Last description sent to the bridge; undefined = unknown, send the next one. */
   publishedDescription;
+  /** PHA-4499: the screen share's current video title; wins the overlay line over music. */
+  streamTitle;
   band;
   announcer;
   tools;
@@ -321,13 +329,19 @@ class TeamSpeakVoiceRuntime {
     }
     this.selfClientId = ownClientId;
     this.sessions.applyRoster(this.sessions.rosterEntries());
-    if (this.music) {
-      this.publishNowPlaying(this.music.nowPlaying);
+    if (this.music || this.streamTitle !== void 0) {
+      this.publishNowPlaying(this.music?.nowPlaying);
     }
   }
-  /** The bot's `♪ <title>` description for the PLNT overlay (#3857). */
+  /**
+   * The bot's `♪ <title>` description for the PLNT overlay (#3857). A
+   * playing screen share (PHA-4499) takes the line; music gets it back when
+   * the share ends.
+   */
   publishNowPlaying(track) {
-    const description = formatNowPlayingDescription(track);
+    const description = formatNowPlayingDescription(
+      this.streamTitle !== void 0 ? { title: this.streamTitle } : track
+    );
     if (description === this.publishedDescription) {
       return;
     }

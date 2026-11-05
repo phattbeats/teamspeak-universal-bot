@@ -561,6 +561,8 @@ struct Actor {
     phase: Phase,
     phase_since: Instant,
     cur: Option<Item>,
+    /// Title last sent as `stream_now_playing` (the overlay's `♪` line).
+    np_sent: String,
     queue: VecDeque<Item>,
     next_id: u64,
     /// Answer owed once the share goes live: (action, entries added).
@@ -612,6 +614,7 @@ async fn run(
         phase: Phase::Idle,
         phase_since: Instant::now(),
         cur: None,
+        np_sent: String::new(),
         queue: VecDeque::new(),
         next_id: 1,
         reply_live: None,
@@ -716,12 +719,28 @@ async fn run(
             }
             a.on_tick().await;
         }
+        a.sync_now_playing();
     }
 }
 
 impl Actor {
     fn emit(&self, action: &'static str, ok: bool, detail: impl Into<String>) {
         let _ = self.event_tx.send(BridgeEvent::ModerationResult { action, ok, detail: detail.into() });
+    }
+
+    /// Tell the plugin whenever the current item (or its resolved title)
+    /// changes, so the bot description tracks auto-advance too. A string
+    /// compare per loop turn; it only emits on change.
+    fn sync_now_playing(&mut self) {
+        let now = match &self.cur {
+            Some(c) if !c.title.is_empty() => c.title.as_str(),
+            Some(c) => c.url.as_str(),
+            None => "",
+        };
+        if now != self.np_sent {
+            self.np_sent = now.to_string();
+            self.emit("stream_now_playing", true, self.np_sent.clone());
+        }
     }
 
     fn emit_json(&self, action: &'static str, v: serde_json::Value) {

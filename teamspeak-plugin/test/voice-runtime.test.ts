@@ -8,8 +8,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  encodeFrame,
   TYPE_CLEAR_VOICE,
   TYPE_JOIN,
+  TYPE_MODERATION_RESULT,
   TYPE_MUTE,
   TYPE_SEND_TEXT,
   TYPE_SET_DESCRIPTION,
@@ -289,6 +291,30 @@ describe("TeamSpeakVoiceRuntime over a mock bridge", () => {
     harness.bridge.deliver({ ...state, state: { ...state.state, ownClientId: 14 } });
     expect(harness.bridge.sentOfType(TYPE_SET_DESCRIPTION)).toHaveLength(2);
     vi.useRealTimers();
+  });
+
+  // PHA-4499: the screen share's video title takes the overlay's `♪` line,
+  // including auto-advance (the Sexton re-sends it), and clears on stop.
+  it("publishes the streaming video title as the now-playing description", () => {
+    harness = createHarness({ tools: { music: { enabled: true } } });
+    harness.bridge.deliver({
+      type: "state",
+      state: { connected: true, channelId: 1, channelName: "General Shit", ownClientId: 9 },
+    });
+    const nowPlaying = (detail: string) =>
+      harness.bridge.deliverRaw(
+        encodeFrame(TYPE_MODERATION_RESULT, { action: "stream_now_playing", ok: true, detail }),
+      );
+    nowPlaying("PGL Major: Liquid vs TYLOO");
+    nowPlaying("PGL Major: Liquid vs TYLOO");
+    nowPlaying("Next video");
+    nowPlaying("");
+    expect(harness.bridge.sentOfType(TYPE_SET_DESCRIPTION).map((f) => f.header)).toEqual([
+      { description: "" },
+      { description: "♪ PGL Major: Liquid vs TYLOO" },
+      { description: "♪ Next video" },
+      { description: "" },
+    ]);
   });
 
   it("leaves the description alone on a bot without music", () => {
