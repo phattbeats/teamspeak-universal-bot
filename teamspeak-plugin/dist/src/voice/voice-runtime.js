@@ -5,6 +5,7 @@ import {
   DEFAULT_COMMAND_PREFIX,
   isTeamSpeakBandEnabled,
   isTeamSpeakMusicEnabled,
+  isTeamSpeakStreamEnabled,
   resolveAnnouncePaths,
   resolveSextonLogDir,
   resolveVillainPaths,
@@ -42,6 +43,11 @@ import {
 const DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 const DEFAULT_VOICE_OFF_POLL_MS = 2e3;
 const CHANNEL_TREE_TIMEOUT_MS = 4e3;
+const DM_DOWN_REPLY = "I'm here, but I can't answer right now. Try again in a minute, or ask in the channel.";
+const DM_VOICE_REPLY = "I can't hear voice chat or talk. Type it out and I'll take it from there.";
+const DM_FALLBACK_COOLDOWN_MS = 10 * 60 * 1e3;
+const DM_REPLY_TIMEOUT_MS = 25e3;
+const DM_VOICE_ASK = /\b(?:can|could|will|do|did) you (?:hear|speak|talk|say)\b|\bhear me\b|\b(?:talk|speak) to me\b|\bsay (?:it |that |something )?(?:out loud|aloud)\b|\bvoice chat\b|\bjoin (?:the )?(?:voice|vc)\b|\bunmute\b/i;
 const AGENT_TOOL_ITEM_ID = "teamspeak-agent-turn";
 class TeamSpeakVoiceRuntime {
   constructor(params) {
@@ -95,6 +101,7 @@ class TeamSpeakVoiceRuntime {
           this.playback.handleBargeIn("bridge-disconnected", { force: true });
           this.music?.stop(`bridge-disconnected:${reason}`);
           this.publishedDescription = void 0;
+          this.streamTitle = void 0;
           this.state = { ...this.state, connected: false };
         },
         onState: (state) => {
@@ -133,6 +140,17 @@ class TeamSpeakVoiceRuntime {
           const waiter = this.channelTreeWaiters.shift();
           waiter?.(channels);
         },
+        onModerationResult: (result) => {
+          if (result.action === "stream_now_playing") {
+            this.streamTitle = result.detail || void 0;
+            this.publishNowPlaying(this.music?.nowPlaying);
+            return;
+          }
+          if (result.action.startsWith("stream_")) {
+            const waiter = this.streamWaiters.get(result.action)?.shift();
+            waiter?.({ ok: result.ok, detail: result.detail });
+          }
+        },
         onError: (error) => this.params.log?.(`teamspeak bridge: ${error.message}`)
       }
     });
@@ -142,6 +160,7 @@ class TeamSpeakVoiceRuntime {
     this.toolDeps = areTeamSpeakToolsEnabled(params.config) ? {
       config: params.config.tools,
       music: this.music,
+      ...isTeamSpeakStreamEnabled(params.config) ? { stream: this.createStreamController() } : {},
       roster: () => this.sessions.rosterEntries(),
       channelName: () => this.state.channelName,
       poke: (clientId, text) => this.bridge.poke(clientId, text),
@@ -177,6 +196,8 @@ class TeamSpeakVoiceRuntime {
   music;
   /** Last description sent to the bridge; undefined = unknown, send the next one. */
   publishedDescription;
+  /** PHA-4499: the screen share's current video title; wins the overlay line over music. */
+  streamTitle;
   band;
   announcer;
   tools;
@@ -191,6 +212,8 @@ class TeamSpeakVoiceRuntime {
    * the only things still answered are `!vc join` / `join_voice`.
    */
   parked = false;
+  /** PHA-4917: when each person last got a fallback line, by lowercased nick. */
+  dmFallbackAt = /* @__PURE__ */ new Map();
   /**
    * Voice off (#4372): deaf and mute, but present. Unlike parked, chat still
    * gets a turn and the tools still run; only audio in and speech out stop.
@@ -202,6 +225,8 @@ class TeamSpeakVoiceRuntime {
   voiceOffTimer;
   lastRoster = [];
   channelTreeWaiters = [];
+  /** Screen-share answers (PHA-4499), keyed by moderation-result action; FIFO per action. */
+  streamWaiters = /* @__PURE__ */ new Map();
   selfClientId;
   chatTurnsInFlight = /* @__PURE__ */ new Set();
   /** Other bots in the channel that are mid-burst right now (#3829). */
@@ -304,13 +329,19 @@ class TeamSpeakVoiceRuntime {
     }
     this.selfClientId = ownClientId;
     this.sessions.applyRoster(this.sessions.rosterEntries());
-    if (this.music) {
-      this.publishNowPlaying(this.music.nowPlaying);
+    if (this.music || this.streamTitle !== void 0) {
+      this.publishNowPlaying(this.music?.nowPlaying);
     }
   }
-  /** The bot's `♪ <title>` description for the PLNT overlay (#3857). */
+  /**
+   * The bot's `♪ <title>` description for the PLNT overlay (#3857). A
+   * playing screen share (PHA-4499) takes the line; music gets it back when
+   * the share ends.
+   */
   publishNowPlaying(track) {
-    const description = formatNowPlayingDescription(track);
+    const description = formatNowPlayingDescription(
+      this.streamTitle !== void 0 ? { title: this.streamTitle } : track
+    );
     if (description === this.publishedDescription) {
       return;
     }
@@ -324,6 +355,34 @@ class TeamSpeakVoiceRuntime {
    * `follow`) already treat an empty tree as "found nothing" and say so,
    * which is a better outcome for a voice turn than an unhandled rejection.
    */
+  streamRequest(action, send, timeoutMs) {
+    return new Promise((resolve) => {
+      const waiters = this.streamWaiters.get(action) ?? [];
+      this.streamWaiters.set(action, waiters);
+      const finish = (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      };
+      const timer = setTimeout(() => {
+        const idx = waiters.indexOf(finish);
+        if (idx !== -1) {
+          waiters.splice(idx, 1);
+        }
+        resolve({ ok: false, detail: "The stream didn't answer in time." });
+      }, timeoutMs);
+      waiters.push(finish);
+      send();
+    });
+  }
+  createStreamController() {
+    return {
+      start: (url, title, options) => this.streamRequest("stream_start", () => this.bridge.streamStart(url, title, options), 9e4),
+      // `load` can bring the share up, which waits on the server like `start`.
+      queue: (op, options) => this.streamRequest("stream_queue", () => this.bridge.streamQueue(op, options), op === "load" ? 9e4 : 15e3),
+      stop: () => this.streamRequest("stream_stop", () => this.bridge.streamStop(), 1e4),
+      status: () => this.streamRequest("stream_status", () => this.bridge.streamStatus(), 1e4)
+    };
+  }
   requestChannelTree() {
     return new Promise((resolve) => {
       let settled = false;
@@ -734,40 +793,86 @@ class TeamSpeakVoiceRuntime {
    * make the bot unbearable, and the voice lane already gates the same way.
    */
   handleChatMessage(message) {
-    const run = this.params.onChatMessage;
-    if (!run) {
-      return;
-    }
     if (this.selfClientId !== void 0 && message.clientId === this.selfClientId) {
-      return;
-    }
-    if (this.parked) {
       return;
     }
     if (!message.text.trim()) {
       return;
     }
-    if (message.target !== "client" && !this.isAddressed(message.text)) {
+    const isDm = message.target === "client";
+    const run = this.params.onChatMessage;
+    if (!run) {
+      if (isDm) {
+        this.dmFallback(message, DM_DOWN_REPLY);
+      }
+      return;
+    }
+    if (this.parked) {
+      if (isDm) {
+        this.dmFallback(message, DM_DOWN_REPLY);
+      }
+      return;
+    }
+    if (!isDm && !this.isAddressed(message.text)) {
+      return;
+    }
+    if (isDm && this.voiceOff && DM_VOICE_ASK.test(message.text)) {
+      this.dmFallback(message, DM_VOICE_REPLY);
       return;
     }
     if (this.chatTurnsInFlight.has(message.clientId)) {
       this.params.log?.(
         `teamspeak text: dropping message, a turn is already running clientId=${message.clientId}`
       );
+      if (isDm) {
+        this.dmFallback(message, DM_DOWN_REPLY);
+      }
       return;
     }
     this.chatTurnsInFlight.add(message.clientId);
+    const timer = isDm ? setTimeout(() => this.dmFallback(message, DM_DOWN_REPLY), this.params.dmReplyTimeoutMs ?? DM_REPLY_TIMEOUT_MS) : void 0;
     void run(message).then((reply) => {
       if (reply) {
         this.reply(message, reply);
+      } else if (isDm) {
+        this.dmFallback(message, DM_DOWN_REPLY);
       }
     }).catch((error) => {
       this.params.log?.(
         `teamspeak text: turn failed clientId=${message.clientId}: ${error instanceof Error ? error.message : String(error)}`
       );
+      if (isDm) {
+        this.dmFallback(message, DM_DOWN_REPLY);
+      }
     }).finally(() => {
+      if (timer) {
+        clearTimeout(timer);
+      }
       this.chatTurnsInFlight.delete(message.clientId);
     });
+  }
+  /**
+   * PHA-4917: the fixed line a human DM gets when the agent cannot answer. At
+   * most one per person per 10 minutes, and never to a bot, so a bot and a
+   * person (or two bots) cannot ping-pong.
+   */
+  dmFallback(message, line) {
+    if (this.params.config.dmFallback === false) {
+      return;
+    }
+    const tag = (this.params.config.botTag ?? "[BOT]").trim();
+    if (tag && message.nickname.includes(tag)) {
+      return;
+    }
+    const key = message.nickname.toLowerCase();
+    const now = (this.params.now ?? Date.now)();
+    const last = this.dmFallbackAt.get(key);
+    if (last !== void 0 && now - last < DM_FALLBACK_COOLDOWN_MS) {
+      return;
+    }
+    this.dmFallbackAt.set(key, now);
+    this.params.log?.(`teamspeak text: dm fallback to ${message.nickname}`);
+    this.reply(message, line);
   }
   /** Does this line name us? Same wake names the voice lane gates on. */
   isAddressed(text) {
@@ -793,5 +898,7 @@ function describeMusic(music) {
   return track ? `playing "${track.title}" at ${volume}` : `idle (volume ${volume})`;
 }
 export {
+  DM_DOWN_REPLY,
+  DM_VOICE_REPLY,
   TeamSpeakVoiceRuntime
 };

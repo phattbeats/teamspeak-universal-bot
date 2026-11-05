@@ -247,7 +247,7 @@ const MAX_DESCRIPTION_CHARS = 200;
  * PLNT overlay reads as the bot's now-playing line. yt-dlp titles usually
  * carry the artist already ("Artist - Song"); nothing else names one.
  */
-export function formatNowPlayingDescription(track: MusicTrack | undefined): string {
+export function formatNowPlayingDescription(track: Pick<MusicTrack, "title"> | undefined): string {
   if (!track) {
     return "";
   }

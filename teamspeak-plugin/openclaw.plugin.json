@@ -65,6 +65,12 @@
     "tools": [
       "play_music",
       "stop_music",
+      "stream_url",
+      "stop_stream",
+      "stream_status",
+      "skip_stream",
+      "edit_stream_queue",
+      "stream_playlist",
       "set_volume",
       "what_did_i_miss",
       "who_is_here",

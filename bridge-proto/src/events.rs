@@ -121,6 +121,16 @@ pub enum BridgeCommand {
     /// moderation command: it only ever edits the bot itself, and needs
     /// `b_client_modify_own_description`, not `b_client_modify_description`.
     SetDescription { description: String },
+    /// PHA-4499: publish a Twitch/Kick/YouTube URL as a TS6 screen share.
+    /// Answered with `ModerationResult` actions `stream_start` / `stream_stop` / `stream_status`.
+    /// `mode`: `"queue"` (default; plays now if idle), `"next"` or `"now"`.
+    /// `playlist`: expand a playlist link even when it also names one video.
+    StreamStart { url: String, title: Option<String>, mode: Option<String>, playlist: bool },
+    StreamStop,
+    StreamStatus,
+    /// Queue and saved-playlist ops, answered with action `stream_queue`.
+    /// `op`: skip | clear | remove | move | shuffle | save | load | delete | playlists.
+    StreamQueue { op: String, index: Option<u32>, to: Option<u32>, name: Option<String>, mode: Option<String> },
 }
 
 /// One channel and who is sitting in it, as of the last `ListChannels`

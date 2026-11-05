@@ -60,6 +60,12 @@ const MODERATION_FLAG = {
   [EDIT_SERVER_TOOL]: "edit",
   [ADD_TO_SERVER_GROUP_TOOL]: "edit"
 };
+const STREAM_URL_TOOL = "stream_url";
+const STOP_STREAM_TOOL = "stop_stream";
+const STREAM_STATUS_TOOL = "stream_status";
+const SKIP_STREAM_TOOL = "skip_stream";
+const EDIT_STREAM_QUEUE_TOOL = "edit_stream_queue";
+const STREAM_PLAYLIST_TOOL = "stream_playlist";
 const NOW_PLAYING_TOOL = "now_playing";
 const SHOW_QUEUE_TOOL = "show_queue";
 const SKIP_TOOL = "skip";
@@ -93,6 +99,7 @@ function createTeamSpeakToolRegistration(deps) {
   return {
     tools: buildTeamSpeakTools({
       music: deps.music !== void 0,
+      stream: deps.stream !== void 0,
       band: deps.band !== void 0,
       moderation: moderationOptions(deps.config),
       villain: deps.villain !== void 0
@@ -102,6 +109,78 @@ function createTeamSpeakToolRegistration(deps) {
 }
 function buildTeamSpeakTools(options) {
   const tools = [];
+  if (options.stream) {
+    tools.push(
+      {
+        type: "function",
+        name: STREAM_URL_TOOL,
+        description: `Screen-share a video or live stream into the channel so people can click Watch and see it with sound. Use when someone says "stream this", "queue this video" or "play this video" with a link. Works with most video sites: YouTube, Twitch, Kick, Rumble, Vimeo, Dailymotion and more. A playlist link adds every video in it. If something is already on, this queues it instead of interrupting (the result gives the queue position, so say e.g. "queued, you're third"); use mode "now" only when they want to switch right away, "next" to play it after the current one. Videos play one after another on the same share, so people only click Watch once. Confirm in a few words.`,
+        parameters: {
+          type: "object",
+          properties: {
+            url: { type: "string", description: "The http(s) link to a video, live stream or playlist." },
+            title: { type: "string", description: "Optional label; defaults to the video's title." },
+            mode: {
+              type: "string",
+              enum: ["queue", "next", "now"],
+              description: "queue (default): after everything queued. next: right after the current one. now: replace the current one."
+            },
+            playlist: {
+              type: "boolean",
+              description: "True to add the whole playlist when the link is one video inside a playlist."
+            }
+          },
+          required: ["url"]
+        }
+      },
+      {
+        type: "function",
+        name: SKIP_STREAM_TOOL,
+        description: "Skip to the next video in the screen-share queue. Ends the share if nothing is queued. Confirm in a few words.",
+        parameters: { type: "object", properties: {} }
+      },
+      {
+        type: "function",
+        name: STOP_STREAM_TOOL,
+        description: "Stop the screen share and clear its queue. Confirm in a few words.",
+        parameters: { type: "object", properties: {} }
+      },
+      {
+        type: "function",
+        name: STREAM_STATUS_TOOL,
+        description: "Say what is being screen-shared now, what is queued after it, and how many are watching.",
+        parameters: { type: "object", properties: {} }
+      },
+      {
+        type: "function",
+        name: EDIT_STREAM_QUEUE_TOOL,
+        description: "Change the screen-share video queue: remove one entry, move one, shuffle, or clear it. Positions are 1-based as shown by stream_status. Confirm in a few words.",
+        parameters: {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["remove", "move", "shuffle", "clear"] },
+            position: { type: "number", description: "Queue position to remove or move." },
+            to: { type: "number", description: "New position, for move." }
+          },
+          required: ["action"]
+        }
+      },
+      {
+        type: "function",
+        name: STREAM_PLAYLIST_TOOL,
+        description: "Saved video playlists for the screen share. save: store what is playing plus the queue under a name. load: queue a saved playlist (plays at once if nothing is on). delete: remove one. list: name the saved ones. Confirm in a few words.",
+        parameters: {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["save", "load", "delete", "list"] },
+            name: { type: "string", description: "Playlist name, for save, load and delete." },
+            mode: { type: "string", enum: ["queue", "next", "now"], description: "For load: where the videos go (default queue)." }
+          },
+          required: ["action"]
+        }
+      }
+    );
+  }
   if (options.music) {
     tools.push(
       {
@@ -779,6 +858,13 @@ async function dispatch(deps, name, args, context) {
       return editServerTool(deps, args, context);
     case ADD_TO_SERVER_GROUP_TOOL:
       return addToServerGroupTool(deps, args, context);
+    case STREAM_URL_TOOL:
+    case STOP_STREAM_TOOL:
+    case STREAM_STATUS_TOOL:
+    case SKIP_STREAM_TOOL:
+    case EDIT_STREAM_QUEUE_TOOL:
+    case STREAM_PLAYLIST_TOOL:
+      return await streamTool(deps, name, args);
     case LIST_CHANNELS_TOOL:
       return await listChannelsTool(deps);
     case MOVE_TO_CHANNEL_TOOL:
@@ -1543,6 +1629,101 @@ function editServerTool(deps, args, context) {
   auditModeration(deps, context, "edited server settings");
   return { ok: true, name: name ?? null, welcomeMessage: welcomeMessage ?? null };
 }
+function streamResult(r) {
+  if (!r.ok) {
+    return { ok: false, error: r.detail };
+  }
+  try {
+    const parsed = JSON.parse(r.detail);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { ok: true, ...parsed };
+    }
+  } catch {
+  }
+  return { ok: true, detail: r.detail };
+}
+function readMode(value) {
+  const mode = readString(value)?.trim().toLowerCase();
+  return mode === "now" || mode === "next" || mode === "queue" ? mode : void 0;
+}
+function readPosition(value) {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isInteger(n) && n >= 1 ? n : void 0;
+}
+async function streamTool(deps, name, args) {
+  const stream = deps.stream;
+  if (!stream) {
+    return { ok: false, error: "Screen sharing isn't set up here." };
+  }
+  switch (name) {
+    case STOP_STREAM_TOOL:
+      return streamResult(await stream.stop());
+    case STREAM_STATUS_TOOL:
+      return streamResult(await stream.status());
+    case SKIP_STREAM_TOOL:
+      return streamResult(await stream.queue("skip"));
+    case EDIT_STREAM_QUEUE_TOOL: {
+      const action = readString(args.action)?.trim().toLowerCase();
+      if (action !== "remove" && action !== "move" && action !== "shuffle" && action !== "clear") {
+        return { ok: false, error: "Say remove, move, shuffle or clear." };
+      }
+      const index = readPosition(args.position);
+      const to = readPosition(args.to);
+      if ((action === "remove" || action === "move") && index === void 0) {
+        return { ok: false, error: "Which queue position?" };
+      }
+      if (action === "move" && to === void 0) {
+        return { ok: false, error: "Move it to which position?" };
+      }
+      return streamResult(
+        await stream.queue(action, { ...index !== void 0 ? { index } : {}, ...to !== void 0 ? { to } : {} })
+      );
+    }
+    case STREAM_PLAYLIST_TOOL: {
+      const action = readString(args.action)?.trim().toLowerCase();
+      if (action === "list") {
+        return streamResult(await stream.queue("playlists"));
+      }
+      if (action !== "save" && action !== "load" && action !== "delete") {
+        return { ok: false, error: "Say save, load, delete or list." };
+      }
+      const playlistName = readString(args.name)?.trim();
+      if (!playlistName) {
+        return { ok: false, error: "What's the playlist called?" };
+      }
+      const mode2 = readMode(args.mode);
+      return streamResult(await stream.queue(action, { name: playlistName, ...mode2 ? { mode: mode2 } : {} }));
+    }
+    default:
+      break;
+  }
+  const raw = readString(args.url)?.trim();
+  let ok = false;
+  try {
+    const u = raw ? new URL(raw) : void 0;
+    ok = !!u && (u.protocol === "https:" || u.protocol === "http:") && !!u.hostname;
+  } catch {
+    ok = false;
+  }
+  if (!raw || !ok) {
+    return { ok: false, error: "Give me an http(s) link to the video." };
+  }
+  const mode = readMode(args.mode);
+  const r = await stream.start(raw, readString(args.title), {
+    ...mode ? { mode } : {},
+    ...args.playlist === true ? { playlist: true } : {}
+  });
+  if (!r.ok) {
+    return { ok: false, error: r.detail };
+  }
+  deps.log?.(`stream: ${mode ?? "queue"} ${raw}`);
+  const result = streamResult(r);
+  const queued = typeof result.queued === "number";
+  return {
+    ...result,
+    note: queued ? "Queued on the share; it plays when the ones ahead finish." : "Share is up in the channel. Tell them to click Watch; video appears a few seconds after."
+  };
+}
 function addToServerGroupTool(deps, args, context) {
   if (!isAuthorizedForModeration(deps, context)) {
     return NOT_AUTHORIZED;
@@ -1732,6 +1913,7 @@ export {
   DOSSIER_TOOL,
   EDIT_CHANNEL_TOOL,
   EDIT_SERVER_TOOL,
+  EDIT_STREAM_QUEUE_TOOL,
   JOIN_VOICE_TOOL,
   KICK_CLIENT_TOOL,
   LEAVE_VOICE_TOOL,
@@ -1757,9 +1939,14 @@ export {
   SET_VOLUME_TOOL,
   SHOW_QUEUE_TOOL,
   SILENCE_TOOL,
+  SKIP_STREAM_TOOL,
   SKIP_TOOL,
   SONG_LYRICS_TOOL,
   STOP_MUSIC_TOOL,
+  STOP_STREAM_TOOL,
+  STREAM_PLAYLIST_TOOL,
+  STREAM_STATUS_TOOL,
+  STREAM_URL_TOOL,
   SUMMON_BOT_TOOL,
   SUMMON_TOOL,
   UNBAN_CLIENT_TOOL,

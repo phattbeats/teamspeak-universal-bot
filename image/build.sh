@@ -85,6 +85,14 @@ docker run --rm --entrypoint sh "${IMAGE}:${TAG}" -c '
   }
   check "sexton binary"       "/usr/local/bin/sexton --help"
   check "bridge-test"         "test -x /usr/local/bin/bridge-test"
+  # PHA-4499: a redeploy from a source without the video lane silently fell back to
+  # audio-only. Fail the build if the screen-share code is not in the image.
+  check "sexton stream lane"  "grep -q SEXTON_CAP_STREAM /usr/local/bin/sexton && grep -q setupstream /usr/local/bin/sexton"
+  check "plugin stream_url"   "grep -rq stream_url /opt/openclaw-teamspeak-plugin/src"
+  check "manifest stream_url"  "grep -q stream_url /opt/openclaw-teamspeak-plugin/openclaw.plugin.json"
+  # The gateway loads the committed dist/, not src/: a stale dist hid stream_url from the model.
+  check "plugin dist stream_url" "grep -q stream_url /opt/openclaw-teamspeak-plugin/dist/src/tools/registry.js"
+  check "plugin dist stream queue" "grep -q skip_stream /opt/openclaw-teamspeak-plugin/dist/src/tools/registry.js && grep -q skip_stream /opt/openclaw-teamspeak-plugin/openclaw.plugin.json"
   check "whisper-server"      "/opt/whisper/bin/whisper-server --help"
   check "whisper weights"     "test -s /opt/whisper/models/ggml-base.en.bin"
   # #3554: --help is not proof. The upstream :main image of 2026-09-17

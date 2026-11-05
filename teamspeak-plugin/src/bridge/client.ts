@@ -31,6 +31,10 @@ import {
   TYPE_MODERATION_RESULT,
   TYPE_LIST_CHANNELS,
   TYPE_SET_DESCRIPTION,
+  TYPE_STREAM_QUEUE,
+  TYPE_STREAM_START,
+  TYPE_STREAM_STATUS,
+  TYPE_STREAM_STOP,
   TYPE_MUSIC_AUDIO,
   TYPE_MUSIC_GAIN,
   TYPE_MUTE,
@@ -252,6 +256,24 @@ export class TeamSpeakBridgeClient {
    */
   setDescription(description: string): void {
     this.send(encodeFrame(TYPE_SET_DESCRIPTION, { description }));
+  }
+
+  /** Screen-share a media URL (PHA-4499). The answer is a `stream_start` moderation result. */
+  streamStart(url: string, title?: string, options: { mode?: string; playlist?: boolean } = {}): void {
+    this.send(encodeFrame(TYPE_STREAM_START, { url, ...(title ? { title } : {}), ...options }));
+  }
+
+  /** Queue / saved-playlist op on the screen share. The answer is a `stream_queue` moderation result. */
+  streamQueue(op: string, options: { index?: number; to?: number; name?: string; mode?: string } = {}): void {
+    this.send(encodeFrame(TYPE_STREAM_QUEUE, { op, ...options }));
+  }
+
+  streamStop(): void {
+    this.send(encodeFrame(TYPE_STREAM_STOP, {}));
+  }
+
+  streamStatus(): void {
+    this.send(encodeFrame(TYPE_STREAM_STATUS, {}));
   }
 
   private send(frame: Buffer): void {

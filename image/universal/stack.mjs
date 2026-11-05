@@ -370,6 +370,8 @@ function gateway() {
       moodsFile: `${ws}/moods.json`,
       moodPromptFile: `${ws}/mood/AGENTS.md`,
     };
+    // PHA-4499: the plugin only registers stream_url when the account says so; follow the pack/bots.json every boot.
+    if (typeof b.tools.stream?.enabled === 'boolean') a.tools.stream = { ...a.tools.stream, enabled: b.tools.stream.enabled };
     a.tools.summoner = { ...a.tools.summoner, url: `http://127.0.0.1:${SUMMONER_PORT}`, self: b.id };
     // #4372: every account watches the one kill-switch file. `voice.mode`
     // itself stays the operator's (an account pinned to "off" stays off).

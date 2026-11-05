@@ -17,6 +17,7 @@ import {
   DEFAULT_COMMAND_PREFIX,
   isTeamSpeakBandEnabled,
   isTeamSpeakMusicEnabled,
+  isTeamSpeakStreamEnabled,
   resolveAnnouncePaths,
   resolveSextonLogDir,
   resolveVillainPaths,
@@ -44,6 +45,7 @@ import {
   createTeamSpeakToolRegistration,
   runTeamSpeakTool,
   transcriptHistoryReader,
+  type StreamController,
   type TeamSpeakToolDeps,
 } from "../tools/registry.js";
 import {
@@ -185,6 +187,8 @@ export class TeamSpeakVoiceRuntime {
   private readonly music: MusicController | undefined;
   /** Last description sent to the bridge; undefined = unknown, send the next one. */
   private publishedDescription: string | undefined;
+  /** PHA-4499: the screen share's current video title; wins the overlay line over music. */
+  private streamTitle: string | undefined;
   private readonly band: BandController | undefined;
   private readonly announcer: Announcer | undefined;
   private readonly tools: TeamSpeakRealtimeToolRegistration | undefined;
@@ -212,6 +216,8 @@ export class TeamSpeakVoiceRuntime {
   private voiceOffTimer: ReturnType<typeof setInterval> | undefined;
   private lastRoster: RosterEntry[] = [];
   private channelTreeWaiters: Array<(channels: ChannelInfo[]) => void> = [];
+  /** Screen-share answers (PHA-4499), keyed by moderation-result action; FIFO per action. */
+  private streamWaiters = new Map<string, Array<(r: { ok: boolean; detail: string }) => void>>();
   private selfClientId: TeamSpeakClientId | undefined;
   private readonly chatTurnsInFlight = new Set<TeamSpeakClientId>();
   /** Other bots in the channel that are mid-burst right now (#3829). */
@@ -280,6 +286,7 @@ export class TeamSpeakVoiceRuntime {
           this.music?.stop(`bridge-disconnected:${reason}`);
           // The clear above went nowhere; the next session re-publishes.
           this.publishedDescription = undefined;
+          this.streamTitle = undefined;
           this.state = { ...this.state, connected: false };
         },
         onState: (state) => {
@@ -323,6 +330,17 @@ export class TeamSpeakVoiceRuntime {
           const waiter = this.channelTreeWaiters.shift();
           waiter?.(channels);
         },
+        onModerationResult: (result) => {
+          if (result.action === "stream_now_playing") {
+            this.streamTitle = result.detail || undefined;
+            this.publishNowPlaying(this.music?.nowPlaying);
+            return;
+          }
+          if (result.action.startsWith("stream_")) {
+            const waiter = this.streamWaiters.get(result.action)?.shift();
+            waiter?.({ ok: result.ok, detail: result.detail });
+          }
+        },
         onError: (error) => this.params.log?.(`teamspeak bridge: ${error.message}`),
       },
     });
@@ -336,6 +354,7 @@ export class TeamSpeakVoiceRuntime {
       ? {
           config: params.config.tools,
           music: this.music,
+          ...(isTeamSpeakStreamEnabled(params.config) ? { stream: this.createStreamController() } : {}),
           roster: () => this.sessions.rosterEntries(),
           channelName: () => this.state.channelName,
           poke: (clientId, text) => this.bridge.poke(clientId, text),
@@ -474,14 +493,20 @@ export class TeamSpeakVoiceRuntime {
     this.sessions.applyRoster(this.sessions.rosterEntries());
     // TeamSpeak keeps a client's description across sessions, so a bot that
     // died mid-track would come back still claiming it. Re-state it.
-    if (this.music) {
-      this.publishNowPlaying(this.music.nowPlaying);
+    if (this.music || this.streamTitle !== undefined) {
+      this.publishNowPlaying(this.music?.nowPlaying);
     }
   }
 
-  /** The bot's `♪ <title>` description for the PLNT overlay (#3857). */
+  /**
+   * The bot's `♪ <title>` description for the PLNT overlay (#3857). A
+   * playing screen share (PHA-4499) takes the line; music gets it back when
+   * the share ends.
+   */
   private publishNowPlaying(track: MusicTrack | undefined): void {
-    const description = formatNowPlayingDescription(track);
+    const description = formatNowPlayingDescription(
+      this.streamTitle !== undefined ? { title: this.streamTitle } : track,
+    );
     if (description === this.publishedDescription) {
       return;
     }
@@ -496,6 +521,42 @@ export class TeamSpeakVoiceRuntime {
    * `follow`) already treat an empty tree as "found nothing" and say so,
    * which is a better outcome for a voice turn than an unhandled rejection.
    */
+  private streamRequest(
+    action: string,
+    send: () => void,
+    timeoutMs: number,
+  ): Promise<{ ok: boolean; detail: string }> {
+    return new Promise((resolve) => {
+      const waiters = this.streamWaiters.get(action) ?? [];
+      this.streamWaiters.set(action, waiters);
+      const finish = (r: { ok: boolean; detail: string }) => {
+        clearTimeout(timer);
+        resolve(r);
+      };
+      const timer = setTimeout(() => {
+        const idx = waiters.indexOf(finish);
+        if (idx !== -1) {
+          waiters.splice(idx, 1);
+        }
+        resolve({ ok: false, detail: "The stream didn't answer in time." });
+      }, timeoutMs);
+      waiters.push(finish);
+      send();
+    });
+  }
+
+  private createStreamController(): StreamController {
+    return {
+      start: (url, title, options) =>
+        this.streamRequest("stream_start", () => this.bridge.streamStart(url, title, options), 90_000),
+      // `load` can bring the share up, which waits on the server like `start`.
+      queue: (op, options) =>
+        this.streamRequest("stream_queue", () => this.bridge.streamQueue(op, options), op === "load" ? 90_000 : 15_000),
+      stop: () => this.streamRequest("stream_stop", () => this.bridge.streamStop(), 10_000),
+      status: () => this.streamRequest("stream_status", () => this.bridge.streamStatus(), 10_000),
+    };
+  }
+
   private requestChannelTree(): Promise<ChannelInfo[]> {
     return new Promise((resolve) => {
       let settled = false;
