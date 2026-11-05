@@ -1904,16 +1904,25 @@ async fn handle_bridge_command(
             }
         }
         BridgeCommand::Mute { muted } => audio_state.set_muted(muted),
-        BridgeCommand::StreamStart { .. } | BridgeCommand::StreamStop | BridgeCommand::StreamStatus => {
+        BridgeCommand::StreamStart { .. }
+        | BridgeCommand::StreamStop
+        | BridgeCommand::StreamStatus
+        | BridgeCommand::StreamQueue { .. } => {
             let (action, off_detail): (&'static str, &str) = match &cmd {
                 BridgeCommand::StreamStart { .. } => ("stream_start", "screen share is not enabled on this bot"),
                 BridgeCommand::StreamStop => ("stream_stop", "screen share is not enabled on this bot"),
+                BridgeCommand::StreamQueue { .. } => ("stream_queue", "screen share is not enabled on this bot"),
                 _ => ("stream_status", "screen share is not enabled on this bot"),
             };
             match stream_ctl {
                 Some(ctl) => {
                     let msg = match cmd {
-                        BridgeCommand::StreamStart { url, title } => stream::Ctl::Start { url, title },
+                        BridgeCommand::StreamStart { url, title, mode, playlist } => {
+                            stream::Ctl::Start { url, title, mode: stream::Mode::parse(mode.as_deref()), playlist }
+                        }
+                        BridgeCommand::StreamQueue { op, index, to, name, mode } => {
+                            stream::Ctl::Queue(stream::QueueOp { op, index, to, name, mode: stream::Mode::parse(mode.as_deref()) })
+                        }
                         BridgeCommand::StreamStop => stream::Ctl::Stop,
                         _ => stream::Ctl::Status,
                     };

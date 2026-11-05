@@ -533,7 +533,11 @@ export class TeamSpeakVoiceRuntime {
 
   private createStreamController(): StreamController {
     return {
-      start: (url, title) => this.streamRequest("stream_start", () => this.bridge.streamStart(url, title), 60_000),
+      start: (url, title, options) =>
+        this.streamRequest("stream_start", () => this.bridge.streamStart(url, title, options), 90_000),
+      // `load` can bring the share up, which waits on the server like `start`.
+      queue: (op, options) =>
+        this.streamRequest("stream_queue", () => this.bridge.streamQueue(op, options), op === "load" ? 90_000 : 15_000),
       stop: () => this.streamRequest("stream_stop", () => this.bridge.streamStop(), 10_000),
       status: () => this.streamRequest("stream_status", () => this.bridge.streamStatus(), 10_000),
     };

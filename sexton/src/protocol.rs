@@ -65,6 +65,7 @@ pub const TYPE_SET_DESCRIPTION: u8 = 0x96;
 pub const TYPE_STREAM_START: u8 = 0x97;
 pub const TYPE_STREAM_STOP: u8 = 0x98;
 pub const TYPE_STREAM_STATUS: u8 = 0x99;
+pub const TYPE_STREAM_QUEUE: u8 = 0x9a;
 
 /// A decoded inbound frame, header-parsed but payload left raw. Same shape
 /// as `bridge_proto::RawFrame` — kept separate so the public WS protocol
@@ -293,6 +294,18 @@ pub struct SetDescriptionHeader {
 pub struct StreamStartHeader {
     pub url: String,
     pub title: Option<String>,
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub playlist: bool,
+}
+
+#[derive(Deserialize)]
+pub struct StreamQueueHeader {
+    pub op: String,
+    pub index: Option<u32>,
+    pub to: Option<u32>,
+    pub name: Option<String>,
+    pub mode: Option<String>,
 }
 
 /// PCM16LE payload bytes -> i16 samples.

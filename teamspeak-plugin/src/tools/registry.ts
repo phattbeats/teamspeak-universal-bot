@@ -101,12 +101,19 @@ const MODERATION_FLAG: Record<string, "kick" | "ban" | "edit"> = {
 export const STREAM_URL_TOOL = "stream_url";
 export const STOP_STREAM_TOOL = "stop_stream";
 export const STREAM_STATUS_TOOL = "stream_status";
+export const SKIP_STREAM_TOOL = "skip_stream";
+export const EDIT_STREAM_QUEUE_TOOL = "edit_stream_queue";
+export const STREAM_PLAYLIST_TOOL = "stream_playlist";
 
-/** Round-trips to the Sexton's screen-share actor. `detail` is a human string or status JSON. */
+type StreamReply = Promise<{ ok: boolean; detail: string }>;
+
+/** Round-trips to the Sexton's screen-share actor. `detail` is a human string or JSON. */
 export type StreamController = {
-  start: (url: string, title?: string) => Promise<{ ok: boolean; detail: string }>;
-  stop: () => Promise<{ ok: boolean; detail: string }>;
-  status: () => Promise<{ ok: boolean; detail: string }>;
+  start: (url: string, title?: string, options?: { mode?: string; playlist?: boolean }) => StreamReply;
+  stop: () => StreamReply;
+  status: () => StreamReply;
+  /** skip | clear | remove | move | shuffle | save | load | delete | playlists */
+  queue: (op: string, options?: { index?: number; to?: number; name?: string; mode?: string }) => StreamReply;
 };
 
 // --- music queue v2 (#3785) ---------------------------------------------
@@ -242,27 +249,72 @@ export function buildTeamSpeakTools(options: {
         type: "function",
         name: STREAM_URL_TOOL,
         description:
-          "Screen-share a live stream or video into the channel so people can click Watch and see it with sound. Use when someone says \"stream this\" with a Twitch, Kick or YouTube link. Only those sites work. Starting a new one replaces the current one. Tell them to click Watch on your share; the video takes a few seconds to appear after they do. Confirm in a few words.",
+          "Screen-share a video or live stream into the channel so people can click Watch and see it with sound. Use when someone says \"stream this\", \"queue this video\" or \"play this video\" with a link. Works with most video sites: YouTube, Twitch, Kick, Rumble, Vimeo, Dailymotion and more. A playlist link adds every video in it. If something is already on, this queues it instead of interrupting (the result gives the queue position, so say e.g. \"queued, you're third\"); use mode \"now\" only when they want to switch right away, \"next\" to play it after the current one. Videos play one after another on the same share, so people only click Watch once. Confirm in a few words.",
         parameters: {
           type: "object",
           properties: {
-            url: { type: "string", description: "The http(s) link to a Twitch, Kick or YouTube stream or video." },
-            title: { type: "string", description: "Optional label for the share; defaults to the stream's title." },
+            url: { type: "string", description: "The http(s) link to a video, live stream or playlist." },
+            title: { type: "string", description: "Optional label; defaults to the video's title." },
+            mode: {
+              type: "string",
+              enum: ["queue", "next", "now"],
+              description: "queue (default): after everything queued. next: right after the current one. now: replace the current one.",
+            },
+            playlist: {
+              type: "boolean",
+              description: "True to add the whole playlist when the link is one video inside a playlist.",
+            },
           },
           required: ["url"],
         },
       },
       {
         type: "function",
+        name: SKIP_STREAM_TOOL,
+        description: "Skip to the next video in the screen-share queue. Ends the share if nothing is queued. Confirm in a few words.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
         name: STOP_STREAM_TOOL,
-        description: "Stop the screen share. Confirm in a few words.",
+        description: "Stop the screen share and clear its queue. Confirm in a few words.",
         parameters: { type: "object", properties: {} },
       },
       {
         type: "function",
         name: STREAM_STATUS_TOOL,
-        description: "Say what is being screen-shared right now and how many are watching.",
+        description: "Say what is being screen-shared now, what is queued after it, and how many are watching.",
         parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: EDIT_STREAM_QUEUE_TOOL,
+        description:
+          "Change the screen-share video queue: remove one entry, move one, shuffle, or clear it. Positions are 1-based as shown by stream_status. Confirm in a few words.",
+        parameters: {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["remove", "move", "shuffle", "clear"] },
+            position: { type: "number", description: "Queue position to remove or move." },
+            to: { type: "number", description: "New position, for move." },
+          },
+          required: ["action"],
+        },
+      },
+      {
+        type: "function",
+        name: STREAM_PLAYLIST_TOOL,
+        description:
+          "Saved video playlists for the screen share. save: store what is playing plus the queue under a name. load: queue a saved playlist (plays at once if nothing is on). delete: remove one. list: name the saved ones. Confirm in a few words.",
+        parameters: {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["save", "load", "delete", "list"] },
+            name: { type: "string", description: "Playlist name, for save, load and delete." },
+            mode: { type: "string", enum: ["queue", "next", "now"], description: "For load: where the videos go (default queue)." },
+          },
+          required: ["action"],
+        },
       },
     );
   }
@@ -988,6 +1040,9 @@ async function dispatch(
     case STREAM_URL_TOOL:
     case STOP_STREAM_TOOL:
     case STREAM_STATUS_TOOL:
+    case SKIP_STREAM_TOOL:
+    case EDIT_STREAM_QUEUE_TOOL:
+    case STREAM_PLAYLIST_TOOL:
       return await streamTool(deps, name, args);
     case LIST_CHANNELS_TOOL:
       return await listChannelsTool(deps);
@@ -1920,7 +1975,31 @@ function editServerTool(
   return { ok: true, name: name ?? null, welcomeMessage: welcomeMessage ?? null };
 }
 
-const STREAM_HOSTS = /^(?:[a-z0-9-]+\.)*(?:twitch\.tv|kick\.com|youtube\.com|youtu\.be)$/iu;
+/** A stream reply's `detail` is JSON for successes that carry data, plain text otherwise. */
+function streamResult(r: { ok: boolean; detail: string }): ToolResult {
+  if (!r.ok) {
+    return { ok: false, error: r.detail };
+  }
+  try {
+    const parsed = JSON.parse(r.detail) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { ok: true, ...(parsed as Record<string, unknown>) };
+    }
+  } catch {
+    // plain text
+  }
+  return { ok: true, detail: r.detail };
+}
+
+function readMode(value: unknown): string | undefined {
+  const mode = readString(value)?.trim().toLowerCase();
+  return mode === "now" || mode === "next" || mode === "queue" ? mode : undefined;
+}
+
+function readPosition(value: unknown): number | undefined {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isInteger(n) && n >= 1 ? n : undefined;
+}
 
 async function streamTool(
   deps: TeamSpeakToolDeps,
@@ -1931,35 +2010,76 @@ async function streamTool(
   if (!stream) {
     return { ok: false, error: "Screen sharing isn't set up here." };
   }
-  if (name === STOP_STREAM_TOOL) {
-    const r = await stream.stop();
-    return { ok: r.ok, detail: r.detail };
-  }
-  if (name === STREAM_STATUS_TOOL) {
-    const r = await stream.status();
-    try {
-      return { ok: r.ok, ...(JSON.parse(r.detail) as Record<string, unknown>) };
-    } catch {
-      return { ok: r.ok, detail: r.detail };
+  switch (name) {
+    case STOP_STREAM_TOOL:
+      return streamResult(await stream.stop());
+    case STREAM_STATUS_TOOL:
+      return streamResult(await stream.status());
+    case SKIP_STREAM_TOOL:
+      return streamResult(await stream.queue("skip"));
+    case EDIT_STREAM_QUEUE_TOOL: {
+      const action = readString(args.action)?.trim().toLowerCase();
+      if (action !== "remove" && action !== "move" && action !== "shuffle" && action !== "clear") {
+        return { ok: false, error: "Say remove, move, shuffle or clear." };
+      }
+      const index = readPosition(args.position);
+      const to = readPosition(args.to);
+      if ((action === "remove" || action === "move") && index === undefined) {
+        return { ok: false, error: "Which queue position?" };
+      }
+      if (action === "move" && to === undefined) {
+        return { ok: false, error: "Move it to which position?" };
+      }
+      return streamResult(
+        await stream.queue(action, { ...(index !== undefined ? { index } : {}), ...(to !== undefined ? { to } : {}) }),
+      );
     }
+    case STREAM_PLAYLIST_TOOL: {
+      const action = readString(args.action)?.trim().toLowerCase();
+      if (action === "list") {
+        return streamResult(await stream.queue("playlists"));
+      }
+      if (action !== "save" && action !== "load" && action !== "delete") {
+        return { ok: false, error: "Say save, load, delete or list." };
+      }
+      const playlistName = readString(args.name)?.trim();
+      if (!playlistName) {
+        return { ok: false, error: "What's the playlist called?" };
+      }
+      const mode = readMode(args.mode);
+      return streamResult(await stream.queue(action, { name: playlistName, ...(mode ? { mode } : {}) }));
+    }
+    default:
+      break;
   }
   const raw = readString(args.url)?.trim();
-  let host: string | undefined;
+  let ok = false;
   try {
     const u = raw ? new URL(raw) : undefined;
-    host = u && (u.protocol === "https:" || u.protocol === "http:") ? u.hostname : undefined;
+    ok = !!u && (u.protocol === "https:" || u.protocol === "http:") && !!u.hostname;
   } catch {
-    host = undefined;
+    ok = false;
   }
-  if (!raw || !host || !STREAM_HOSTS.test(host)) {
-    return { ok: false, error: "I can only stream Twitch, Kick or YouTube links." };
+  if (!raw || !ok) {
+    return { ok: false, error: "Give me an http(s) link to the video." };
   }
-  const r = await stream.start(raw, readString(args.title));
+  const mode = readMode(args.mode);
+  const r = await stream.start(raw, readString(args.title), {
+    ...(mode ? { mode } : {}),
+    ...(args.playlist === true ? { playlist: true } : {}),
+  });
   if (!r.ok) {
     return { ok: false, error: r.detail };
   }
-  deps.log?.(`stream: started ${raw}`);
-  return { ok: true, note: "Share is up in the channel. Tell them to click Watch; video appears a few seconds after." };
+  deps.log?.(`stream: ${mode ?? "queue"} ${raw}`);
+  const result = streamResult(r);
+  const queued = typeof result.queued === "number";
+  return {
+    ...result,
+    note: queued
+      ? "Queued on the share; it plays when the ones ahead finish."
+      : "Share is up in the channel. Tell them to click Watch; video appears a few seconds after.",
+  };
 }
 
 function addToServerGroupTool(

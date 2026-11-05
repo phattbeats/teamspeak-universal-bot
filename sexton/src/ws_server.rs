@@ -292,7 +292,12 @@ async fn dispatch(
         }
         TYPE_STREAM_START => {
             if let Ok(h) = serde_json::from_value::<StreamStartHeader>(frame.header) {
-                let _ = cmd_tx.send(BridgeCommand::StreamStart { url: h.url, title: h.title });
+                let _ = cmd_tx.send(BridgeCommand::StreamStart { url: h.url, title: h.title, mode: h.mode, playlist: h.playlist });
+            }
+        }
+        TYPE_STREAM_QUEUE => {
+            if let Ok(h) = serde_json::from_value::<StreamQueueHeader>(frame.header) {
+                let _ = cmd_tx.send(BridgeCommand::StreamQueue { op: h.op, index: h.index, to: h.to, name: h.name, mode: h.mode });
             }
         }
         TYPE_STREAM_STOP => {
