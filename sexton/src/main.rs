@@ -531,13 +531,19 @@ impl ChannelState {
 
     /// The digest for `uid` as of `now`, or `None` when nothing was said that
     /// they have not already seen.
-    fn digest_for(&self, uid: &str) -> Option<String> {
+    fn digest_for(&self, uid: &str, recipient_nick: &str) -> Option<String> {
         let since = self.unreported_since.get(uid).or_else(|| self.notified.get(uid))?;
         let present = self.present_spans.get(uid).cloned().unwrap_or_default();
         debug!(%uid, since, spans = ?present, history = self.history.len(), "building the digest");
-        let rendered: Vec<String> = self.history.iter().map(|m| m.render_line()).collect();
-        let lines: Vec<dm::DigestLine> = self
+        // Their own lines are not news to them, and bare URLs would make the
+        // client unfurl a preview per link, so links go in as short labels.
+        let kept: Vec<&LoggedMessage> = self
             .history
+            .iter()
+            .filter(|m| recipient_nick.is_empty() || m.nickname != recipient_nick)
+            .collect();
+        let rendered: Vec<String> = kept.iter().map(|m| digest_line(m)).collect();
+        let lines: Vec<dm::DigestLine> = kept
             .iter()
             .zip(rendered.iter())
             .map(|(m, r)| dm::DigestLine { ts: m.ts, rendered: r, nickname: &m.nickname })
@@ -615,6 +621,27 @@ fn link_filename(url: &str) -> Option<String> {
     let ext = name.rsplit('.').next()?;
     let plausible = (1..=5).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric());
     plausible.then(|| name.to_string())
+}
+
+/// One digest line with every URL replaced by `[link: domain]`, so the DM
+/// shows no embeddable links.
+fn digest_line(m: &LoggedMessage) -> String {
+    let text = m
+        .text
+        .split(' ')
+        .map(|w| {
+            if w.starts_with("http://") || w.starts_with("https://") {
+                match link_domain(w) {
+                    Some(d) => format!("[link: {d}]"),
+                    None => "[link]".to_string(),
+                }
+            } else {
+                w.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{}  {}: {}\n", m.time_label, m.nickname, text)
 }
 
 /// A link short enough to read survives as-is; anything longer collapses to its
@@ -1696,6 +1723,11 @@ fn maybe_send_catchup(
         state.pending_catchup.insert(client_id);
         return;
     };
+    let recipient_nick = con
+        .get_state()
+        .ok()
+        .and_then(|s| s.clients.get(&client_id).map(|c| c.name.to_string()))
+        .unwrap_or_default();
     state.pending_catchup.remove(&client_id);
 
     state.uid_of.insert(client_id, uid.clone());
@@ -1736,7 +1768,7 @@ fn maybe_send_catchup(
         info!(?client_id, %uid, "inside the update cooldown; no DM (the next one after the window covers it)");
         return;
     }
-    let text = match state.digest_for(&uid) {
+    let text = match state.digest_for(&uid, &recipient_nick) {
         Some(digest) => state.template.returning(&state.current_caps(), &state.bot_name, &digest),
         None if state.dm.quiet_notice => "All quiet since you left.".to_string(),
         None => {
@@ -2459,12 +2491,26 @@ mod tests {
         push_at(&mut state, 100, "Kyle", "before they left");
         state.note_join(uid, 50);
         state.note_leave(uid, 110);
-        assert_eq!(state.digest_for(uid), None, "nothing said since they left");
+        assert_eq!(state.digest_for(uid, ""), None, "nothing said since they left");
         push_at(&mut state, 120, "Kyle", "anyone up for cs");
         push_at(&mut state, 130, "Ledger [BOT]", "Now playing");
-        let d = state.digest_for(uid).expect("two new lines");
+        let d = state.digest_for(uid, "").expect("two new lines");
         assert!(d.contains("Kyle: anyone up for cs") && d.contains("Ledger [BOT]: Now playing"));
         assert!(!d.contains("before they left"));
+    }
+
+    #[test]
+    fn digest_drops_the_recipients_own_lines_and_link_embeds() {
+        let mut state = state_in(&scratch("digest-own"), "chan");
+        let uid = "uidA=";
+        state.note_join(uid, 50);
+        state.note_leave(uid, 110);
+        push_at(&mut state, 120, "me", "stream https://www.youtube.com/watch?v=abc");
+        push_at(&mut state, 130, "Sexton [BOT]", "Playing https://www.youtube.com/watch?v=abc now");
+        let d = state.digest_for(uid, "me").unwrap();
+        assert!(!d.contains("me:"), "{d}");
+        assert!(d.contains("Sexton [BOT]: Playing [link: www.youtube.com] now"), "{d}");
+        assert!(!d.contains("http"), "{d}");
     }
 
     /// A hop inside the cooldown sends nothing, and the lines are not lost: the
@@ -2480,11 +2526,11 @@ mod tests {
         push_at(&mut state, 25, "Kyle", "said while present");
         state.note_leave(uid, 30);
         push_at(&mut state, 35, "Kyle", "said while away two");
-        let d = state.digest_for(uid).unwrap();
+        let d = state.digest_for(uid, "").unwrap();
         assert!(d.contains("away one") && d.contains("away two"));
         assert!(!d.contains("while present"));
         state.mark_notified(uid, 40);
-        assert_eq!(state.digest_for(uid), None, "a sent DM clears the debt");
+        assert_eq!(state.digest_for(uid, ""), None, "a sent DM clears the debt");
     }
 
     #[test]
