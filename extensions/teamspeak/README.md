@@ -281,7 +281,65 @@ Mount the logger's log volume into the gateway container read-only, or set
 `TEAMSPEAK_SEXTON_LOG_DIR`. With no log present the tool answers "nothing
 logged yet" rather than failing.
 
-## Building it into the Gateway image
+## Installing as a managed plugin (recommended, PHA-3326)
+
+`openclaw plugins install --link <path>` is a real managed install — it
+creates an install record in the Gateway's own config/state dir, same as any
+other plugin — while loading the code straight from a mounted host directory.
+That matters here because `--link` is the one install mode exempt from
+OpenClaw's built-runtime-entry check: this plugin ships TypeScript directly
+(`openclaw.extensions: ["./index.ts"]`, no `dist/`, matching
+`extensions/discord/src/voice`'s bundled-plugin shape), and a plain
+`install <path>`, `npm:`, or `npm-pack:` install all require a compiled entry
+point this package doesn't have.
+
+**Confirmed working against OpenClaw 2026.9.2**: the plugin's
+`openclaw/plugin-sdk/*` production-private subpath imports (`realtime-voice`,
+`config-contracts`, `runtime-env`) resolve correctly from a `--link`-installed
+directory that lives entirely outside the Gateway's own image — `openclaw
+plugins inspect teamspeak --runtime` reports `"imported": true` after loading
+`index.ts` → `src/channel.ts` → the bridge/runtime modules. **This requires
+OpenClaw >=2026.9.2** (`package.json#peerDependencies.openclaw`,
+`openclaw.plugin.json`'s `compat.pluginApi`); confirmed failing on 2026.7.1,
+where OpenClaw refuses the install on a plugin-API compat mismatch before it
+gets far enough to hit SDK resolution.
+
+The install itself survives `openclaw update` / a base-image pull: the plugin
+code lives in a bind-mounted host directory (not the image), and the install
+record lives in the Gateway's persisted config/state dir (also not the
+image). Neither is touched by swapping the base image. That is the whole
+motivation for this path over the custom Gateway image below, which an image
+pull silently wipes.
+
+```bash
+# On the Gateway host. Stages the plugin, strips the checkout-only test
+# scaffolding, and npm-installs its one runtime dependency (ws) using the
+# Gateway image's own node/npm (the host itself typically has neither).
+./install/stage-teamspeak-link.sh
+```
+
+Then, once — these steps touch the running container, so they're manual:
+
+1. Add a permanent bind mount of the staged directory into the Gateway
+   container (Unraid: Docker tab → edit the container → add a Path mapping).
+2. `openclaw plugins install --link <mounted-path> --force --accept-capabilities`
+3. Add the `channels.teamspeak` config block (below) and restart the Gateway.
+
+`openclaw plugins update` does not apply to a `--link` install (there's no
+version to move to; it always loads current disk contents) — a plugin change
+just needs `stage-teamspeak-link.sh` re-run and the Gateway restarted.
+
+For PHATT-RAID specifically, see [`INSTALL-PHATT-RAID.md`](INSTALL-PHATT-RAID.md)
+for the exact commands against that box's layout.
+
+## Building it into the Gateway image (alternative / CI)
+
+The other option is compiling this plugin straight into a custom Gateway
+image, which is the more familiar path for a bundled-style extension and
+still useful for local dev or a from-scratch CI build. Its downside is
+exactly what motivated the section above: a custom image gets silently
+replaced by any subsequent `openclaw update` or base-image pull, so it needs
+a manual rebuild-and-redeploy after every core upgrade.
 
 Copy this directory into an OpenClaw source checkout as `extensions/teamspeak`,
 then build with the plugin selected (`docs/install/docker.md`, "Source-built
@@ -291,21 +349,23 @@ images with selected plugins"):
 OPENCLAW_EXTENSIONS=teamspeak docker compose build
 ```
 
-For PHATT-RAID specifically — where Unraid has no `docker compose`, the Gateway
-runs a prebuilt release image, and the container is owned by an Unraid template
-— see [`INSTALL-PHATT-RAID.md`](INSTALL-PHATT-RAID.md) and the build script in
-[`install/`](install/build-openclaw-teamspeak.sh).
+The build script in [`install/`](install/build-openclaw-teamspeak.sh) does
+this end to end.
 
 ### Using it in an OpenClaw checkout
 
 Two files are shaped for this standalone repo and should be adjusted on the way
-in:
+in (both `stage-teamspeak-link.sh` and `build-openclaw-teamspeak.sh` do this
+for you):
 
 1. `tsconfig.json` — replace the whole file with
-   `{ "extends": "../tsconfig.package-boundary.base.json" }`.
+   `{ "extends": "../tsconfig.package-boundary.base.json" }` (checkout build
+   only; a `--link` install leaves it alone since nothing runs `tsc` at
+   runtime).
 2. `test/sdk-stubs/`, `vitest.standalone.config.ts` — delete them. They exist
-   only so the plugin can be tested outside a checkout; inside one the real SDK
-   resolves and the repository's own vitest runs the tests.
+   only so the plugin can be tested outside a checkout; inside one, or under a
+   `--link` install, the real SDK resolves and the repository's own vitest
+   runs the tests.
 
 The plugin imports the private-local `openclaw/plugin-sdk/realtime-voice*`
 subpaths the way `extensions/discord/src/voice` does. That is the accepted cost
