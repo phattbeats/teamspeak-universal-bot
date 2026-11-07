@@ -4,13 +4,15 @@ The Sexton — a persistent chat-memory bot for `teamspeak.phatt.vip` (TeamSpeak
 
 TeamSpeak does not persist channel chat, so anyone who joins a channel late sees nothing.
 The Sexton sits in a channel, watches user text messages, and makes them readable after the
-fact in three places.
+fact — and tells the room he is doing it.
 
 ## Behaviour
 
 1. **Rolling log in the channel description.** Every user text message in the watched channel
    rewrites the channel description to the most recent messages, newest at the bottom, format
-   `HH:MM  nickname: message`, with the header `— last messages, kept by the Sexton —` on top.
+   `HH:MM  nickname: message`, with the notice header on top:
+   `— the Sexton keeps this hall: the last lines stay here, the whole log is kept below. Ask him and he'll fetch the rest. —`
+   (PHA-3177 draft B, stage 1 — 124 bytes out of the budget below).
    The message window is chosen dynamically to fit a **7500-byte** budget (the server's hard cap
    for `TS3_MAX_SIZE_CHANNEL_DESCRIPTION` is 8192).
    The message ring is in memory only, so on connect it is **rehydrated from the disk log below**
@@ -24,8 +26,29 @@ fact in three places.
    (or a "nothing logged yet" note). Rate-limited to one PM per client per 10 minutes so
    channel-hopping does not spam, and suppressed for the first five seconds after the bot itself
    connects so a restart does not PM everyone already in the room.
-3. **Full log on disk.** Every message is appended to `<log-dir>/<channel-name>/YYYY-MM-DD.md`
+3. **Welcome PM.** The first time a client is ever caught up, and only the first time, the
+   catch-up is preceded by a one-time notice saying what the Sexton does — that the channel is
+   logged, that the last lines are in the description, and that he will fetch older ones on
+   request. Announced, not discovered (PHA-3177 draft B, PHA-3305). This is *not* the catch-up
+   PM and does not share its 10-minute window: it is keyed on the client's TeamSpeak uid, which
+   survives reconnects, and the list of welcomed uids is written to
+   `<log-dir>/<channel-name>/.welcomed` so a container restart does not re-introduce the Sexton
+   to the whole room. Fail-open: a lost list costs one repeated welcome, never a failed connect.
+   Clients whose uid the server has not given us fall back to a session-only key, which is never
+   written down.
+4. **Full log on disk.** Every message is appended to `<log-dir>/<channel-name>/YYYY-MM-DD.md`
    as markdown, one line per message, same format.
+
+### HARD RULE: the notice ships in two stages
+
+The header and the welcome PM above are **stage 1**. Stage 2 — the header clause
+`Say "Sexton" out loud and he answers.`, the welcome's voice paragraph, and the line
+`your voice doesn't leave the house` — ships in the same commit as the voice lane going live
+(PHA-3228), and not before. Both stage-2 sentences are promises: the first is false while the
+Sexton is text-only, and the second is false if any metered hosted STT is ever in the path,
+which is the $0-ceiling constraint from PHA-3177 restated as a wording rule. The exact stage-2
+text is in the PHA-3099 banner; `the_notice_is_stage_one_and_carries_nothing_from_stage_two`
+in `src/main.rs` fails if it arrives early.
 
 ### HARD RULE: content only
 

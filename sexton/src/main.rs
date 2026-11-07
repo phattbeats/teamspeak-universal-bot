@@ -4,7 +4,8 @@
 //! 1. Rolling log of the last messages in the channel description (newest at the
 //!    bottom, byte budget under the server's 8192-byte hard cap).
 //! 2. Catch-up PM to any client that joins/hops into the watched channel
-//!    (rate-limited per client).
+//!    (rate-limited per client), preceded — once per client, ever — by the
+//!    welcome PM that says out loud what the Sexton does (PHA-3305).
 //! 3. Full markdown log on disk, one file per channel per day.
 //!
 //! HARD RULE: only real user-authored text messages sent to the watched channel
@@ -35,11 +36,32 @@ use tsclientlib::{
 /// Channel description hard cap is 8192 bytes (`TS3_MAX_SIZE_CHANNEL_DESCRIPTION`).
 /// Stay well under it — PHA-3173 asks for ~7500.
 const DESC_BUDGET_BYTES: usize = 7500;
-const DESC_HEADER: &str = "— last messages, kept by the Sexton —\n";
+/// The notice as Brandon picked it on PHA-3177 (draft B, plainspoken caretaker),
+/// stage 1. 124 bytes, so it costs nothing worth counting out of the budget.
+///
+/// STAGE 2 — the voice clause, `Say "Sexton" out loud and he answers.` — ships
+/// the day PHA-3228 lands and not one commit earlier. It is a promise, and it is
+/// false until the stt-tts lane actually runs. Same rule for `WELCOME_PM`.
+const DESC_HEADER: &str = "— the Sexton keeps this hall: the last lines stay here, \
+                           the whole log is kept below. Ask him and he'll fetch the rest. —\n";
+/// First-contact PM: sent once per client, ever, immediately before their first
+/// catch-up (PHA-3305). Not the catch-up PM — see `catchup_text`.
+///
+/// Stage 2 adds the voice paragraph and the "your voice doesn't leave the house"
+/// line. Do not add either early: the second one is the $0-ceiling constraint
+/// from PHA-3228 restated as a wording rule, and a hosted metered STT anywhere
+/// in the path would make it a lie.
+const WELCOME_PM: &str = "Evening. I'm the Sexton — I keep the records for this hall.\n\n\
+                          One thing worth knowing before you settle in: everything typed in \
+                          the channel goes into the log, and the last twenty lines sit in the \
+                          channel description where you can see them.\n\n\
+                          Ask me for something out of the log and I'll go down and find it.";
 /// How many messages the catch-up PM includes.
 const CATCHUP_PM_COUNT: usize = 15;
 /// One catch-up PM per client per this long.
 const PM_RATE_LIMIT: Duration = Duration::from_secs(10 * 60);
+/// Where the welcomed-client list lives, inside the channel's log directory.
+const WELCOMED_FILE: &str = ".welcomed";
 /// How many messages we keep in memory (comfortably covers the description
 /// budget and the catch-up PM window).
 const HISTORY_CAP: usize = 200;
@@ -163,6 +185,11 @@ struct ChannelState {
     channel_name: String,
     history: VecDeque<LoggedMessage>,
     last_pm: HashMap<ClientId, tokio::time::Instant>,
+    /// Clients that have already had the one-time welcome PM, keyed by
+    /// TeamSpeak uid (stable across reconnects and restarts) and persisted to
+    /// disk. Deliberately *not* the `last_pm` map: that one expires every ten
+    /// minutes, and the welcome goes out once and stays out.
+    welcomed: HashSet<String>,
     log_dir: PathBuf,
     /// Clients that were already connected when the bot came up — never PM'd
     /// on account of our own connect.
@@ -188,6 +215,7 @@ impl ChannelState {
             channel_name,
             history: VecDeque::with_capacity(HISTORY_CAP),
             last_pm: HashMap::new(),
+            welcomed: HashSet::new(),
             log_dir,
             preexisting,
             quiet_until: tokio::time::Instant::now() + STARTUP_GRACE,
@@ -287,6 +315,71 @@ impl ChannelState {
             out.push_str(&line);
         }
         out
+    }
+
+    fn welcomed_path(&self) -> PathBuf {
+        self.log_dir.join(&self.channel_name).join(WELCOMED_FILE)
+    }
+
+    /// Read back who has already been welcomed (PHA-3305). Without this every
+    /// container restart re-introduces the Sexton to everyone who walks in, and
+    /// "once" quietly becomes "once per deploy".
+    ///
+    /// Fail-open by contract, like `seed_history_from_disk`: a missing or
+    /// unreadable list costs one repeated welcome, never a failed connect.
+    fn load_welcomed_from_disk(&mut self) {
+        let path = self.welcomed_path();
+        match std::fs::read_to_string(&path) {
+            Ok(body) => {
+                for line in body.lines() {
+                    let key = line.trim();
+                    if !key.is_empty() {
+                        self.welcomed.insert(key.to_string());
+                    }
+                }
+                info!(
+                    known = self.welcomed.len(),
+                    path = %path.display(),
+                    "loaded the already-welcomed list"
+                );
+            }
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    warn!(
+                        error = %e,
+                        path = %path.display(),
+                        "reading the already-welcomed list failed; someone may be welcomed twice"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Record `key` as welcomed. `durable` keys — client uids — are appended to
+    /// the on-disk list; the session-only fallback key is not, because a runtime
+    /// `ClientId` means nothing to the next process.
+    fn remember_welcomed(&mut self, key: String, durable: bool) {
+        if durable {
+            if let Err(e) = self.append_welcomed(&key) {
+                warn!(error = %e, "recording the welcome on disk failed; it may go out again after a restart");
+            }
+        }
+        self.welcomed.insert(key);
+    }
+
+    fn append_welcomed(&self, key: &str) -> Result<()> {
+        let dir = self.log_dir.join(&self.channel_name);
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("creating log dir {}", dir.display()))?;
+        let path = dir.join(WELCOMED_FILE);
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("opening welcomed list {}", path.display()))?;
+        writeln!(f, "{key}")?;
+        Ok(())
     }
 
     fn catchup_text(&self) -> String {
@@ -496,6 +589,9 @@ async fn run_once(args: &Args, address: &str, first_connect: bool) -> Result<()>
     // otherwise a restart overwrites a populated description with a bare
     // header (PHA-3217).
     state.seed_history_from_disk();
+    // And who has already been introduced to the Sexton, so a restart does not
+    // re-welcome the room (PHA-3305).
+    state.load_welcomed_from_disk();
 
     // Kick off the avatar upload (if configured). We track the handle and
     // finish the two-step process (upload, then set_avatar_hash) once the
@@ -689,6 +785,24 @@ fn maybe_send_catchup(
         return;
     }
     state.last_pm.insert(client_id, now);
+
+    // The announced notice (PHA-3305): before this client's *first* catch-up,
+    // and only ever before the first, say what the Sexton is doing. The
+    // rate-limit map above expires after ten minutes; this one never does.
+    let (key, durable) = welcome_key(con, client_id);
+    if !state.welcomed.contains(&key) {
+        match send_pm(con, client_id, WELCOME_PM) {
+            Ok(handle) => {
+                info!(?client_id, %key, durable, "welcome PM sent");
+                state.pending_cmds.insert(handle.0, format!("welcome PM to {client_id:?}"));
+                state.remember_welcomed(key, durable);
+            }
+            // Not fatal, and deliberately not remembered: an unsent welcome
+            // should be retried on their next join, not marked as delivered.
+            Err(e) => warn!(error = %e, ?client_id, "welcome PM failed"),
+        }
+    }
+
     let text = state.catchup_text();
     match send_pm(con, client_id, &text) {
         Ok(handle) => {
@@ -696,6 +810,25 @@ fn maybe_send_catchup(
             state.pending_cmds.insert(handle.0, format!("catch-up PM to {client_id:?}"));
         }
         Err(e) => warn!(error = %e, ?client_id, "catch-up PM failed"),
+    }
+}
+
+/// The key a welcomed client is remembered under, and whether it is worth
+/// writing down.
+///
+/// Their TeamSpeak uid is the durable one: it survives reconnects, nickname
+/// changes and bot restarts, which is what "once, and it stays out" needs. If
+/// the server has not handed us a uid for this client, fall back to the runtime
+/// `ClientId` — good enough to stop a channel hop re-welcoming them inside this
+/// session, and never persisted, where it would only collide with a stranger.
+fn welcome_key(con: &mut Connection, client_id: ClientId) -> (String, bool) {
+    let uid = con
+        .get_state()
+        .ok()
+        .and_then(|s| s.clients.get(&client_id).and_then(|c| c.uid.as_ref().map(|u| u.to_string())));
+    match uid {
+        Some(uid) => (uid, true),
+        None => (format!("client-id:{client_id}"), false),
     }
 }
 
@@ -879,6 +1012,91 @@ mod tests {
         let rendered: usize =
             DESC_HEADER.len() + seeded.iter().map(|e| e.render_line().len()).sum::<usize>();
         assert!(rendered <= DESC_BUDGET_BYTES, "seeded {rendered} bytes > budget");
+    }
+
+    fn state_in(dir: &std::path::Path, channel: &str) -> ChannelState {
+        ChannelState::new(ChannelId(0), channel.to_string(), dir.to_path_buf(), HashSet::new())
+    }
+
+    /// The notice ships in two stages (PHA-3177). Stage 2's sentences are
+    /// promises the text-only Sexton cannot keep, so this test is the guard
+    /// against them arriving early by way of a well-meaning edit.
+    #[test]
+    fn the_notice_is_stage_one_and_carries_nothing_from_stage_two() {
+        assert_eq!(
+            DESC_HEADER,
+            "— the Sexton keeps this hall: the last lines stay here, the whole log is kept below. \
+             Ask him and he'll fetch the rest. —\n"
+        );
+        assert_eq!(
+            WELCOME_PM,
+            "Evening. I'm the Sexton — I keep the records for this hall.\n\n\
+             One thing worth knowing before you settle in: everything typed in the channel goes \
+             into the log, and the last twenty lines sit in the channel description where you can \
+             see them.\n\n\
+             Ask me for something out of the log and I'll go down and find it."
+        );
+
+        // PHA-3228 has not landed: nothing here may promise voice, or that the
+        // voice never leaves the box.
+        for stage_two in ["out loud", "listening", "voice", "say my name"] {
+            assert!(!DESC_HEADER.contains(stage_two), "stage-2 wording {stage_two:?} in the header");
+            assert!(!WELCOME_PM.contains(stage_two), "stage-2 wording {stage_two:?} in the welcome");
+        }
+
+        // The header shares the description's byte budget with the log lines.
+        assert!(DESC_HEADER.len() < 200, "header is {} bytes", DESC_HEADER.len());
+    }
+
+    #[test]
+    fn the_welcome_goes_out_once_and_stays_out_across_a_restart() {
+        let dir = scratch("welcomed");
+        let channel = "General Shit";
+        let uid = "aQm5FQ0RfBBBhP0Cw0S1FCxjnbg=";
+
+        let mut state = state_in(&dir, channel);
+        assert!(!state.welcomed.contains(uid), "nobody is welcomed on a cold start");
+        state.remember_welcomed(uid.to_string(), true);
+        assert!(state.welcomed.contains(uid));
+
+        // A restart: fresh state, same log dir. The welcome must not re-fire.
+        let mut restarted = state_in(&dir, channel);
+        restarted.load_welcomed_from_disk();
+        assert!(restarted.welcomed.contains(uid), "restart forgot who it had welcomed");
+
+        // Two clients, one file, no clobbering.
+        let other = "bbbbFQ0RfBBBhP0Cw0S1FCxjnbg=";
+        restarted.remember_welcomed(other.to_string(), true);
+        let mut again = state_in(&dir, channel);
+        again.load_welcomed_from_disk();
+        assert!(again.welcomed.contains(uid) && again.welcomed.contains(other));
+    }
+
+    #[test]
+    fn a_session_only_welcome_key_is_never_written_down() {
+        let dir = scratch("welcomed-volatile");
+        let channel = "chan";
+
+        let mut state = state_in(&dir, channel);
+        state.remember_welcomed("client-id:17".to_string(), false);
+        // Held for this session...
+        assert!(state.welcomed.contains("client-id:17"));
+        // ...and gone on the next one: client id 17 will be someone else.
+        let mut restarted = state_in(&dir, channel);
+        restarted.load_welcomed_from_disk();
+        assert!(restarted.welcomed.is_empty(), "a runtime client id was persisted");
+    }
+
+    #[test]
+    fn an_unreadable_welcomed_list_is_fail_open() {
+        // A directory where the list file should be: read_to_string errors and
+        // the bot must still connect, at the cost of one repeated welcome.
+        let dir = scratch("welcomed-unreadable");
+        let channel = "chan";
+        std::fs::create_dir_all(dir.join(channel).join(WELCOMED_FILE)).unwrap();
+        let mut state = state_in(&dir, channel);
+        state.load_welcomed_from_disk();
+        assert!(state.welcomed.is_empty());
     }
 
     #[test]

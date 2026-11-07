@@ -31,12 +31,19 @@ fi
 mkdir -p "$SRC_ROOT"
 
 log "openclaw source @ ${OPENCLAW_REF}"
-if [ ! -d "$SRC_ROOT/openclaw/.git" ]; then
-  git clone --filter=blob:none https://github.com/openclaw/openclaw.git "$SRC_ROOT/openclaw"
+# Tarball, not `git clone`. A blobless clone has to fetch every blob back
+# during checkout, which on this box crawled at a couple of files a second
+# through 38k files; the codeload tarball is one stream and lands in a minute.
+# The build only needs a source tree, not history.
+work="$SRC_ROOT/openclaw"
+if [ ! -f "$work/.ref-${OPENCLAW_REF}" ]; then
+  rm -rf "$work" "$work.tmp"
+  mkdir -p "$work.tmp"
+  curl -fsSL "https://codeload.github.com/openclaw/openclaw/tar.gz/${OPENCLAW_REF}" \
+    | tar -xz -C "$work.tmp" --strip-components=1
+  mv "$work.tmp" "$work"
+  touch "$work/.ref-${OPENCLAW_REF}"
 fi
-git -C "$SRC_ROOT/openclaw" fetch --filter=blob:none origin "$OPENCLAW_REF" \
-  || git -C "$SRC_ROOT/openclaw" fetch origin
-git -C "$SRC_ROOT/openclaw" checkout --force "$OPENCLAW_REF"
 
 # plnt-sexton is a private repo and the RAID has no GitHub credential, so the
 # usual path is to stage the plugin directory onto the box first:
@@ -68,11 +75,11 @@ rm -rf "$dest/node_modules" "$dest/test/sdk-stubs" "$dest/vitest.standalone.conf
 printf '{ "extends": "../tsconfig.package-boundary.base.json" }\n' > "$dest/tsconfig.json"
 
 log "build ${IMAGE}"
-cd "$SRC_ROOT/openclaw"
+cd "$work"
 docker build \
   --build-arg "OPENCLAW_EXTENSIONS=teamspeak" \
   --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${IMAGE_APT_PACKAGES}" \
-  --build-arg "GIT_COMMIT=$(git rev-parse HEAD)" \
+  --build-arg "GIT_COMMIT=${OPENCLAW_REF}" \
   -t "$IMAGE" .
 
 log "verify the plugin actually landed in the image"
