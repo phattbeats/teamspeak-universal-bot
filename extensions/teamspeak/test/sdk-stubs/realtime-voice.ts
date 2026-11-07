@@ -18,6 +18,19 @@
  */
 
 export { resamplePcm } from "./vendor/audio-codec.js";
+export {
+  REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
+  isSupportedRealtimeVoiceActivationName,
+  matchRealtimeVoiceActivationName,
+  normalizeRealtimeVoiceActivationName,
+  normalizeRealtimeVoiceActivationNamePrefix,
+  normalizeSupportedRealtimeVoiceActivationName,
+  realtimeVoiceActivationNameWordCount,
+  sortRealtimeVoiceActivationNames,
+  type RealtimeVoiceActivationNameEdge,
+  type RealtimeVoiceActivationNameMatchKind,
+  type RealtimeVoiceActivationNameTranscriptResult,
+} from "./vendor/activation-name.js";
 
 export const REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ = "pcm16_24khz";
 

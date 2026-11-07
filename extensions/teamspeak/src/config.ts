@@ -58,6 +58,61 @@ export type TeamSpeakVoiceRealtimeConfig = {
   providers?: Record<string, Record<string, unknown> | undefined>;
 };
 
+/**
+ * `voice.streaming` — the stt-tts lane (PHA-3228).
+ *
+ * `voice-call` models `streaming` and `realtime` as mutually exclusive lanes
+ * with a provider-keyed transcription block (`extensions/voice-call/src/config-migration.ts`);
+ * this mirrors that shape rather than inventing a second vocabulary. Only one
+ * of the two blocks is read, chosen by `voice.mode`.
+ */
+export type TeamSpeakVoiceStreamingTranscriptionConfig = {
+  /**
+   * Transcription provider id. Only local providers are accepted: the lane's
+   * whole point is that the hot mic never leaves the house, and that promise is
+   * made to the channel in the welcome notice, not just to the budget.
+   */
+  provider?: string;
+  /** whisper.cpp server endpoint. Default: http://whisper:8080/inference. */
+  url?: string;
+  /** Model name passed through to the server, when it hosts more than one. */
+  model?: string;
+  /** ISO-639-1 language hint, or "auto". Default: "en". */
+  language?: string;
+  /** Per-segment transcription timeout. Default: 15000ms. */
+  timeoutMs?: number;
+};
+
+export type TeamSpeakVoiceStreamingSpeechConfig = {
+  /** Speech (TTS) provider id, for example "minimax". */
+  provider?: string;
+  /** Provider speech model, for example "speech-2.8-hd". */
+  model?: string;
+  /** Provider voice id. Free-form; MiniMax accepts any system voice id. */
+  voiceId?: string;
+  /** Synthesis timeout for one reply. Default: 20000ms. */
+  timeoutMs?: number;
+};
+
+export type TeamSpeakVoiceStreamingSegmentationConfig = {
+  /**
+   * Silence tolerated after `speaker_stop` before the segment closes. The
+   * bridge's stop frame is TeamSpeak's own voice-activity edge, so this is a
+   * join window for mid-sentence pauses, not a VAD. Default: 600ms.
+   */
+  hangoverMs?: number;
+  /** Segments shorter than this are discarded unheard. Default: 320ms. */
+  minSegmentMs?: number;
+  /** A segment is force-closed at this length so one monologue cannot stall the lane. Default: 20000ms. */
+  maxSegmentMs?: number;
+};
+
+export type TeamSpeakVoiceStreamingConfig = {
+  transcription?: TeamSpeakVoiceStreamingTranscriptionConfig;
+  speech?: TeamSpeakVoiceStreamingSpeechConfig;
+  segmentation?: TeamSpeakVoiceStreamingSegmentationConfig;
+};
+
 export type TeamSpeakVoiceConfig = {
   /** Enable TeamSpeak voice conversations (default: true). */
   enabled?: boolean;
@@ -67,6 +122,18 @@ export type TeamSpeakVoiceConfig = {
   agentSession?: TeamSpeakVoiceAgentSessionConfig;
   /** Optional LLM model override for TeamSpeak voice responses. */
   model?: string;
+  /**
+   * Wake-name policy for the stt-tts lane. Unset adapts to the room: off for
+   * one human, on for two or more. The realtime lane keeps reading these from
+   * `voice.realtime`; both spellings resolve, `voice` wins.
+   */
+  requireWakeName?: boolean;
+  /** Wake names that allow a response when the gate is active. */
+  wakeNames?: string[];
+  /** Allow `speaker_start` frames to interrupt active playback. */
+  bargeIn?: boolean;
+  /** Streaming (stt-tts) lane settings. */
+  streaming?: TeamSpeakVoiceStreamingConfig;
   /** Realtime provider settings for agent-proxy or bidi modes. */
   realtime?: TeamSpeakVoiceRealtimeConfig;
 };
@@ -171,6 +238,155 @@ export function resolveSextonLogDir(
 
 export function isTeamSpeakVoiceEnabled(config: TeamSpeakAccountConfig | undefined): boolean {
   return config?.voice?.enabled !== false;
+}
+
+// --- stt-tts lane (PHA-3228) -------------------------------------------------
+
+export const DEFAULT_WHISPER_URL = "http://whisper:8080/inference";
+export const DEFAULT_WHISPER_LANGUAGE = "en";
+export const DEFAULT_TRANSCRIPTION_TIMEOUT_MS = 15_000;
+export const DEFAULT_SPEECH_TIMEOUT_MS = 20_000;
+export const DEFAULT_SPEECH_PROVIDER = "minimax";
+/**
+ * MiniMax Coding Plan keys route by model *version*: `speech-2.8-hd` resolves
+ * and `speech-2.6-hd` returns error 2056 (MiniMax-AI/MiniMax-MCP#80). Pinning
+ * the new-version id here is what keeps the $0 ceiling from turning into a
+ * confusing auth failure.
+ */
+export const DEFAULT_SPEECH_MODEL = "speech-2.8-hd";
+
+export const DEFAULT_SEGMENT_HANGOVER_MS = 600;
+export const DEFAULT_MIN_SEGMENT_MS = 320;
+export const DEFAULT_MAX_SEGMENT_MS = 20_000;
+
+/**
+ * Transcription providers this lane will run.
+ *
+ * This list is the $0 ceiling and the privacy promise expressed as code. Every
+ * transcription provider OpenClaw registers (deepgram, openai, elevenlabs,
+ * mistral) is metered and hosted, so an unrecognized id is refused at startup
+ * rather than silently costing money and shipping the channel's hot mic to a
+ * third party. Adding an id here is a deliberate act.
+ */
+export const LOCAL_TRANSCRIPTION_PROVIDERS = ["whisper-local"] as const;
+
+export type TeamSpeakLocalTranscriptionProvider =
+  (typeof LOCAL_TRANSCRIPTION_PROVIDERS)[number];
+
+export function isLocalTranscriptionProvider(
+  provider: string | undefined,
+): provider is TeamSpeakLocalTranscriptionProvider {
+  return LOCAL_TRANSCRIPTION_PROVIDERS.includes(
+    (provider ?? "").trim().toLowerCase() as TeamSpeakLocalTranscriptionProvider,
+  );
+}
+
+export type ResolvedTeamSpeakTranscriptionConfig = {
+  provider: TeamSpeakLocalTranscriptionProvider;
+  url: string;
+  model: string | undefined;
+  language: string;
+  timeoutMs: number;
+};
+
+/**
+ * Resolve the transcription block, or explain why the lane cannot start.
+ *
+ * Returning a reason rather than throwing keeps the failure at the same place
+ * every other unstartable account reports: a warning plus a runtime that never
+ * opens, instead of an exception out of `startAccount`.
+ */
+export function resolveTeamSpeakTranscriptionConfig(
+  config: TeamSpeakAccountConfig | undefined,
+  env: Record<string, string | undefined> = process.env,
+): { ok: true; config: ResolvedTeamSpeakTranscriptionConfig } | { ok: false; reason: string } {
+  const raw = config?.voice?.streaming?.transcription;
+  const provider = raw?.provider?.trim() || LOCAL_TRANSCRIPTION_PROVIDERS[0];
+  if (!isLocalTranscriptionProvider(provider)) {
+    return {
+      ok: false,
+      reason:
+        `voice.streaming.transcription.provider="${provider}" is not a local transcriber. ` +
+        `voice.mode=stt-tts only runs local speech-to-text (${LOCAL_TRANSCRIPTION_PROVIDERS.join(", ")}); ` +
+        "every registered OpenClaw transcription provider is metered and hosted.",
+    };
+  }
+  return {
+    ok: true,
+    config: {
+      provider,
+      url: raw?.url?.trim() || env.TEAMSPEAK_WHISPER_URL?.trim() || DEFAULT_WHISPER_URL,
+      model: raw?.model?.trim() || undefined,
+      language: raw?.language?.trim() || DEFAULT_WHISPER_LANGUAGE,
+      timeoutMs: positiveMs(raw?.timeoutMs, DEFAULT_TRANSCRIPTION_TIMEOUT_MS),
+    },
+  };
+}
+
+export type ResolvedTeamSpeakSpeechConfig = {
+  provider: string;
+  model: string;
+  voiceId: string | undefined;
+  timeoutMs: number;
+};
+
+export function resolveTeamSpeakSpeechConfig(
+  config: TeamSpeakAccountConfig | undefined,
+): ResolvedTeamSpeakSpeechConfig {
+  const raw = config?.voice?.streaming?.speech;
+  return {
+    provider: raw?.provider?.trim() || DEFAULT_SPEECH_PROVIDER,
+    model: raw?.model?.trim() || DEFAULT_SPEECH_MODEL,
+    voiceId: raw?.voiceId?.trim() || undefined,
+    timeoutMs: positiveMs(raw?.timeoutMs, DEFAULT_SPEECH_TIMEOUT_MS),
+  };
+}
+
+export type ResolvedTeamSpeakSegmentationConfig = {
+  hangoverMs: number;
+  minSegmentMs: number;
+  maxSegmentMs: number;
+};
+
+export function resolveTeamSpeakSegmentationConfig(
+  config: TeamSpeakAccountConfig | undefined,
+): ResolvedTeamSpeakSegmentationConfig {
+  const raw = config?.voice?.streaming?.segmentation;
+  return {
+    hangoverMs: nonNegativeMs(raw?.hangoverMs, DEFAULT_SEGMENT_HANGOVER_MS),
+    minSegmentMs: nonNegativeMs(raw?.minSegmentMs, DEFAULT_MIN_SEGMENT_MS),
+    maxSegmentMs: positiveMs(raw?.maxSegmentMs, DEFAULT_MAX_SEGMENT_MS),
+  };
+}
+
+/**
+ * The wake-gate knobs, read from `voice` first and `voice.realtime` second.
+ *
+ * PHA-3175 put these under `voice.realtime` because that was the only lane.
+ * PHA-3228's config puts them at `voice` level, where they belong now that they
+ * govern both. Both spellings resolve so an existing deployment keeps working.
+ */
+export function resolveTeamSpeakWakeConfig(
+  config: TeamSpeakAccountConfig | undefined,
+): TeamSpeakVoiceRealtimeConfig {
+  const voice = config?.voice;
+  const realtime = voice?.realtime;
+  const requireWakeName = voice?.requireWakeName ?? realtime?.requireWakeName;
+  const wakeNames = voice?.wakeNames ?? realtime?.wakeNames;
+  const bargeIn = voice?.bargeIn ?? realtime?.bargeIn;
+  return {
+    ...(requireWakeName === undefined ? {} : { requireWakeName }),
+    ...(wakeNames === undefined ? {} : { wakeNames }),
+    ...(bargeIn === undefined ? {} : { bargeIn }),
+  };
+}
+
+function positiveMs(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function nonNegativeMs(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 export function resolveTeamSpeakVoiceMode(

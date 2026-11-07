@@ -15,7 +15,8 @@
     "baseUrl": ".",
     "paths": {
       "openclaw/plugin-sdk/realtime-voice": ["./test/sdk-stubs/realtime-voice.ts"],
-      "openclaw/plugin-sdk/config-contracts": ["./test/sdk-stubs/config-contracts.ts"]
+      "openclaw/plugin-sdk/config-contracts": ["./test/sdk-stubs/config-contracts.ts"],
+      "openclaw/plugin-sdk/runtime-env": ["./test/sdk-stubs/runtime-env.ts"]
     }
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "*.ts"],
@@ -23,7 +24,9 @@
     "node_modules",
     "index.ts",
     "channel-plugin-api.ts",
+    "runtime-setter-api.ts",
     "src/channel.ts",
+    "src/runtime.ts",
     "src/accounts.ts",
     "src/bridge/ws-socket.ts"
   ]

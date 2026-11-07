@@ -107,8 +107,84 @@ voice block can be copied across unchanged.
 }
 ```
 
-`voice.mode: "stt-tts"` is not implemented for TeamSpeak; the runtime logs and
-declines rather than starting a session that cannot speak.
+## The stt-tts lane
+
+`voice.mode: "stt-tts"` is the second lane (PHA-3228). It exists because the
+realtime lane costs money per minute of open microphone, and Brandon's decision
+on PHA-3177 was a **$0 pay-as-you-go ceiling**: no metered per-minute provider
+anywhere in the path.
+
+```
+speaker_audio ─segment─► whisper.cpp ─wake gate─► OpenClaw agent ─► MiniMax T2A ─► voice_audio
+ (48k mono)    per client   (local)                (MiniMax text)     (mp3→48k)     (room queue)
+```
+
+Everything outside that middle is shared with the realtime lane: the same bridge
+client, roster manager, room playback queue, wake gate, echo guard, and
+`!vc` / `!sexton` commands. What changes is that there is no provider session,
+so endpointing, gating, and turn ordering are the plugin's job.
+
+```jsonc
+"voice": {
+  "mode": "stt-tts",
+  "wakeNames": ["Sexton"],       // default: routed agent name + "OpenClaw"
+  "requireWakeName": true,       // unset = automatic (off at 1 human, on at 2+)
+  "bargeIn": true,
+  "model": "…",                  // optional LLM override for voice turns
+  "streaming": {
+    "transcription": {
+      "provider": "whisper-local",           // only local ids are accepted
+      "url": "http://whisper:8080/inference", // or TEAMSPEAK_WHISPER_URL
+      "language": "en",                       // "auto" to let whisper detect
+      "timeoutMs": 15000
+    },
+    "speech": {
+      "provider": "minimax",
+      "model": "speech-2.8-hd",  // pin a *new-version* id; see below
+      "voiceId": "…",            // free-form; any MiniMax system voice id
+      "timeoutMs": 20000
+    },
+    "segmentation": {
+      "hangoverMs": 600,         // silence after speaker_stop before closing
+      "minSegmentMs": 320,       // shorter than this is a click, not speech
+      "maxSegmentMs": 20000      // hard cap on one monologue
+    }
+  }
+}
+```
+
+Wake config is read from `voice` first and `voice.realtime` second, so a
+PHA-3175 config keeps working; `voice` wins where both are set.
+
+**Local STT is enforced, not advised.** Every transcription provider OpenClaw
+registers (deepgram, openai, elevenlabs, mistral) is metered and hosted, so
+`voice.streaming.transcription.provider` is checked against a short local
+allow-list and the account refuses to start on anything else. The sidecar and
+its deploy live in [`../../whisper`](../../whisper). This is also the privacy
+answer the channel notice promises: the hot mic never leaves the house.
+
+**Pin new-version MiniMax model ids.** A Coding Plan (`sk-cp-…`) key routes by
+model *version*: `speech-2.8-hd` resolves and `speech-2.6-hd` returns error 2056
+(`MiniMax-AI/MiniMax-MCP#80`). The same rule applies on the text side. Synthesis
+goes through the host TTS runtime and `extensions/minimax`'s registered
+`speechProviders` entry, with fallback **disabled** — a silent fallback would
+move the lane onto a metered provider.
+
+### What this lane gives up
+
+Both were accepted on the record when the lane was chosen over hosted STT:
+
+- **Latency.** Realtime is sub-second; this is roughly 1.5-3s to first audio.
+  Every turn logs `segmentMs`, `sttMs`, `agentMs`, `ttsMs`, `firstAudioMs`, so
+  the choice between `speech-2.8-hd` and `speech-2.8-turbo` is a measurement.
+- **Barge-in.** `WakeGate.isBargeInEnabled()` keeps its realtime semantics, but
+  an interrupt here can only drop queued audio and retire the in-flight turn; it
+  cannot truncate a provider mid-utterance, because no provider is holding one.
+
+Known v1 gap: the realtime tools from PHA-3176 (`play_music`, `what_did_i_miss`,
+`who_is_here`, `poke`) register on a *provider session*, which this lane does
+not have. Voice turns reach the agent's ordinary tool surface instead. The
+`!vc` / `!sexton` chat commands are unaffected — the runtime owns those.
 
 ## Chat commands
 
@@ -259,23 +335,37 @@ pacing/backpressure/stop behavior, with both binaries faked), `test/tools.test.t
 real file on disk) and `test/voice-runtime-tools.test.ts` (a tool call in, bridge
 `poke` / `music_audio` / `music_gain` frames out).
 
+The PHA-3228 stt-tts lane adds `test/segmenter.test.ts` (where an utterance
+ends, including the hangover that keeps a mid-sentence pause from becoming two
+turns), `test/whisper-local.test.ts` (the WAV the sidecar receives, and whisper's
+non-speech placeholders never becoming a turn), `test/speech.test.ts` (the
+pinned MiniMax model id and fallback staying off) and `test/stt-tts-lane.test.ts`
+— replayed speaker frames in, a transcript per speaker, the wake gate at 1 vs 2
+humans, TTS bytes on `voice_audio`, and the lane refusing a hosted transcription
+provider rather than silently metering.
+
 ### What the standalone suite does and does not prove
 
 `test/sdk-stubs/realtime-voice.ts` stands in for the SDK. It is split
 deliberately:
 
 - **Faithful** — `resamplePcm` is the real implementation, vendored verbatim
-  (`test/sdk-stubs/vendor/audio-codec.ts`, pinned to openclaw@fc1877d7), and the
-  wake-name/barge-in policy helpers are line-for-line copies. Assertions against
-  these are assertions about real shared behavior.
+  (`test/sdk-stubs/vendor/audio-codec.ts`, pinned to openclaw@fc1877d7), the
+  activation-name matcher likewise (`test/sdk-stubs/vendor/activation-name.ts`,
+  same pin, with `levenshteinDistance` inlined), and the wake-name/barge-in
+  policy helpers are line-for-line copies. Assertions against these are
+  assertions about real shared behavior.
 - **Inert** — provider resolution and the session harness are minimal fakes. The
   speaker-session tests inject a fake harness through `deps`, so they cover this
   plugin's wiring, not the provider stack.
 
 Not covered here, and needing a real gateway: the live provider connection, and
-`src/channel.ts` / `src/accounts.ts` / `src/bridge/ws-socket.ts`, which import
-SDK subpaths that are not stubbed and are excluded from the standalone
-typecheck.
+`src/channel.ts` / `src/accounts.ts` / `src/bridge/ws-socket.ts` / `src/runtime.ts`,
+which import SDK subpaths that are not stubbed and are excluded from the
+standalone typecheck. For the stt-tts lane that also means the two host seams it
+hangs off — `runtime.agent.runCommandFromIngress` and `runtime.tts.textToSpeech`
+— are exercised here only through the structural types in `src/voice/agent-turn.ts`
+and `src/voice/speech.ts`, and against fakes.
 
 `src/channel.ts` is the one to read before a deploy, because it is both
 unverifiable here and the file that decides whether anything runs at all: its

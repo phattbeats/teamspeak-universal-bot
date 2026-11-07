@@ -16,6 +16,7 @@ import {
   isTeamSpeakMusicEnabled,
   resolveSextonLogDir,
   resolveTeamSpeakVoiceMode,
+  resolveTeamSpeakWakeConfig,
   type TeamSpeakAccountConfig,
 } from "../config.js";
 import type { ReadChannelLog } from "../tools/catch-up.js";
@@ -39,6 +40,12 @@ import {
 export type VoiceSpeakerSession = SpeakerSession & {
   sendInputAudio(pcm48kMono: Buffer): void;
   handleSpeakerStart(reason?: string): boolean;
+  /**
+   * TeamSpeak's end-of-talk-burst edge. The realtime lane has no use for it —
+   * the provider does its own endpointing — but the stt-tts lane (PHA-3228)
+   * closes its segment on it, so the runtime forwards it when a session cares.
+   */
+  handleSpeakerStop?(): void;
   readonly wakeNameRequired: boolean;
   readonly bargeInEnabled: boolean;
 };
@@ -140,6 +147,10 @@ export class TeamSpeakVoiceRuntime {
         },
         onRoster: (roster) => this.sessions.applyRoster(roster),
         onSpeakerStart: (clientId) => this.handleSpeakerStart(clientId),
+        onSpeakerStop: (clientId) => {
+          const session = this.sessions.get(clientId) as VoiceSpeakerSession | undefined;
+          session?.handleSpeakerStop?.();
+        },
         onSpeakerAudio: (header, pcm) => {
           const session = this.sessions.get(header.clientId) as VoiceSpeakerSession | undefined;
           session?.sendInputAudio(pcm);
@@ -222,6 +233,19 @@ export class TeamSpeakVoiceRuntime {
     });
   }
 
+  /**
+   * Humans in the channel, excluding the bot.
+   *
+   * Speaker sessions ask the runtime this to resolve the wake gate, and they
+   * must ask *here* rather than through `snapshot()`: snapshot reads a session's
+   * `wakeNameRequired`, so a session whose gate reached back into snapshot would
+   * recurse until the stack ran out. That is what `!sexton status` used to do on
+   * the realtime lane.
+   */
+  humanParticipantCount(): number {
+    return this.sessions.humanParticipantCount();
+  }
+
   /** Exposed for `!sexton status` and for tests. */
   snapshot(): StatusSnapshot {
     const firstSession = this.sessions.sessionKeys()[0];
@@ -236,7 +260,7 @@ export class TeamSpeakVoiceRuntime {
       voiceMode: resolveTeamSpeakVoiceMode(this.params.config),
       ...(this.params.providerId?.() ? { providerId: this.params.providerId() } : {}),
       wakeNameRequired: session?.wakeNameRequired ?? false,
-      wakeNames: this.params.config.voice?.realtime?.wakeNames ?? [],
+      wakeNames: resolveTeamSpeakWakeConfig(this.params.config).wakeNames ?? [],
       bargeInEnabled: session?.bargeInEnabled ?? false,
       muted: this.muted,
       playbackActive: this.playback.isActive(),
@@ -245,15 +269,26 @@ export class TeamSpeakVoiceRuntime {
   }
 
   /**
-   * A human started talking. Only the session that currently owns the room lane
-   * can be interrupted, so this asks that session rather than broadcasting.
+   * A human started talking.
+   *
+   * The speaker's own session hears this first and unconditionally: the stt-tts
+   * lane uses the edge to reopen its segment, which has to happen whether or not
+   * anything is currently playing. Only after that does this look for a session
+   * to interrupt, and only the session that owns the room lane can be
+   * interrupted, so the rest are asked in turn rather than broadcast to.
    */
   private handleSpeakerStart(clientId: TeamSpeakClientId): void {
-    const owner = this.playback.activeOwner;
-    if (!owner) {
+    const speaker = this.sessions.get(clientId) as VoiceSpeakerSession | undefined;
+    if (speaker?.handleSpeakerStart(`speaker-start:${clientId}`)) {
+      return;
+    }
+    if (!this.playback.activeOwner) {
       return;
     }
     for (const key of this.sessions.sessionKeys()) {
+      if (key === clientId) {
+        continue;
+      }
       const session = this.sessions.get(key) as VoiceSpeakerSession | undefined;
       if (session && session.handleSpeakerStart(`speaker-start:${clientId}`)) {
         return;

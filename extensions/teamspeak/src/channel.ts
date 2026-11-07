@@ -26,7 +26,9 @@ import {
 } from "./accounts.js";
 import { createWebSocketBridgeSocket } from "./bridge/ws-socket.js";
 import { isTeamSpeakVoiceEnabled, resolveTeamSpeakVoiceMode } from "./config.js";
+import { getOptionalTeamSpeakRuntime } from "./runtime.js";
 import { TeamSpeakRealtimeSpeakerSession } from "./voice/realtime-speaker-session.js";
+import { createSttTtsLane } from "./voice/stt-tts-lane.js";
 import { TeamSpeakVoiceRuntime } from "./voice/voice-runtime.js";
 
 const logger = createSubsystemLogger("teamspeak/voice");
@@ -38,6 +40,8 @@ export function startTeamSpeakVoiceRuntime(params: {
   cfg: OpenClawConfig;
   account: ResolvedTeamSpeakAccount;
   agentId: string;
+  /** Conversation the stt-tts lane's agent turns are admitted into. */
+  sessionKey?: string | undefined;
   /** Agent profile files (IDENTITY.md/USER.md/SOUL.md), already resolved. */
   bootstrapContextInstructions?: string | undefined;
   onConnectionChange?: ((connected: boolean) => void) | undefined;
@@ -56,12 +60,7 @@ export function startTeamSpeakVoiceRuntime(params: {
 
   const mode = resolveTeamSpeakVoiceMode(account.config);
   if (mode === "stt-tts") {
-    // stt-tts has no realtime session to open; it is a separate pipeline and
-    // is not part of this plugin yet. Say so rather than starting a dead runtime.
-    logger.warn(
-      `teamspeak: voice.mode=stt-tts is not implemented for TeamSpeak; use agent-proxy or bidi`,
-    );
-    return undefined;
+    return startTeamSpeakSttTtsRuntime(params);
   }
 
   const realtimeConfig = account.config.voice?.realtime;
@@ -90,13 +89,70 @@ export function startTeamSpeakVoiceRuntime(params: {
         // PHA-3176: play_music / stop_music / set_volume / what_did_i_miss /
         // who_is_here / poke, executed by the runtime that owns the bridge.
         ...(tools ? { toolRegistration: tools } : {}),
-        humanParticipantCount: () => runtime.snapshot().humanParticipants,
+        humanParticipantCount: () => runtime.humanParticipantCount(),
         onTerminalError: (error) =>
           logger.warn(
             `teamspeak: speaker session clientId=${client.clientId} failed: ${error.message}`,
           ),
         log: (message) => logger.info(message),
       }),
+  });
+  runtimes.set(account.accountId, runtime);
+  runtime.start();
+  return runtime;
+}
+
+/**
+ * The stt-tts lane (PHA-3228).
+ *
+ * Structurally the same runtime as the realtime lane — same bridge client, same
+ * roster manager, same room queue, same chat commands — with a different
+ * speaker session behind `createSpeakerSession`. The two differences that
+ * belong here rather than in the lane: it needs the host `PluginRuntime` (the
+ * agent turn and the TTS synthesis both live there), and it refuses to start on
+ * a configuration that would put a metered provider in the path.
+ */
+function startTeamSpeakSttTtsRuntime(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedTeamSpeakAccount;
+  agentId: string;
+  sessionKey?: string | undefined;
+  onConnectionChange?: ((connected: boolean) => void) | undefined;
+}): TeamSpeakVoiceRuntime | undefined {
+  const { account } = params;
+  const hostRuntime = getOptionalTeamSpeakRuntime();
+  if (!hostRuntime) {
+    logger.warn(
+      `teamspeak: voice.mode=stt-tts needs the host plugin runtime, which was not injected; account ${account.accountId} will not start`,
+    );
+    return undefined;
+  }
+
+  let runtime: TeamSpeakVoiceRuntime | undefined;
+  const lane = createSttTtsLane({
+    cfg: params.cfg,
+    config: account.config,
+    accountId: account.accountId,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey ?? `teamspeak:${account.accountId}`,
+    runtime: { agent: hostRuntime.agent, tts: hostRuntime.tts },
+    humanParticipantCount: () => runtime?.humanParticipantCount() ?? 0,
+    onTerminalError: (error) => logger.warn(`teamspeak: stt-tts turn failed: ${error.message}`),
+    log: (message) => logger.info(message),
+  });
+  if (!lane.ok) {
+    logger.warn(`teamspeak: voice.mode=stt-tts refused for ${account.accountId}: ${lane.reason}`);
+    return undefined;
+  }
+
+  runtime = new TeamSpeakVoiceRuntime({
+    accountId: account.accountId,
+    config: account.config,
+    createSocket: createWebSocketBridgeSocket,
+    ...(params.onConnectionChange ? { onConnectionChange: params.onConnectionChange } : {}),
+    providerId: () => `${lane.lane.transcriberId}+${lane.lane.speechProviderId}`,
+    log: (message) => logger.info(message),
+    createSpeakerSession: (client, playback) => lane.lane.createSpeakerSession(client, playback),
   });
   runtimes.set(account.accountId, runtime);
   runtime.start();
@@ -222,6 +278,7 @@ export const teamspeakPlugin = createChatChannelPlugin<ResolvedTeamSpeakAccount>
           cfg: ctx.cfg,
           account,
           agentId: route.agentId,
+          sessionKey: route.sessionKey,
           ...(bootstrapContextInstructions ? { bootstrapContextInstructions } : {}),
           onConnectionChange: (connected) =>
             ctx.setStatus({ accountId: account.accountId, running: true, connected }),

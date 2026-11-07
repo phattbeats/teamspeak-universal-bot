@@ -10,4 +10,10 @@ export default defineBundledChannelEntry({
     specifier: "./channel-plugin-api.js",
     exportName: "teamspeakPlugin",
   },
+  // The stt-tts lane runs the agent turn and the TTS synthesis in-process, and
+  // both live on PluginRuntime (PHA-3228). Without this the lane has no host.
+  runtime: {
+    specifier: "./runtime-setter-api.js",
+    exportName: "setTeamSpeakRuntime",
+  },
 });
