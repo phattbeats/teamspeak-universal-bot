@@ -657,19 +657,50 @@ fn link_label(url: &str) -> String {
     }
 }
 
+/// `[image: shot.png]` / `[file: notes.pdf]` for a name a person chose, and a
+/// bare `[GIF]`, `[image]` or `[file: .ext]` when the name is one the client
+/// generated (a UUID or a hex blob), which tells the reader nothing and only
+/// pads the digest. PHA-4917: pasted GIFs arrive as `9d50b79f-….gif`.
+fn named_attachment_label(name: &str) -> String {
+    let name = name.trim();
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    let is_image = IMAGE_EXTS.contains(&ext.as_str());
+    if !generated_file_stem(name) {
+        return if is_image { format!("[image: {name}]") } else { format!("[file: {name}]") };
+    }
+    match ext.as_str() {
+        "gif" => "[GIF]".to_string(),
+        _ if is_image => "[image]".to_string(),
+        "" => "[file]".to_string(),
+        _ => format!("[file: .{ext}]"),
+    }
+}
+
+/// True when the part of `name` before its extension looks machine-made: a
+/// UUID (`8-4-4-4-12` hex, dashes optional) or any run of 16+ hex digits.
+fn generated_file_stem(name: &str) -> bool {
+    let stem = match name.rsplit_once('.') {
+        Some((stem, _)) => stem,
+        None => name,
+    };
+    let stem = stem.trim();
+    if stem.len() < 16 {
+        return false;
+    }
+    let dashes_ok = {
+        let parts: Vec<&str> = stem.split('-').collect();
+        parts.len() == 5 && [8, 4, 4, 4, 12].iter().zip(&parts).all(|(n, p)| p.len() == *n)
+    };
+    let hexish = stem.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    hexish && (dashes_ok || !stem.contains('-'))
+}
+
 /// The placeholder for an attachment, chosen by extension: `[image: shot.png]`
 /// for pictures, `[file: notes.pdf]` otherwise, and a bare `[image]`/`[file]`
 /// when the source carries no usable name.
 fn attachment_label(src: &str, assume_image: bool) -> String {
     match link_filename(src) {
-        Some(name) => {
-            let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-            if IMAGE_EXTS.contains(&ext.as_str()) {
-                format!("[image: {name}]")
-            } else {
-                format!("[file: {name}]")
-            }
-        }
+        Some(name) => named_attachment_label(&name),
         None if assume_image => "[image]".to_string(),
         None => "[file]".to_string(),
     }
@@ -704,14 +735,7 @@ fn ts_file_json_label(obj: &serde_json::Value) -> Option<String> {
         .map(str::trim)
         .find(|n| !n.is_empty() && n.contains('.') && n.len() <= 64);
     Some(match name {
-        Some(name) => {
-            let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-            if IMAGE_EXTS.contains(&ext.as_str()) {
-                format!("[image: {name}]")
-            } else {
-                format!("[file: {name}]")
-            }
-        }
+        Some(name) => named_attachment_label(name),
         None => "[file]".to_string(),
     })
 }
@@ -740,14 +764,7 @@ fn scraped_payload_label(candidate: &str) -> Option<String> {
         .filter_map(|k| scrape_json_string_field(candidate, k))
         .find(|n| !n.trim().is_empty() && n.contains('.') && n.len() <= 64);
     Some(match name {
-        Some(name) => {
-            let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-            if IMAGE_EXTS.contains(&ext.as_str()) {
-                format!("[image: {name}]")
-            } else {
-                format!("[file: {name}]")
-            }
-        }
+        Some(name) => named_attachment_label(&name),
         None if msg_type.starts_with("ts.file") => "[file]".to_string(),
         None => "[attachment]".to_string(),
     })
@@ -2623,6 +2640,28 @@ mod tests {
     /// captured from the live raw-payload log on 2026-09-12. Verbatim except
     /// for the shortened `file_id`.
     const REAL_TS6_IMAGE_PAYLOAD: &str = r#"{"msg_type":"ts.file.myts","file_id":"YnlkanZud3lnanRuc3d3eHFpcHljaHdyemdkYmZtdnNwbmJrdGtkb2dlYXZva2xjdGJyZm1ob3Z4Y2Zn","chat_user_id":"@aetojq5cdrys7ys2mc6jy2s5yunxuapnhceygtqjyqczqbvuuaua4===:chat-7.tmspk.net","file_name":"202609~4.JPG","file_size":613563,"body":"202609~4.JPG","v2":true}"#;
+
+    #[test]
+    fn generated_file_names_collapse_to_a_readable_placeholder() {
+        // A pasted GIF arrives named by UUID; nobody needs to read that.
+        let gif = REAL_TS6_IMAGE_PAYLOAD.replace("202609~4.JPG", "9d50b79f-2c1e-4b8a-9f1d-0a6c3e5d7b21.gif");
+        assert_eq!(sanitize_message(&gif), "[GIF]");
+        let png = REAL_TS6_IMAGE_PAYLOAD.replace("202609~4.JPG", "9d50b79f2c1e4b8a9f1d0a6c3e5d7b21.png");
+        assert_eq!(sanitize_message(&png), "[image]");
+        let pdf = REAL_TS6_IMAGE_PAYLOAD.replace("202609~4.JPG", "9d50b79f-2c1e-4b8a-9f1d-0a6c3e5d7b21.pdf");
+        assert_eq!(sanitize_message(&pdf), "[file: .pdf]");
+        // Human names keep their name, GIFs included.
+        let frog = REAL_TS6_IMAGE_PAYLOAD.replace("202609~4.JPG", "frog-dance.gif");
+        assert_eq!(sanitize_message(&frog), "[image: frog-dance.gif]");
+        assert_eq!(sanitize_message(REAL_TS6_IMAGE_PAYLOAD), "[image: 202609~4.JPG]");
+        // BBCode images with generated names collapse the same way.
+        assert_eq!(
+            sanitize_message("[img]https://cdn.example.com/u/0a1b2c3d4e5f60718293a4b5c6d7e8f9.gif[/img]"),
+            "[GIF]"
+        );
+        // The lenient scrape path too.
+        assert_eq!(sanitize_message(&gif.replace(",", " ")), "[GIF]");
+    }
 
     #[test]
     fn the_real_ts6_attachment_payload_becomes_a_placeholder() {
