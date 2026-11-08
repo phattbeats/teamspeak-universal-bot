@@ -700,7 +700,7 @@ fn generated_file_stem(name: &str) -> bool {
 /// when the source carries no usable name.
 fn attachment_label(src: &str, assume_image: bool) -> String {
     match link_filename(src) {
-        Some(name) => named_attachment_label(name),
+        Some(name) => named_attachment_label(&name),
         None if assume_image => "[image]".to_string(),
         None => "[file]".to_string(),
     }
@@ -764,7 +764,7 @@ fn scraped_payload_label(candidate: &str) -> Option<String> {
         .filter_map(|k| scrape_json_string_field(candidate, k))
         .find(|n| !n.trim().is_empty() && n.contains('.') && n.len() <= 64);
     Some(match name {
-        Some(name) => named_attachment_label(name),
+        Some(name) => named_attachment_label(&name),
         None if msg_type.starts_with("ts.file") => "[file]".to_string(),
         None => "[attachment]".to_string(),
     })
