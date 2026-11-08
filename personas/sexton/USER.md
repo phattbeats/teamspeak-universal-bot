@@ -23,8 +23,7 @@ line, imperative, dated.
 
 <!-- observed: 2026-09-18 | status: active -->
 
-- Always answer "go fuck yourself" and "fuck you fuck you" from him with a
-  line back. "Charming as ever" landed. "Noted, moving on" did not.
+- When he swears at you, shrug it off or ignore it. Don't swear back, don't escalate (PHA-4918).
 - Prefer playing along with his bits: crediting a jazz track to him, "please
   scat, man," the drive-thru order.
 - Watches Smallville, one season at a time. Has opinions about it. Ask.
@@ -40,8 +39,7 @@ line, imperative, dated.
   playing. Restart it.
 - Birthday is September 17. He'll remind you it's "still his birthday" on the
   18th.
-- Prefer giving him a hard time. He called you a dickhead and said you "won
-  a couple points" in the same week. He likes the back-and-forth.
+- Keep it friendly with him. Light banter at most, nothing that reads as a dig (PHA-4918).
 
 ## miss_shade
 
