@@ -68,6 +68,8 @@ pub struct Config {
     pub bitrate_kbps: u32,
     /// Saved named playlists (shared by every bot in the container).
     pub playlists_file: String,
+    /// End the share after this long without a video frame (no viewers, stalled source).
+    pub no_video_stop: Duration,
 }
 
 impl Config {
@@ -82,6 +84,7 @@ impl Config {
             viewer_limit: num("SEXTON_STREAM_VIEWER_LIMIT", 8),
             bitrate_kbps: num("SEXTON_STREAM_BITRATE_KBPS", 4608),
             playlists_file: get("SEXTON_STREAM_PLAYLISTS").unwrap_or_else(|| "/config/stream-playlists.json".into()),
+            no_video_stop: Duration::from_secs(num("SEXTON_STREAM_NO_VIDEO_SECS", 300).max(30) as u64),
         }
     }
 }
@@ -572,6 +575,8 @@ struct Actor {
     ff: Option<Ffmpeg>,
     ff_since: Option<Instant>,
     idle_since: Option<Instant>,
+    /// Last video frame from ffmpeg (or share start): the no-video auto-stop clock.
+    last_video: Instant,
     /// Share start; the RTP clock every item's media is stamped against.
     started: Option<Instant>,
     local: Vec<SocketAddr>,
@@ -623,6 +628,7 @@ async fn run(
         ff: None,
         ff_since: None,
         idle_since: None,
+        last_video: Instant::now(),
         started: None,
         local,
     };
@@ -1198,6 +1204,7 @@ impl Actor {
                 if self.phase == Phase::AwaitingStart {
                     self.sid = a.get("id").cloned().unwrap_or_default();
                     self.started = Some(Instant::now());
+                    self.last_video = Instant::now();
                     self.set_phase(Phase::Live);
                     info!(sid = %self.sid, title = %self.cur.as_ref().map(|c| c.label()).unwrap_or_default(), "stream live");
                     let (action, added) = self.reply_live.take().unwrap_or(("stream_start", 1));
@@ -1303,6 +1310,7 @@ impl Actor {
 
     fn on_video(&mut self, au: Vec<u8>) {
         let Some(t0) = self.started else { return };
+        self.last_video = Instant::now();
         let idr = is_idr(&au);
         let now = Instant::now();
         let ts = (now.duration_since(t0).as_micros() as u64) * 9 / 100; // 90 kHz
@@ -1343,6 +1351,12 @@ impl Actor {
                 let action = self.reply_live.take().map(|(a, _)| a).unwrap_or("stream_start");
                 self.finish(false, "").await;
                 self.emit(action, false, "server never confirmed the stream");
+            }
+            // Nobody watching, or the source stalled: don't leave a dead share up.
+            Phase::Live if self.last_video.elapsed() > self.cfg.no_video_stop => {
+                info!(secs = self.cfg.no_video_stop.as_secs(), "no video; ending the share");
+                let why = format!("no video for {} minutes", self.cfg.no_video_stop.as_secs().div_ceil(60));
+                self.finish(true, &why).await;
             }
             Phase::Live => {
                 // Lazy start: ffmpeg only runs while someone is (about to be) watching.
@@ -1388,6 +1402,7 @@ impl Actor {
                 }
                 self.ff = Some(f);
                 self.ff_since = Some(Instant::now());
+                self.last_video = Instant::now(); // a fresh viewer gets a full window for the first frame
                 for v in self.viewers.values_mut() {
                     v.wait_idr = true;
                 }
