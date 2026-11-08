@@ -1,0 +1,9 @@
+{
+  "nick": "Ledger",
+  "wakeNames": [
+    "Ledger"
+  ],
+  "wakeAliases": [],
+  "followUpSilenceMs": 15000,
+  "externalGateway": true
+}

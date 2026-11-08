@@ -106,7 +106,14 @@ function loadBots() {
   // #4374: a bot the dashboard removed is listed in `removed` so its pack is
   // not picked straight back up here; "add" takes it off that list again.
   const removed = new Set(Array.isArray(file?.removed) ? file.removed : []);
-  for (const id of Object.keys(found)) if (!bots[id] && !removed.has(id)) { bots[id] = {}; log(`new persona pack '${id}', adding it`); }
+  for (const id of Object.keys(found)) {
+    if (bots[id] || removed.has(id)) continue;
+    // PHA-4364: a transport-only pack (its voice.json says externalGateway) is
+    // driven by an outside gateway, so it joins the roster switched off.
+    const external = readJson(`${found[id]}/voice.json`, {}).externalGateway === true;
+    bots[id] = external ? { externalGateway: true, enabled: false } : {};
+    log(`new persona pack '${id}', adding it${external ? ' (external gateway, disabled)' : ''}`);
+  }
   const used = new Set(Object.values(bots).map((b) => b.port).filter(Boolean));
   let next = FIRST_PORT;
   for (const b of Object.values(bots)) {
@@ -266,6 +273,8 @@ redirect_stderr=true
 }
 
 function writeSummonerConfig(bots) {
+  // External gateways own their always-on cores; never schedule or summon them.
+  const managedBots = bots.filter((b) => b.externalGateway !== true);
   const dir = `${CONFIG}/summoner`;
   mkdirSync(`${dir}/state`, { recursive: true });
   const editable = `${dir}/config.json`;
@@ -288,9 +297,9 @@ function writeSummonerConfig(bots) {
   // #4875: the summoner's ServerQuery host follows bots.json "server".query when set.
   if (bots.serverQuery) cfg.query = { ...cfg.query, ...bots.serverQuery };
   cfg.bots = cfg.bots || {};
-  const live = new Set(bots.map((b) => b.id));
+  const live = new Set(managedBots.map((b) => b.id));
   for (const id of Object.keys(cfg.bots)) if (!live.has(id)) delete cfg.bots[id];
-  for (const b of bots) {
+  for (const b of managedBots) {
     // A pack the summoner has never heard of is on duty around the clock until
     // someone gives it shifts in /config/summoner/config.json.
     const s = (cfg.bots[b.id] ??= { nick: b.nick, names: [b.id], shifts: [{ start: '00:00', end: '24:00' }] });
@@ -305,7 +314,8 @@ function writeSummonerConfig(bots) {
 // ---------------------------------------------------------------- gateway --
 
 function gateway() {
-  const bots = loadBots();
+  // Keep external account IDs disabled and out of local agents/bindings.
+  const bots = loadBots().filter((b) => b.externalGateway !== true);
   const cfg = readJson(CFG_PATH, null);
   if (!cfg) throw new Error(`cannot read ${CFG_PATH}`);
   const before = JSON.stringify(cfg);
