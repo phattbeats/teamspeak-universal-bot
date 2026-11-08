@@ -22,9 +22,9 @@
     "weight": 8,
     "prompt": "Somebody played an old Velvet Vice tape earlier, from back when the room was packed every night. You're soft about it, more than you'd admit, and old stories come easy."
   },
-  "kyle": {
+  "marlowe": {
     "weight": 6,
-    "prompt": "Kyle said something nice about the band today, offhand. You've been pretending it didn't land. You're in a better mood than you'll admit and it comes out sideways."
+    "prompt": "Marlowe said something nice about the band today, offhand. You've been pretending it didn't land. You're in a better mood than you'll admit and it comes out sideways."
   },
   "pissed": {
     "weight": 7,

@@ -1,17 +1,17 @@
 # `extensions/teamspeak` — OpenClaw TeamSpeak channel plugin
 
-> #3580: this directory lives at `teamspeak-plugin/` in
+> This directory lives at `teamspeak-plugin/` in
 > [`phattbeats/plnt-sexton`](https://github.com/phattbeats/plnt-sexton) —
 > `extensions/teamspeak` below is the path it would take if sent upstream
 > into an OpenClaw checkout (see "Using it in an OpenClaw checkout"), not
 > its path in this repo. It briefly had its own repo,
-> `phattbeats/openclaw-teamspeak-plugin` (#3220, now archived), before
-> moving back in here once #3341/3342/3428 removed the reason for the
+> `phattbeats/openclaw-teamspeak-plugin` (now archived), before
+> moving back in here once the container consolidation removed the reason for the
 > split.
 
 Puts an OpenClaw realtime voice session in a TeamSpeak channel. The plugin never
 speaks TeamSpeak itself: it talks to the **plnt-ts-bridge** sidecar
-(`../../ts-bridge`, #3174) over a local WebSocket, and the bridge owns the
+(`../../ts-bridge`) over a local WebSocket, and the bridge owns the
 TeamSpeak connection, Opus, and the music/ducking mixer.
 
 ```
@@ -116,7 +116,7 @@ voice block can be copied across unchanged.
 }
 ```
 
-## Voice off (#4372)
+## Voice off
 
 `voice.mode: "off"` (or `voice.listen: false`) is the third lane and does no
 voice at all: the bridge connects, the roster, the `!vc`/`!sexton` commands,
@@ -129,7 +129,7 @@ see `image/README.md` → Voice off.
 
 ## The stt-tts lane
 
-`voice.mode: "stt-tts"` is the second lane (#3228). It exists because the
+`voice.mode: "stt-tts"` is the second lane. It exists because the
 realtime lane costs money per minute of open microphone, and the standing decision
 was a **$0 pay-as-you-go ceiling**: no metered per-minute provider
 anywhere in the path.
@@ -173,8 +173,8 @@ so endpointing, gating, and turn ordering are the plugin's job.
 }
 ```
 
-Wake config is read from `voice` first and `voice.realtime` second, so a
-#3175 config keeps working; `voice` wins where both are set.
+Wake config is read from `voice` first and `voice.realtime` second, so an
+older config keeps working; `voice` wins where both are set.
 
 **Local STT is enforced, not advised.** Every transcription provider OpenClaw
 registers (deepgram, openai, elevenlabs, mistral) is metered and hosted, so
@@ -201,7 +201,7 @@ Both were accepted on the record when the lane was chosen over hosted STT:
   an interrupt here can only drop queued audio and retire the in-flight turn; it
   cannot truncate a provider mid-utterance, because no provider is holding one.
 
-Known v1 gap: the realtime tools from #3176 (`play_music`, `what_did_i_miss`,
+Known v1 gap: the realtime tools (`play_music`, `what_did_i_miss`,
 `who_is_here`, `poke`) register on a *provider session*, which this lane does
 not have. Voice turns reach the agent's ordinary tool surface instead. The
 `!vc` / `!sexton` chat commands are unaffected — the runtime owns those.
@@ -252,7 +252,7 @@ for what you asked it to play belongs in the agent's instructions, not here.
 
 ### `play_music` and the music lane
 
-The pipeline is TS3AudioBot's (#3099 finding 8), with the Opus encode left to
+The pipeline is TS3AudioBot's (finding 8), with the Opus encode left to
 the bridge:
 
 ```
@@ -288,7 +288,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3-
 If a throwaway-account cookie file is mounted, point `tools.music.cookiesFile`
 at it; it is passed to yt-dlp as `--cookies`.
 
-### `compose_song` and the house band (#3554)
+### `compose_song` and the house band
 
 Bexton's lane. Off unless `tools.band.enabled` is `true`, because generation
 costs money on every provider that can do it. The agent is the composer — it
@@ -304,7 +304,7 @@ starts it on the music lane — the same lane `play_music` uses, so `stop_music`
 stops the band too. A failure is spoken in character and recorded for
 `band_status`.
 
-`song_lyrics` and `replay_song` (#3601) read from a bounded, most-recent-first
+`song_lyrics` and `replay_song` read from a bounded, most-recent-first
 log of what actually finished playing (title, lyrics, singer), kept in step with
 `keepSongs` so it never outlives the audio files on disk. `song_lyrics` hands
 the agent back the full text of a song already played — the most recent one by
@@ -355,11 +355,11 @@ Mount the logger's log volume into the gateway container read-only, or set
 `TEAMSPEAK_SEXTON_LOG_DIR`. With no log present the tool answers "nothing
 logged yet" rather than failing.
 
-## `npm:`/`npm-pack:`/`git:` installs now ship a compiled entry (#3798)
+## `npm:`/`npm-pack:`/`git:` installs now ship a compiled entry
 
-The whole section below is the #3326-era record of why only `--link` worked, and it is
+The whole section below is the earlier record of why only `--link` worked, and it is
 still an accurate description of *that* configuration — this package shipped no `dist/`
-until now. As of #3798, `dist/` is a committed build output
+until now. Now `dist/` is a committed build output
 (`npm run build` → `scripts/build.mjs`, an esbuild transpile, CI-enforced not to drift from
 `src/`), and OpenClaw infers the compiled `dist/index.js` counterpart from the `.ts` entry
 already in `package.json#openclaw.extensions` — no manifest change needed. That satisfies
@@ -378,19 +378,19 @@ past the missing-`dist/` check to matter.
 mechanism is read from OpenClaw's own source (`src/plugins/plugin-peer-link.ts`,
 `src/plugins/package-entry-resolution.ts`), but no one has run
 `openclaw plugins install npm-pack:...` or `git:...` against this package end to end yet.
-Do that before calling #3798 item 1 done, ideally from a machine that is not also running
+Do that before calling this done, ideally from a machine that is not also running
 the live the Docker host `--link` install (don't `--force` over the production install record).
 
 `index.ts` and `src/channel.ts` (and everything downstream of them) are transpiled by
 esbuild, not type-checked: they import `openclaw/plugin-sdk/channel-entry-contract`,
 `channel-core`, `realtime-bootstrap-context`, and `routing`, none of which
 `tsconfig.json`'s standalone stub set fully models — which is exactly why
-`tsconfig.json`'s own `exclude` list already keeps those files out of `npm run typecheck`
-(#3787). The build doesn't newly weaken anything here; it just also doesn't type-check
+`tsconfig.json`'s own `exclude` list already keeps those files out of `npm run typecheck`.
+The build doesn't newly weaken anything here; it just also doesn't type-check
 what was already excluded. `npm run typecheck` remains the real type-safety gate for
 everything it *does* cover.
 
-## Installing as a managed plugin (recommended, #3326)
+## Installing as a managed plugin (recommended)
 
 `openclaw plugins install --link <path>` is a real managed install — it
 creates an install record in the Gateway's own config/state dir, same as any
@@ -404,7 +404,7 @@ OpenClaw's built-runtime-entry check: this plugin ships TypeScript directly
 this package doesn't have.
 
 **Confirmed empirically against this repo directly (2026-09-07, after the
-#3220 split out of plnt-sexton put `openclaw.plugin.json` at repo root):**
+split out of plnt-sexton put `openclaw.plugin.json` at repo root):**
 `openclaw plugins install git:https://.../openclaw-teamspeak-plugin.git`
 fails with the identical built-runtime-entry error as `npm-pack:` did before
 the split. Repo-root manifest placement only ever fixed manifest *discovery*
@@ -486,8 +486,7 @@ for you):
    runs the tests.
 
 The plugin imports the private-local `openclaw/plugin-sdk/realtime-voice*`
-subpaths the way `extensions/discord/src/voice` does. That is the accepted cost
-recorded in #3175.
+subpaths the way `extensions/discord/src/voice` does. That is the accepted cost.
 
 ## Tests
 
@@ -499,21 +498,21 @@ npm run typecheck
 
 `test/mock-bridge.ts` is a mock plnt-ts-bridge: it speaks the same binary
 protocol over an in-memory socket and replays recorded frame scripts, so the
-suite runs with no TeamSpeak server. The three acceptance assertions from
-#3175 are `test/speaker-sessions.test.ts` (sessions open/close on roster),
+suite runs with no TeamSpeak server. The three acceptance assertions
+are `test/speaker-sessions.test.ts` (sessions open/close on roster),
 `test/wake-gate.test.ts` (gating with 1 vs 2 humans), and
 `test/room-playback.test.ts` (barge-in clears the queue);
 `test/voice-runtime.test.ts` exercises all of it end-to-end through the frame
 codec.
 
-The #3176 tools are covered by `test/music.test.ts` (yt-dlp arguments and the
+The realtime tools are covered by `test/music.test.ts` (yt-dlp arguments and the
 pacing/backpressure/stop behavior, with both binaries faked), `test/tools.test.ts`
 (definitions, argument handling, nickname resolution, the timing log),
 `test/catch-up.test.ts` (the logger's line grammar and file layout, including one
 real file on disk) and `test/voice-runtime-tools.test.ts` (a tool call in, bridge
 `poke` / `music_audio` / `music_gain` frames out).
 
-The #3228 stt-tts lane adds `test/segmenter.test.ts` (where an utterance
+The stt-tts lane adds `test/segmenter.test.ts` (where an utterance
 ends, including the hangover that keeps a mid-sentence pause from becoming two
 turns), `test/whisper-local.test.ts` (the WAV the sidecar receives, and whisper's
 non-speech placeholders never becoming a turn), `test/speech.test.ts` (the

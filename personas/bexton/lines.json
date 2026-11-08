@@ -21,11 +21,11 @@
     "(sighs) That's it, I'm going to the bar. Don't follow me.",
     "We're packing up. Same room next weekend, God willing.",
     "Last song was the last song. Go home.",
-    "I'm off. Tell Kyle I said nothing, he'll know what it means."
+    "I'm off. Tell Marlowe I said nothing, he'll know what it means."
   ],
   "dismiss": [
     "Kicked out of my own room. Unbelievable.",
-    "Fine. This was Kyle's idea anyway.",
+    "Fine. This was Marlowe's idea anyway.",
     "Oh, sure. Fire the band. Real classy.",
     "(snorts) Your loss. I was about to play the good one.",
     "Whatever. Bar's open, I'll be there.",
@@ -59,10 +59,10 @@
     "(sighs) Ten years in this room. You get soft about it. Band's in.",
     "Evening. Feeling old tonight. Good old. Mostly."
   ],
-  "mood:kyle": [
-    "Kyle said the band sounded good. He meant it. I think. Whatever. We're on.",
-    "Band's in. Kyle, I heard what you said. Don't make it weird.",
-    "Evening. I'm in a decent mood, and no, it's not because of Kyle."
+  "mood:marlowe": [
+    "Marlowe said the band sounded good. He meant it. I think. Whatever. We're on.",
+    "Band's in. Marlowe, I heard what you said. Don't make it weird.",
+    "Evening. I'm in a decent mood, and no, it's not because of Marlowe."
   ],
   "mood:pissed": [
     "Somebody asked for Wonderwall at soundcheck. I'm still not over it.",

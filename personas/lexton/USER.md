@@ -26,4 +26,4 @@ Replace the example below with a real directive and a real observation date befo
 
 ## Related
 
-- [Agent workspace](/concepts/agent-workspace)
+- [Agent workspace](https://docs.openclaw.ai/concepts/agent-workspace)

@@ -1,6 +1,6 @@
-# image/suno-api — the house band's generator (#3554)
+# image/suno-api — the house band's generator
 
-> **#3791: built into the one image.** The Dockerfile's `suno-builder` stage
+> **Built into the one image.** The Dockerfile's `suno-builder` stage
 > checks out upstream at a2e6a82 and applies `suno-api.patch`, which is the
 > exact diff the hand-built `suno-api` container ran (the 2026 UI selectors
 > `patch-new-ui.py` used to apply, Turnstile via 2Captcha, the v2-web path,

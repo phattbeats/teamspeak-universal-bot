@@ -1,4 +1,4 @@
-# Insights dashboard (#3963)
+# Insights dashboard
 
 A web dashboard for the TeamSpeak server, built into the one container. It shows
 when the server is busy, who posts and talks the most, who spends the most time
@@ -63,7 +63,7 @@ the files the bots already read; there is no second copy.
 
 | Page | Edits | When it takes effect |
 |---|---|---|
-| Bots (#4374) | `/config/bots.json`: enable/disable, nick, channel, identity, port, flags, env; add a bot from a pack; remove. Per-bot and stack-wide voice switches. See [ADMIN-DASHBOARD.md](admin-dashboard.md) | at once: `stack.mjs rewire` + `supervisorctl update` restarts only the bot you changed; survives a container restart |
+| Bots | `/config/bots.json`: enable/disable, nick, channel, identity, port, flags, env; add a bot from a pack; remove. Per-bot and stack-wide voice switches. See [ADMIN-DASHBOARD.md](admin-dashboard.md) | at once: `stack.mjs rewire` + `supervisorctl update` restarts only the bot you changed; survives a container restart |
 | Tools & skills | `openclaw.json`: `agents.entries.<bot>.tools` (allow/deny), `.skills`, and `channels.teamspeak.accounts.<bot>.tools` (music, band, villain, moderation switches) | when the gateway reloads its config |
 | Personas | `workspace/agents/<bot>/*.md`, `lines.json`, `moods.json` | the agent reads them on its next turn |
 | Schedule | `bots.<bot>.shifts` in `/config/summoner/config.json` and the merged `/run/universal/summoner.json` | at once: the summoner's `POST /reload` re-reads shifts, no restart |

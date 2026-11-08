@@ -16,9 +16,9 @@ fact — and tells the room he is doing it.
    `/config/.voice-off` kill switch, `--no-audio`, and whether the stream and music tools are on
    (`SEXTON_CAP_STREAM` / `SEXTON_CAP_MUSIC`, set by `stack.mjs`). A pack without a
    `welcome.json` gets the generic built-in. The `dm` module's test fails if "can't hear you"
-   is ever rendered while voice is on (PHA-3305's rule, kept). The welcomed uid list is
+   is ever rendered while voice is on (the original rule, kept). The welcomed uid list is
    `<log-dir>/<channel-name>/.welcomed`; fail-open, a lost list costs one repeated welcome.
-2. **Returning-user update (PHA-4917).** When a known uid comes back, it gets one message:
+2. **Returning-user update.** When a known uid comes back, it gets one message:
    the returning greeting and a digest of what it missed, **only if** something new was said.
    The digest covers lines since the uid last *left* (not since the last digest), minus lines
    said while it was present; includes every bot's channel lines (labelled by nick, our own
@@ -30,7 +30,7 @@ fact — and tells the room he is doing it.
    `<log-dir>/<channel-name>/.lastnotified` so restarts do not reset it; joins inside the window
    send nothing and the next DM after it covers them (the earliest unreported leave is kept in
    `.lastleft`). Fail-open like `.welcomed`. The message ring behind the digest is memory-only
-   (last 200) and is **rehydrated from the disk log** on connect (#3217): the disk format *is*
+   (last 200) and is **rehydrated from the disk log** on connect: the disk format *is*
    the wire format, a parse of `HH:MM  nickname: message`. tsclientlib may not have a uid the
    instant a client joins/moves; the update defers until it does. Suppressed for the first five
    seconds after the bot connects. Config: `bots.json` `dm` block, stack-wide and per bot
@@ -38,7 +38,7 @@ fact — and tells the room he is doing it.
 3. **Full log on disk.** Every message is appended to `<log-dir>/<channel-name>/YYYY-MM-DD.md`
    as markdown, one line per message, same format.
 
-**#3424 removed the rolling log in the channel description** (#3173/#3217): every
+**The rolling log in the channel description was removed**: every
 `channeledit` fired a channel-edit notification sound in TS6, and the catch-up PM and disk log
 above already cover the same ground. There is no longer any per-message or on-connect
 `channeledit` at all — the channel description is untouched by the bot. The on-connect
@@ -48,7 +48,7 @@ rehydration survives the removal: it feeds the catch-up PM, not just the old des
 
 Capability lines come from the live config, not fixed text. Nothing in the welcome may say the
 voice never leaves the box while a hosted STT sits anywhere in the path (the $0-ceiling constraint
-from #3177 as a wording rule), and it may not mention the channel description (removed, #3424).
+as a wording rule), and it may not mention the channel description (removed).
 
 ### HARD RULE: content only
 
@@ -101,14 +101,14 @@ The client-side book's `Channel` has no `description` field; the description arr
 (`OutChannelDescriptionRequestMessage`). `send-test` uses that to read back what the server
 actually stored.
 
-## Audio / voice bridge (#3342)
+## Audio / voice bridge
 
 The goal: everything running off one docker container / one bot
 account. Before this, the Sexton connected as `Sexton` for text and a
 separate `ts-bridge` container connected as `Sexton-Bridge` for audio — two
-client slots in the channel roster for one bot. #3341 collapsed that to
+client slots in the channel roster for one bot. That was first collapsed to
 one `tsclientlib::Connection`, fronted by a Unix-socket IPC (`bridge-proto`)
-to a still-separate `ts-bridge` container. #3342 removes that second
+to a still-separate `ts-bridge` container. The consolidation removes that second
 container: the mixer, the Opus codec, and the public WebSocket server
 (`:9099`, wire format in [`PROTOCOL.md`](PROTOCOL.md)) now run inside this
 binary, wired directly to the Sexton's own `tsclientlib::Connection` and
@@ -121,7 +121,7 @@ The bridge-proto crate's Unix-socket layer (`codec.rs`/`handshake.rs`) is
 loopback socket inside one binary would be an extra moving part for no
 gain. `BridgeEvent`/`BridgeCommand`/`Snapshot` are reused as the in-process
 vocabulary between the connection's event loop and the WS server instead —
-see the #3342 PR description for the fuller reasoning.
+see the consolidation PR description for the fuller reasoning.
 
 Config, formerly `ts-bridge`'s env vars, is now flags on `sexton` (matching
 its existing CLI style):
@@ -139,7 +139,7 @@ its existing CLI style):
 | `sexton` | the bot itself |
 | `probe-channels` | connect, dump the channel tree, exit — used to confirm reachability and channel names |
 | `send-test` | connect as another identity and run a scripted sequence against a channel — used for the verification recipe |
-| `bridge-test` | drive the audio/voice bridge WebSocket from outside — plays test tones, logs every frame received back (#3174 acceptance). Formerly `ts-bridge`'s binary of the same name; see `tools/*.py` for stdlib-Python equivalents that don't need a Rust toolchain. |
+| `bridge-test` | drive the audio/voice bridge WebSocket from outside — plays test tones, logs every frame received back. Formerly `ts-bridge`'s binary of the same name; see `tools/*.py` for stdlib-Python equivalents that don't need a Rust toolchain. |
 
 `send-test` takes `--script`, a comma-separated list of steps, so a run is deterministic:
 
@@ -152,7 +152,7 @@ its existing CLI style):
 | `wait:<ms>` | pump the connection for `<ms>` milliseconds |
 
 It prints every private message it receives and, at the end, the channel description as the
-server returns it. `-i` reuses an identity so an account can reconnect as itself. The #3107
+server returns it. `-i` reuses an identity so an account can reconnect as itself. The verification
 recipe is two concurrent invocations — see `deploy/verify.sh`.
 
 ## Running
@@ -163,7 +163,7 @@ See `deploy/sexton-compose.yml`. The image is `phattbeats/sexton:latest`, built 
 - the pinned identity mounted read-only at `/run/secrets/sexton-identity`
 - the avatar baked into the image at `/usr/local/share/sexton-avatar/<avatar>.png`
 - logs persisted at `<appdata>/sexton` (mounted at `/var/sexton-logs`)
-- the audio bridge's WebSocket exposed to sibling containers on `:9099` (#3342)
+- the audio bridge's WebSocket exposed to sibling containers on `:9099`
 
 `sexton-compose.yml` overrides the image's entrypoint to invoke the binary with explicit
 flags directly:
@@ -179,14 +179,14 @@ sexton -a teamspeak6-server -p 9987 -n Sexton -c "General Shit" \
 
 the Docker host has no `docker compose` plugin, so production runs the equivalent `docker run` in
 `deploy/deploy.sh` (copied to `<appdata>/sexton/deploy.sh` on the box). Keep it and the
-compose file in step. **Superseded by `image/deploy.sh` (#3428)** — both are kept as the
+compose file in step. **Superseded by `image/deploy.sh`** — both are kept as the
 record of the settings that were proven here, not as a thing to still run.
 
-#3342: the build context moved from `sexton/` to the repo root (the Sexton now has a
+The build context moved from `sexton/` to the repo root (the Sexton now has a
 workspace path dependency on `bridge-proto`) — see `Dockerfile`'s header comment and
 `deploy/sexton-compose.yml`'s `build:` stanza.
 
-### Standalone / bring-your-own-OpenClaw (#3798)
+### Standalone / bring-your-own-OpenClaw
 
 This same `Dockerfile` is also published as `ghcr.io/phattbeats/plnt-ts-bridge` — the
 bridge half alone, for someone who already runs their own OpenClaw gateway elsewhere and
@@ -227,7 +227,7 @@ entrypoint changed.
 
 The container healthcheck greps PID 1's argv (`grep -qa /usr/local/bin/sexton /proc/1/cmdline`).
 The runtime image is `debian-slim` and ships no `pgrep`, so the previous `pgrep -f` check exited
-127 on every interval and the container reported `unhealthy` continuously (#3217).
+127 on every interval and the container reported `unhealthy` continuously.
 
 There is no longer an `--on-connected` hook wired up in production. The flag still exists and runs
 any script you point it at, but the script that used to be baked into the image posted a "Sexton
@@ -236,8 +236,3 @@ it 403'd silently on every connect. A liveness signal that fails silently is wor
 re-minting the key needs board-level access the bot does not have, so the hook, the script and the
 mounted secret were all removed. Restart evidence is the healthcheck plus `docker logs sexton`
 (`connected; channel resolved`, `rehydrated message history from disk`).
-
-Tracking: #3099 (epic), #3173 (this version), #3107 (verification recipe),
-#3341/#3342 (audio bridge consolidation),
-#3217 (history rehydration, hook removal),
-#3424 (removed the per-message/on-connect channel description rewrite).

@@ -1,4 +1,4 @@
-# Admin dashboard: the Bots tab (#4374)
+# Admin dashboard: the Bots tab
 
 The insights dashboard (`http://<host>:8098`, login in
 `config/insights/auth.txt`; see [INSIGHTS.md](insights.md)) has a **Bots**
@@ -22,7 +22,7 @@ One row per bot in `bots.json`:
 | State | `supervisorctl status` for `core-<id>` (and `menace-<id>` when `menace` is on) plus the summoner's "in the room" |
 | Voice | the gateway account's `voice.mode`: `off` = text-only for that one bot |
 
-Above the table: the stack-wide voice switch (#4372's `POST /voice/on|off`
+Above the table: the stack-wide voice switch (`POST /voice/on|off`
 on the summoner, same as the `set_voice_mode` tool). Off stops whisper and
 every bot goes text-only within seconds; on reloads whisper in about 20 s.
 
@@ -119,4 +119,4 @@ line so a failed `supervisorctl` is visible rather than silent.
 - Dry run without a container: start `insights-web.mjs` with
   `UNIVERSAL_CONFIG_DIR`, `SUMMONER_CONFIG`, `UNIVERSAL_STACK` pointing at a
   scratch tree and `SUPERVISORCTL` at a stub script; every route then runs
-  for real against that tree (done for #4374 before the PR).
+  for real against that tree (done before the PR).

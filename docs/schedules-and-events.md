@@ -5,14 +5,14 @@ room, what they say walking in and out, and the rare nights when the schedule
 goes sideways. If a bot is "missing", it's probably off duty, so start at
 [Debugging](#debugging).
 
-| Piece | Where it lives | Issue |
-|---|---|---|
-| Shift schedule, chat/voice summons | `ts-summoner/summoner.mjs`, `ts-summoner/config.json` | #3821, #3823 |
-| Entrance/exit lines | `personas/<bot>/lines.json` → live `workspace/agents/<bot>/lines.json`; plugin `src/voice/announcer.ts` | #3824 |
-| Daily mood | `personas/<bot>/moods.json`, announcer | #3840 |
-| **Two-bot scenes** (S5) | `ts-summoner/live/scenes.json` | #3841 |
-| **Special-nights calendar** (S6) | `ts-summoner/live/calendar.json`, `ts-summoner/schedule.mjs` | #3841 |
-| **Rare events** (S7): hostile takeover, bender | `ts-summoner/summoner.mjs`, `ts-summoner/story.mjs`, `config.json → events` | #3841 |
+| Piece | Where it lives |
+|---|---|
+| Shift schedule, chat/voice summons | `ts-summoner/summoner.mjs`, `ts-summoner/config.json` |
+| Entrance/exit lines | `personas/<bot>/lines.json` → live `workspace/agents/<bot>/lines.json`; plugin `src/voice/announcer.ts` |
+| Daily mood | `personas/<bot>/moods.json`, announcer |
+| **Two-bot scenes** (S5) | `ts-summoner/live/scenes.json` |
+| **Special-nights calendar** (S6) | `ts-summoner/live/calendar.json`, `ts-summoner/schedule.mjs` |
+| **Rare events** (S7): hostile takeover, bender | `ts-summoner/summoner.mjs`, `ts-summoner/story.mjs`, `config.json → events` |
 
 ---
 
@@ -39,7 +39,7 @@ requests: write, wait for the delete, then go to the next bot.
 
 ```json
 { "reason": "shift_start:halloween", "at": 1790824633999,
-  "vars": { "who": "Kyle" }, "quiet": false, "text": null }
+  "vars": { "who": "Marlowe" }, "quiet": false, "text": null }
 ```
 
 | field | meaning |
@@ -53,7 +53,7 @@ requests: write, wait for the delete, then go to the next bot.
 How the announcer picks a line for `shift_start:halloween`:
 
 1. the tagged pool `shift_start:halloween`, if it has a usable line;
-2. otherwise the mood pool `mood:<today's mood>` (entrances only, #3840);
+2. otherwise the mood pool `mood:<today's mood>` (entrances only);
 3. otherwise the plain pool `shift_start`.
 
 A themed night beats a mood. The mood still rolls from the base reason
@@ -80,7 +80,7 @@ Rules:
 - Each bot gets one start/stop per minute at most.
 - The table is the plan. The real clock moves with the variety rules below.
 
-### Variety (#3839, `ts-summoner/variety.mjs`, `config.json → variety`)
+### Variety (`ts-summoner/variety.mjs`, `config.json → variety`)
 
 Every roll hashes the shift's key (`sexton@2026-10-02@08:00`) with `salt`, so
 a restart lands on the same answer. Change `salt` to re-deal everything.
@@ -99,7 +99,7 @@ a restart lands on the same answer. Change `salt` to re-deal everything.
 - `/status → events.callouts` lists decided call-outs (`{bot, cover}`);
   `/status → bots.<id>.shift` shows the jittered `start`/`end` and `lateMin`.
 - Turn a part off with `"enabled": false` in its block. With `room` off,
-  overtime is uncapped again (the pre-#3839 behaviour).
+  overtime is uncapped again (the earlier behaviour).
 
 ---
 
@@ -210,7 +210,7 @@ It's re-read on change, and later entries win.
 |---|---|---|
 | `enabled: false` | entry | ignored (templates) |
 | `pool` | all bots | tag for every reason that night (`shift_start:<pool>` etc.) |
-| `vars` | all bots | placeholders, e.g. `{ "who": "Kyle" }` |
+| `vars` | all bots | placeholders, e.g. `{ "who": "Marlowe" }` |
 | `events` | entry | force a rare event that night: `["takeover"]`, `["bender"]` (once per entry per night) |
 | `bots.<id>.shifts` | one bot | **replace** that day's shifts (`[]` = day off) |
 | `bots.<id>.extraShifts` | one bot | **add** shifts to the normal ones |
@@ -259,7 +259,7 @@ to the plain pool:
 ### Adding a birthday
 
 ```json
-{ "id": "bday-kyle", "when": { "date": "03-14" }, "pool": "birthday", "vars": { "who": "Kyle" } }
+{ "id": "bday-marlowe", "when": { "date": "03-14" }, "pool": "birthday", "vars": { "who": "Marlowe" } }
 ```
 
 Every bot's entrance that night (service day) comes from `shift_start:birthday`
@@ -376,7 +376,7 @@ mount, so after editing it run `docker restart ts-summoner`.
 
 ---
 
-## 5b. Guest stars (#3842)
+## 5b. Guest stars
 
 Rotten Johnny (the ghoul who owns the Vice) and Trixie (his waitress, the band's second singer) aren't regulars. They **drop in** on Bexton nights a few times a week, and they don't overstay: an arrive scene with Bexton, a few minutes listening for their name, then a leave scene.
 
@@ -408,11 +408,11 @@ A guest is an ordinary bot entry (`bots.johnny`, `bots.trixie`) with `container:
 
 **By hand:** `POST /event/guest` (random eligible guest) or `POST /event/guest?who=trixie`, and `POST /event/end?kind=guest`. `GET /status` shows `events.guests` (active visit, recent visit times).
 
-**Cost (#3597).** Only one guest container exists, and its core is down between visits. It uses `http://whisper:8082/inference`. With #3607's coalescing proxy deployed, that is the proxy and a guest mostly shares Bexton's decodes. On today's three plain workers, it is Lexton's worker, and Lexton is off for most of Bexton's evening, so no fourth worker is needed. The week is capped at 3-4 visits of 45 minutes or less.
+**Cost.** Only one guest container exists, and its core is down between visits. It uses `http://whisper:8082/inference`. With the coalescing proxy deployed, that is the proxy and a guest mostly shares Bexton's decodes. On today's three plain workers, it is Lexton's worker, and Lexton is off for most of Bexton's evening, so no fourth worker is needed. The week is capped at 3-4 visits of 45 minutes or less.
 
 **Adding a guest:** make a `personas/<id>/` pack (`AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `lines.json`, `tools.json`, `voice.json` with `nick`, `avatar.png`) and add its `COPY` lines next to Johnny's in `image/Dockerfile`. Add a `bots.<id>` entry with `container: "guest"`, then rebuild the image and redeploy the guest container. Also add the new nick to the regulars' `excludeWakeNames` (exact nick match, so bots don't wake each other).
 
-## 5c. Bot banter (#3859)
+## 5c. Bot banter
 
 A couple of times a night, two regulars have a longer bit with each other: eight to twelve lines, in character, on some topic (the jukebox, Bexton's tab, the bald head, LexCorp's oxygen jingle). The pairs are Bexton+Sexton, Bexton+Lexton, and Lexton+Sexton. The scripts are in `live/scenes.json` under `banter:<a>+<b>`, with the ids sorted. They play like any other scene, so you can edit them live, and a `banter:<a>+<b>:<pool>` key wins on a calendar night.
 
@@ -420,7 +420,7 @@ A couple of times a night, two regulars have a longer bit with each other: eight
 - **Who:** a pair that's already in the room together is 3x as likely. If one side is off shift, it can **drop in** for the bit (`dropIn`). It joins quietly, says its lines, and the summoner stops it again. That's how Lexton and the Sexton get banter outside midnight. A bot that's called out, on a bender, summoned, or dismissed never drops in. A pair that already played tonight waits while another pair can go.
 - **By hand:** `POST /event/banter` (any pair that can play now) or `POST /event/banter?who=lexton+sexton`. Plays are listed in `/status → events.banter`.
 
-## 5d. The voice kill switch (#4372)
+## 5d. The voice kill switch
 
 Two more routes on the summoner's HTTP API (`:8099`, in-container only).
 They are the live form of "disable all voice and whisper": the bots stay in
@@ -466,7 +466,7 @@ tar cf - -C ts-summoner summoner.mjs schedule.mjs story.mjs variety.mjs config.j
   reconcile picks it up. (Single-file bind mounts keep the old inode after
   `sed -i` or an editor save, which is why it's a directory.)
 - `state/` holds `state.json` (event state). Don't delete it mid-event.
-- The scene and tag features need bots on an image with the #3841
+- The scene and tag features need bots on an image with the new
   announcer (an image that includes the scene announcer). On an older image, scene
   lines are consumed silently: the swap still happens, just with no dialogue.
 
@@ -489,7 +489,7 @@ leave existing keys alone, because operators hand-edit them. Keep the file
 | wrong hours | `/status → bots.<id>.shiftsToday` (today's shifts after the calendar) |
 | calendar edit ignored | `docker logs ts-summoner \| grep calendar.json`: a JSON error keeps the last good copy |
 | takeover stuck | `/status → events.takeover.active`; `POST /event/end?kind=takeover` |
-| bots deaf and mute, whisper EXITED | `/status → voice` is `off`: someone said "go quiet" or the container booted with `UNIVERSAL_VOICE=0`. `POST /voice/on` (#4372) |
+| bots deaf and mute, whisper EXITED | `/status → voice` is `off`: someone said "go quiet" or the container booted with `UNIVERSAL_VOICE=0`. `POST /voice/on` |
 | Sexton stuck in jail after a crash | the next reconcile after `until` releases him; or move him by hand (Lexton's `move_client`, or the TS client) |
 | what the bot actually said | `docker logs <bot> \| grep "teamspeak announce"` |
 

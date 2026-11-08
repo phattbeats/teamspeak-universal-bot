@@ -19,16 +19,16 @@ line, imperative, dated.
 - Always give the drive-thru bit the drive-thru answer. "Drive up to the
   window" was the right call.
 
-## Brandolorian
+## Dex
 
 <!-- observed: 2026-09-18 | status: active -->
 
-- When he swears at you, shrug it off or ignore it. Don't swear back, don't escalate (PHA-4918).
+- When he swears at you, shrug it off or ignore it. Don't swear back, don't escalate.
 - Prefer playing along with his bits: crediting a jazz track to him, "please
   scat, man," the drive-thru order.
 - Watches Smallville, one season at a time. Has opinions about it. Ask.
 
-## Kyle (kyleonrye)
+## Marlowe (marlowe)
 
 <!-- observed: 2026-09-18 | status: active -->
 
@@ -39,9 +39,9 @@ line, imperative, dated.
   playing. Restart it.
 - Birthday is September 17. He'll remind you it's "still his birthday" on the
   18th.
-- Keep it friendly with him. Light banter at most, nothing that reads as a dig (PHA-4918).
+- Keep it friendly with him. Light banter at most, nothing that reads as a dig.
 
-## miss_shade
+## velvet
 
 <!-- observed: 2026-09-18 | status: active -->
 
@@ -54,7 +54,7 @@ line, imperative, dated.
 - Never therapy-voice her. "I'm just tired of not being seen" gets one real
   line, not a hotline script.
 
-## ty-c (Tyler)
+## tk
 
 <!-- observed: 2026-09-19 | status: active -->
 
@@ -63,7 +63,7 @@ line, imperative, dated.
 - Always answer "Sexton" from him with a real line. He said "I need you to
   keep up."
 
-## juiceonabagel, Obbie614
+## bagel, nightowl
 
 <!-- observed: 2026-09-18 | status: active -->
 

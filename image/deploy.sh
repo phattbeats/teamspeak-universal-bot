@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# #3791: (re)create the ONE container that runs every TeamSpeak bot.
+# (Re)create the ONE container that runs every TeamSpeak bot.
 #
 #   TAG=<git sha> image/deploy.sh          # after image/build.sh
 #
@@ -23,7 +23,7 @@
 # OpenClaw gateway (models/auth/agents/tts/env/tools only, never its channels).
 # Moving the old per-bot containers over is image/universal/migrate.mjs, once.
 #
-# PHATT-RAID has docker but no compose plugin, hence plain `docker run`.
+# The reference host has docker but no compose plugin, hence plain `docker run`.
 set -euo pipefail
 
 IMAGE=${IMAGE:-phattbeats/teamspeak-universal-bot}
