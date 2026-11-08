@@ -8,12 +8,12 @@
 //                  with talk time sampled off client_flag_talking (approximate:
 //                  one poll every pollSec, so short bursts can fall between)
 //       joins      server connects/disconnects (notifycliententerview/leftview)
-//       heard      what the bots' STT transcribed (POST /heard), so voice has
-//                  words too, but only while some bot is in the channel
 //       bot_events shift starts/ends, summons, dismissals, scenes, banter...
 //   - insights-web (ingests on a timer):
 //       bot_turns  every turn out of the gateway's transcripts: who asked, on
-//                  which lane, what tools ran, whether the bot answered
+//                  which lane, what tools ran, whether the bot answered. Voice-lane
+//                  turns keep no words (privacy): who, when, tools, cost only.
+//   Spoken words are never stored anywhere: no transcripts, no voice log.
 //
 // Every write is wrapped: a broken disk or a locked file logs and moves on, it
 // never takes the summoner (and so the shifts) down with it.
@@ -39,8 +39,7 @@ CREATE TABLE IF NOT EXISTS joins (
   id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, kind TEXT, dbid TEXT, uid TEXT,
   nick TEXT, reason TEXT, is_bot INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS joins_ts ON joins(ts);
-CREATE TABLE IF NOT EXISTS heard (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, nick TEXT, text TEXT);
-CREATE INDEX IF NOT EXISTS heard_ts ON heard(ts);
+DROP TABLE IF EXISTS heard;
 CREATE TABLE IF NOT EXISTS bot_events (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, bot TEXT, kind TEXT, detail TEXT);
 CREATE INDEX IF NOT EXISTS bot_events_ts ON bot_events(ts);
 CREATE TABLE IF NOT EXISTS bot_turns (
@@ -73,6 +72,11 @@ export function openDb(path) {
   }
 }
 
+/** Spoken words are not kept: blank any voice-lane turn text (old rows, and a backstop). */
+export function purgeSpokenWords(db) {
+  db.prepare("UPDATE bot_turns SET prompt=NULL, reply=NULL WHERE lane='voice' AND (prompt IS NOT NULL OR reply IS NOT NULL)").run();
+}
+
 export const getMeta = (db, k, d = null) => db.prepare('SELECT v FROM meta WHERE k=?').get(k)?.v ?? d;
 export const setMeta = (db, k, v) => db.prepare('INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(k, String(v));
 
@@ -88,7 +92,6 @@ export class Recorder {
     this.open = new Map(); // clid -> { id, cid, lastSeen }
     this.nickByClid = new Map(); // for leftview, which carries no nick
     this.channels = new Map(); // cid -> name
-    this.lastHeard = new Map(); // nick|text -> ts; several bots forward one utterance
     this.path = path;
     this.retryAt = 0;
     this.attach();
@@ -104,13 +107,13 @@ export class Recorder {
       this.db = openDb(this.path);
       // Sessions left open by a crash or restart end where they were last seen.
       this.db.prepare('UPDATE voice SET open=0 WHERE open=1').run();
+      purgeSpokenWords(this.db);
       this.st = {
         chat: this.db.prepare('INSERT INTO chat(ts,nick,uid,target,text,is_bot) VALUES(?,?,?,?,?,?)'),
         vOpen: this.db.prepare('INSERT INTO voice(start_ts,end_ts,dbid,uid,nick,cid,channel,is_bot) VALUES(?,?,?,?,?,?,?,?)'),
         vTick: this.db.prepare('UPDATE voice SET end_ts=?, talk_s=talk_s+?, away_s=away_s+?, nick=? WHERE id=?'),
         vClose: this.db.prepare('UPDATE voice SET open=0 WHERE id=?'),
         join: this.db.prepare('INSERT INTO joins(ts,kind,dbid,uid,nick,reason,is_bot) VALUES(?,?,?,?,?,?,?)'),
-        heard: this.db.prepare('INSERT INTO heard(ts,nick,text) VALUES(?,?,?)'),
         botEvent: this.db.prepare('INSERT INTO bot_events(ts,bot,kind,detail) VALUES(?,?,?,?)'),
       };
     } catch (e) {
@@ -215,17 +218,6 @@ export class Recorder {
     }
   }
 
-  /** A transcript one of the bots heard. Several bots in the room forward the same one. */
-  heard(nick, text) {
-    const t = String(text || '').trim();
-    if (!nick || !t || this.isBot(nick)) return;
-    const now = this.now(), key = `${nick}|${t}`;
-    if (now - (this.lastHeard.get(key) ?? 0) < 30_000) return;
-    this.lastHeard.set(key, now);
-    if (this.lastHeard.size > 500) for (const [k, ts] of this.lastHeard) if (now - ts > 30_000) this.lastHeard.delete(k);
-    this.safe('heard', () => this.st.heard.run(now, nick, t));
-  }
-
   botEvent(bot, kind, detail = null) {
     this.safe('botEvent', () => this.st.botEvent.run(this.now(), bot ?? null, kind, detail == null ? null : String(detail).slice(0, 300)));
   }
@@ -282,20 +274,20 @@ export function turnOps(rows) {
 
 export function applyTurnOps(db, bot, ops) {
   const ins = db.prepare('INSERT OR IGNORE INTO bot_turns(key,ts,bot,session,lane,nick,prompt) VALUES(?,?,?,?,?,?,?)');
-  const latest = db.prepare('SELECT id, reply, tools FROM bot_turns WHERE bot=? AND session=? AND ts<=? ORDER BY ts DESC, id DESC LIMIT 1');
+  const latest = db.prepare('SELECT id, lane, reply, tools FROM bot_turns WHERE bot=? AND session=? AND ts<=? ORDER BY ts DESC, id DESC LIMIT 1');
   const upd = db.prepare('UPDATE bot_turns SET reply=?, replied=MAX(replied,?), tools=?, cost=cost+? WHERE id=?');
   let turns = 0;
   db.exec('BEGIN');
   try {
     for (const o of ops) {
       if (o.op === 'turn') {
-        turns += Number(ins.run(o.key, o.ts, bot, o.session, o.lane, o.nick, String(o.text).slice(0, 2000)).changes);
+        turns += Number(ins.run(o.key, o.ts, bot, o.session, o.lane, o.nick, o.lane === 'voice' ? null : String(o.text).slice(0, 2000)).changes);
         continue;
       }
       const t = latest.get(bot, o.session, o.ts);
       if (!t) continue;
       if (o.op === 'reply') {
-        const reply = o.said ? [t.reply, o.text].filter(Boolean).join('\n').slice(0, 2000) : t.reply;
+        const reply = o.said && t.lane !== 'voice' ? [t.reply, o.text].filter(Boolean).join('\n').slice(0, 2000) : t.reply;
         upd.run(reply ?? null, o.said ? 1 : 0, t.tools, o.cost, t.id);
       } else {
         const tools = JSON.parse(t.tools);

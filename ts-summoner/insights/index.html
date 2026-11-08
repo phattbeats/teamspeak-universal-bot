@@ -155,12 +155,12 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
       <div class="card-head">
         <div><h2 id="lb-title">Who spends the most time in voice</h2><p class="sub" id="lb-sub"></p></div>
         <div class="seg" id="lb-metric" role="group" aria-label="Leaderboard measure">
-          <button data-m="voiceS" aria-pressed="true">Time in voice</button><button data-m="talkS">Talking</button><button data-m="chat">Chat</button><button data-m="heard">Transcribed</button><button data-m="botTurns">Talks to bots</button>
+          <button data-m="voiceS" aria-pressed="true">Time in voice</button><button data-m="talkS">Talking</button><button data-m="chat">Chat</button><button data-m="botTurns">Talks to bots</button>
         </div>
       </div>
       <div id="leaderboard"></div>
     </div>
-    <div class="card"><h2>Everyone</h2><p class="sub">Talking is sampled every poll, so it is an estimate. Transcribed = speech a bot heard and wrote down (only while a bot is in the channel).</p><div id="people-table"></div></div>
+    <div class="card"><h2>Everyone</h2><p class="sub">Talking is sampled every poll, so it is an estimate.</p><div id="people-table"></div></div>
   </section>
 
   <section id="tab-bots" hidden>
@@ -195,7 +195,6 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
     <div class="card">
       <div class="filters" id="log-filters">
         <label><input type="checkbox" value="chat" checked> Chat</label>
-        <label><input type="checkbox" value="heard" checked> Speech</label>
         <label><input type="checkbox" value="turn" checked> Bot turns</label>
         <label><input type="checkbox" value="voice"> Voice sessions</label>
         <label><input type="checkbox" value="join"> Connects</label>
@@ -328,7 +327,7 @@ function renderOverview() {
   $('#tiles').innerHTML = [
     ['hero', 'Hours in voice', compact(t.voiceHours), `≈ ${compact(t.talkHours)} h of actual talking`],
     ['', 'People seen', nf.format(t.people), 'in voice or chat'],
-    ['', 'Chat messages', compact(t.chat), `${compact(t.heard)} spoken lines transcribed`],
+    ['', 'Chat messages', compact(t.chat), 'channel and server chat'],
     ['', 'Bot turns', compact(t.botTurns), t.botTurns ? `${Math.round((100 * t.botReplies) / t.botTurns)}% answered · $${t.botCost.toFixed(2)}` : 'none yet'],
     ['', 'Busiest hour', pk, 'voice + chat, server time'],
   ].map(([c, l, v, n]) => `<div class="tile ${c}"><div class="label">${l}</div><div class="value">${esc(v)}</div><div class="note">${esc(n)}</div></div>`).join('');
@@ -342,7 +341,6 @@ const METRICS = {
   voiceS: ['Who spends the most time in voice', dur, 'Connected to voice, any channel.'],
   talkS: ['Who talks the most', dur, 'Estimated from the talking light, sampled every 10 s.'],
   chat: ['Who posts the most', (v) => `${nf.format(v)} msgs`, 'Channel and server chat.'],
-  heard: ['Who the bots hear the most', (v) => `${nf.format(v)} lines`, 'Spoken lines a bot transcribed.'],
   botTurns: ['Who talks to the bots the most', (v) => `${nf.format(v)} turns`, 'Turns started with any bot.'],
 };
 function renderPeople() {
@@ -350,8 +348,8 @@ function renderPeople() {
   $('#lb-title').textContent = title; $('#lb-sub').textContent = sub;
   const rows = data.people.filter((p) => p[m] > 0).sort((a, b) => b[m] - a[m]).slice(0, 15).map((p) => ({ name: p.name, v: p[m] }));
   hbars($('#leaderboard'), rows, fmt);
-  $('#people-table').innerHTML = data.people.length ? `<table><tr><th>Person</th><th class="num">In voice</th><th class="num">Talking</th><th class="num">Away</th><th class="num">Sessions</th><th class="num">Chat</th><th class="num">Transcribed</th><th class="num">Bot turns</th><th>Last seen</th></tr>${
-    data.people.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${dur(p.voiceS)}</td><td class="num">${dur(p.talkS)}</td><td class="num">${dur(p.awayS)}</td><td class="num">${p.sessions}</td><td class="num">${nf.format(p.chat)}</td><td class="num">${nf.format(p.heard)}</td><td class="num">${nf.format(p.botTurns)}</td><td class="muted">${p.lastSeen ? when(p.lastSeen) : ''}</td></tr>`).join('')}</table>` : '<div class="empty">Nobody yet.</div>';
+  $('#people-table').innerHTML = data.people.length ? `<table><tr><th>Person</th><th class="num">In voice</th><th class="num">Talking</th><th class="num">Away</th><th class="num">Sessions</th><th class="num">Chat</th><th class="num">Bot turns</th><th>Last seen</th></tr>${
+    data.people.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${dur(p.voiceS)}</td><td class="num">${dur(p.talkS)}</td><td class="num">${dur(p.awayS)}</td><td class="num">${p.sessions}</td><td class="num">${nf.format(p.chat)}</td><td class="num">${nf.format(p.botTurns)}</td><td class="muted">${p.lastSeen ? when(p.lastSeen) : ''}</td></tr>`).join('')}</table>` : '<div class="empty">Nobody yet.</div>';
 }
 
 const EVENT_NAMES = { entrance: 'Entrance line', exit: 'Exit line', scene: 'Scene', banter: 'Banter', summon: 'Summoned in', dismiss: 'Sent away', takeover: 'Hostile takeover', bender: 'Bender', guest: 'Guest visit' };
@@ -364,7 +362,7 @@ function renderBots() {
   $('#asks-sub').textContent = `Turns by the first tool the bot ran (or plain talk). Came back = the same person spoke to that bot again within ${b.followMin} min.`;
   hbars($('#asks'), b.asks.slice(0, 12).map((a) => ({ name: a.kind, v: a.turns, tip: `${a.turns} turns · ${Math.round((100 * a.replied) / a.turns)}% answered · ${Math.round((100 * a.cameBack) / a.turns)}% came back` })), (v) => `${nf.format(v)}`);
   $('#asks-table').innerHTML = `<table><tr><th>Ask</th><th class="num">Turns</th><th class="num">Answered</th><th class="num">Came back</th></tr>${b.asks.map((a) => `<tr><td>${esc(a.kind)}</td><td class="num">${a.turns}</td><td class="num">${Math.round((100 * a.replied) / a.turns)}%</td><td class="num">${Math.round((100 * a.cameBack) / a.turns)}%</td></tr>`).join('')}</table>`;
-  $('#events-sub').textContent = `Human chat + speech in the ${b.windowMin} min after each thing, against the ${b.windowMin} min before. Only counted while people were around to hear it.`;
+  $('#events-sub').textContent = `Human chat in the ${b.windowMin} min after each thing, against the ${b.windowMin} min before. Only counted while people were around to hear it.`;
   $('#events').innerHTML = b.events.length ? `<table><tr><th>What</th><th class="num">Times</th><th class="num">Before</th><th class="num">After</th><th class="num">Got a response</th></tr>${
     b.events.map((e) => `<tr><td>${esc(EVENT_NAMES[e.kind] ?? e.kind)}</td><td class="num">${e.n}</td><td class="num">${e.avgBefore.toFixed(1)}</td><td class="num">${e.avgAfter.toFixed(1)}</td><td class="num">${Math.round(e.answeredPct)}%</td></tr>`).join('')}</table>` : '<div class="empty">Nothing recorded in this range yet. Bot events are recorded from this release on.</div>';
 }
@@ -377,7 +375,7 @@ function logParams(before) {
   if (before) p.set('before', before);
   return p;
 }
-const KIND = { chat: 'chat', heard: 'speech', turn: 'bot turn', join: '', voice: 'voice', bot: 'bot' };
+const KIND = { chat: 'chat', turn: 'bot turn', join: '', voice: 'voice', bot: 'bot' };
 function logRow(r) {
   let what = esc(r.text), who = esc(r.nick ?? ''), kind = KIND[r.t];
   if (r.t === 'chat' && r.a === 'server') kind = 'server';

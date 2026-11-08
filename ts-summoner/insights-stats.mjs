@@ -95,7 +95,6 @@ export function overview(db, { from, to, tz, now = Date.now(), hide = none }) {
     people.add(who);
   }
   const one = (sql) => db.prepare(sql).get(from, to);
-  const heard = one('SELECT COUNT(*) n FROM heard WHERE ts >= ? AND ts < ?').n;
   const turns = one('SELECT COUNT(*) n, COALESCE(SUM(replied),0) replied, COALESCE(SUM(cost),0) cost FROM bot_turns WHERE ts >= ? AND ts < ?');
   // Busiest hour across the week: voice person-minutes, chat as tiebreak.
   let peak = null;
@@ -109,7 +108,7 @@ export function overview(db, { from, to, tz, now = Date.now(), hide = none }) {
     UNION ALL SELECT MIN(ts) FROM bot_turns)`).get();
   return {
     tiles: {
-      people: people.size, voiceHours: voiceS / 3600, talkHours: talkS / 3600, chat: chats.length, heard,
+      people: people.size, voiceHours: voiceS / 3600, talkHours: talkS / 3600, chat: chats.length,
       botTurns: turns.n, botReplies: turns.replied, botCost: turns.cost, peak,
     },
     online,
@@ -122,12 +121,12 @@ export function overview(db, { from, to, tz, now = Date.now(), hide = none }) {
 export function people(db, { from, to, hide = none }) {
   const id = identities(db);
   const map = new Map();
-  const skip = { voiceS: 0, talkS: 0, awayS: 0, sessions: 0, chat: 0, heard: 0, botTurns: 0, lastSeen: 0 };
+  const skip = { voiceS: 0, talkS: 0, awayS: 0, sessions: 0, chat: 0, botTurns: 0, lastSeen: 0 };
   const row = (nick, uid) => {
     if (hide(nick)) return { ...skip };
     const k = id.key(nick, uid);
     let r = map.get(k);
-    if (!r) map.set(k, (r = { name: id.label(k), voiceS: 0, talkS: 0, awayS: 0, sessions: 0, chat: 0, heard: 0, botTurns: 0, lastSeen: 0 }));
+    if (!r) map.set(k, (r = { name: id.label(k), voiceS: 0, talkS: 0, awayS: 0, sessions: 0, chat: 0, botTurns: 0, lastSeen: 0 }));
     return r;
   };
   for (const s of sessions(db, from, to)) {
@@ -143,11 +142,6 @@ export function people(db, { from, to, hide = none }) {
     const r = row(m.nick, m.uid);
     r.chat += 1;
     r.lastSeen = Math.max(r.lastSeen, m.ts);
-  }
-  for (const h of db.prepare('SELECT nick, COUNT(*) n, MAX(ts) t FROM heard WHERE ts >= ? AND ts < ? GROUP BY nick').all(from, to)) {
-    const r = row(h.nick, null);
-    r.heard += h.n;
-    r.lastSeen = Math.max(r.lastSeen, h.t);
   }
   for (const t of db.prepare(`SELECT nick, COUNT(*) n, MAX(ts) t FROM bot_turns WHERE ts >= ? AND ts < ? AND nick IS NOT NULL
       AND lane IN ('voice','chat','dm') GROUP BY nick`).all(from, to)) {
@@ -166,7 +160,7 @@ const top = (counts, n = 8) => Object.entries(counts).sort((a, b) => b[1] - a[1]
  *    how often the bot answered, and how often the same person came back to
  *    that bot within `followMin` (a conversation, not a one-off);
  *  - events: things the bots start on their own (entrances, scenes, banter,
- *    summons...) and how much human chat + speech followed in the next
+ *    summons...) and how much human chat followed in the next
  *    `windowMin`, against the same window before.
  */
 export function bots(db, { from, to, followMin = 5, windowMin = 10, hide = none }) {
@@ -192,9 +186,8 @@ export function bots(db, { from, to, followMin = 5, windowMin = 10, hide = none 
     }
   }
   const W = windowMin * 60_000;
-  const activity = db.prepare(`SELECT (SELECT COUNT(*) FROM chat WHERE is_bot = 0 AND ts >= ? AND ts < ?)
-    + (SELECT COUNT(*) FROM heard WHERE ts >= ? AND ts < ?) n`);
-  const act = (a, b) => activity.get(a, b, a, b).n;
+  const activity = db.prepare('SELECT COUNT(*) n FROM chat WHERE is_bot = 0 AND ts >= ? AND ts < ?');
+  const act = (a, b) => activity.get(a, b).n;
   const evs = {};
   for (const e of db.prepare(`SELECT ts, bot, kind FROM bot_events WHERE ts >= ? AND ts < ?
       AND kind NOT IN ('core_start','core_stop')`).all(from, to)) {
@@ -217,7 +210,6 @@ export function bots(db, { from, to, followMin = 5, windowMin = 10, hide = none 
 
 const LOG_SOURCES = {
   chat: `SELECT 'chat' t, ts, nick, text, target a, NULL b FROM chat`,
-  heard: `SELECT 'heard' t, ts, nick, text, NULL a, NULL b FROM heard`,
   turn: `SELECT 'turn' t, ts, nick, prompt text, bot a, json_object('lane', lane, 'replied', replied, 'reply', reply, 'tools', json(tools)) b FROM bot_turns`,
   join: `SELECT 'join' t, ts, nick, kind text, reason a, NULL b FROM joins WHERE is_bot = 0`,
   voice: `SELECT 'voice' t, start_ts ts, nick, channel text, CAST((end_ts - start_ts) / 1000 AS INTEGER) a, talk_s b FROM voice WHERE is_bot = 0`,

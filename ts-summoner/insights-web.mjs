@@ -4,14 +4,14 @@
 //
 //   GET /                      the dashboard (insights/index.html)
 //   GET /api/overview?days=N   tiles, weekday x hour heatmaps, per-day series
-//   GET /api/people?days=N     per person: voice, talk, chat, heard, bot turns
+//   GET /api/people?days=N     per person: voice, talk, chat, bot turns
 //   GET /api/bots?days=N       per bot + what drives engagement
 //   GET /api/log?types=&q=&nick=&before=&limit=   the everything-log
 //   /api/control/...           tools+skills, persona files, shifts (control.mjs); writes need X-Requested-With
 //   /api/control/bots/...      #4374: the bot list: enable/disable, edit, add, remove; live via stack.mjs rewire
 //   /api/control/voice/on|off  #4374: the stack-wide voice switch (the summoner's POST /voice/*)
 //
-// Every route sits behind HTTP basic auth: this is everyone's chat and speech.
+// Every route sits behind HTTP basic auth: this is everyone's chat.
 // The credentials are /config/insights/auth.txt (`user:password`), generated
 // on first start if missing; `cat` it on the box to log in.
 
@@ -146,7 +146,7 @@ function safeDir(p) {
 function prune() {
   if (!RETENTION_DAYS) return;
   const cut = Date.now() - RETENTION_DAYS * 86_400_000;
-  for (const [t, c] of [['chat', 'ts'], ['heard', 'ts'], ['joins', 'ts'], ['bot_events', 'ts'], ['bot_turns', 'ts'], ['voice', 'end_ts']]) {
+  for (const [t, c] of [['chat', 'ts'], ['joins', 'ts'], ['bot_events', 'ts'], ['bot_turns', 'ts'], ['voice', 'end_ts']]) {
     db.prepare(`DELETE FROM ${t} WHERE ${c} < ?`).run(cut);
   }
 }
@@ -436,7 +436,7 @@ http.createServer(async (req, res) => {
       case '/api/log': {
         const r = range(qs);
         return send(200, logPage(db, {
-          types: (qs.get('types') || 'chat,heard,turn,join,voice,bot').split(','),
+          types: (qs.get('types') || 'chat,turn,join,voice,bot').split(','),
           q: qs.get('q') || '', nick: qs.get('nick') || '',
           before: Number(qs.get('before')) || Number.MAX_SAFE_INTEGER, after: r.from,
           limit: Number(qs.get('limit')) || 200,

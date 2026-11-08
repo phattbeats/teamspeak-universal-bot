@@ -44,7 +44,7 @@ test('a stalled poll does not hand out free hours', () => {
   assert.equal(t, 0);
 });
 
-test('chat, joins, heard and bot events are recorded; bots are tagged; heard is deduped', () => {
+test('chat, joins and bot events are recorded; bots are tagged; spoken words have no table', () => {
   const { r, at } = recorder();
   r.chat({ nick: 'kyle', uid: 'u1', targetmode: '2', text: ' sexton play aja ' });
   r.chat({ nick: 'Sexton', targetmode: '2', text: 'Playing.' });
@@ -52,10 +52,6 @@ test('chat, joins, heard and bot events are recorded; bots are tagged; heard is 
   r.notify('notifycliententerview', { clid: '5', client_type: '0', client_nickname: 'kyle', client_unique_identifier: 'u1' });
   r.notify('notifyclientleftview', { clid: '5', reasonmsg: 'bye' });
   r.notify('notifyclientleftview', { clid: '99' }); // never seen: ignored
-  r.heard('kyle', 'hello there');
-  r.heard('kyle', 'hello there'); // a second bot forwarding the same line
-  at(T0 + 31_000); r.heard('kyle', 'hello there');
-  r.heard('Sexton', 'bots hear each other');
   r.botEvent('sexton', 'entrance', 'shift_start');
   const chat = r.db.prepare('SELECT nick, text, target, is_bot FROM chat ORDER BY id').all().map((x) => ({ ...x }));
   assert.deepEqual(chat, [
@@ -64,7 +60,8 @@ test('chat, joins, heard and bot events are recorded; bots are tagged; heard is 
   ]);
   assert.deepEqual(r.db.prepare('SELECT kind, nick, reason FROM joins ORDER BY id').all().map((x) => ({ ...x })),
     [{ kind: 'join', nick: 'kyle', reason: null }, { kind: 'leave', nick: 'kyle', reason: 'bye' }]);
-  assert.equal(r.db.prepare('SELECT COUNT(*) n FROM heard').get().n, 2);
+  assert.equal(r.heard, undefined, 'no speech recording API');
+  assert.equal(r.db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name='heard'").get().n, 0);
   assert.equal(r.db.prepare('SELECT kind FROM bot_events').get().kind, 'entrance');
 });
 
@@ -121,7 +118,7 @@ test('transcripts fold into turns: tools, replies, NO_REPLY, cost, re-ingest is 
   assert.equal(applyTurnOps(db, 'sexton', turnOps(rows.slice(0, 1))), 0, 'same user event twice is one turn');
   const t = db.prepare('SELECT lane, nick, prompt, reply, replied, tools, cost FROM bot_turns ORDER BY ts').all().map((x) => ({ ...x }));
   assert.deepEqual(t[0], { lane: 'chat', nick: 'kyle', prompt: 'sexton play aja', reply: 'Aja, coming up.', replied: 1, tools: '["play_music"]', cost: 0.15000000000000002 });
-  assert.deepEqual(t[1], { lane: 'voice', nick: 'bob', prompt: 'anyway', reply: null, replied: 0, tools: '[]', cost: 0 });
+  assert.deepEqual(t[1], { lane: 'voice', nick: 'bob', prompt: null, reply: null, replied: 0, tools: '[]', cost: 0 });
 });
 
 test('room logs parse as UTC minutes', () => {
@@ -148,7 +145,7 @@ function seeded() {
   c.run(T0 + MIN, 'kyle', 'u1', 'channel', 'sexton play aja', 0);
   c.run(T0 + 2 * MIN, 'kyle', null, 'channel', 'skip', 0);
   c.run(T0 + 3 * MIN, 'Sexton', null, 'channel', 'Playing.', 1);
-  db.prepare('INSERT INTO heard(ts,nick,text) VALUES(?,?,?)').run(T0 + 21 * MIN, 'ty', 'nice one');
+  c.run(T0 + 21 * MIN, 'ty', null, 'channel', 'nice one', 0);
   const t = db.prepare('INSERT INTO bot_turns(key,ts,bot,session,lane,nick,prompt,replied,tools,cost) VALUES(?,?,?,?,?,?,?,?,?,?)');
   t.run('k1', T0 + MIN, 'sexton', 's', 'chat', 'kyle', 'play aja', 1, '["play_music"]', 0.1);
   t.run('k2', T0 + 3 * MIN, 'sexton', 's', 'chat', 'kyle', 'skip', 1, '["skip"]', 0.1);
@@ -162,13 +159,12 @@ test('overview: totals, heatmap in local time, bots excluded', () => {
   const o = overview(seeded(), R);
   assert.equal(o.tiles.people, 2);
   assert.equal(o.tiles.voiceHours, 1.25);
-  assert.equal(o.tiles.chat, 2);
-  assert.equal(o.tiles.heard, 1);
+  assert.equal(o.tiles.chat, 3);
   assert.equal(o.tiles.botTurns, 3);
   assert.equal(o.tiles.botReplies, 2);
   assert.equal(o.heat.voice[6][20], 75, 'Sun 8pm ET: 60 + 15 person-minutes');
-  assert.equal(o.heat.chat[6][20], 2);
-  assert.deepEqual(o.tiles.peak, { dow: 'Sun', hour: 20, v: 77 });
+  assert.equal(o.heat.chat[6][20], 3);
+  assert.deepEqual(o.tiles.peak, { dow: 'Sun', hour: 20, v: 78 });
   assert.deepEqual(o.days.map((d) => d.date), ['2026-10-04']);
 });
 
@@ -176,9 +172,9 @@ test('people: merged by unique id, sorted by voice time; hidden nicks are left o
   assert.deepEqual(people(seeded(), { ...R, hide: (n) => n === 'ty' }).map((x) => x.name), ['kyle']);
   assert.equal(overview(seeded(), { ...R, hide: (n) => n === 'ty' }).tiles.people, 1);
   const p = people(seeded(), R);
-  assert.deepEqual(p.map((x) => [x.name, Math.round(x.voiceS / 60), x.chat, x.heard, x.botTurns]), [
-    ['kyle', 60, 2, 0, 2],
-    ['ty', 15, 0, 1, 1],
+  assert.deepEqual(p.map((x) => [x.name, Math.round(x.voiceS / 60), x.chat, x.botTurns]), [
+    ['kyle', 60, 2, 2],
+    ['ty', 15, 1, 1],
   ]);
 });
 
