@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/assets/utsb-banner.png" alt="TeamSpeak Universal Bot: voice, chat, tools" width="100%"></p>
+<p align="center"><img src="docs/assets/utsb-banner.png" alt="Offscript: voice, chat, tools" width="100%"></p>
 
 # TeamSpeak Universal Bot
 
