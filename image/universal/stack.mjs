@@ -106,7 +106,14 @@ function loadBots() {
   // #4374: a bot the dashboard removed is listed in `removed` so its pack is
   // not picked straight back up here; "add" takes it off that list again.
   const removed = new Set(Array.isArray(file?.removed) ? file.removed : []);
-  for (const id of Object.keys(found)) if (!bots[id] && !removed.has(id)) { bots[id] = {}; log(`new persona pack '${id}', adding it`); }
+  for (const id of Object.keys(found)) {
+    if (bots[id] || removed.has(id)) continue;
+    // PHA-4364: a transport-only pack (its voice.json says externalGateway) is
+    // driven by an outside gateway, so it joins the roster switched off.
+    const external = readJson(`${found[id]}/voice.json`, {}).externalGateway === true;
+    bots[id] = external ? { externalGateway: true, enabled: false } : {};
+    log(`new persona pack '${id}', adding it${external ? ' (external gateway, disabled)' : ''}`);
+  }
   const used = new Set(Object.values(bots).map((b) => b.port).filter(Boolean));
   let next = FIRST_PORT;
   for (const b of Object.values(bots)) {

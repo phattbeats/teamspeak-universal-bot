@@ -4,5 +4,6 @@
     "Ledger"
   ],
   "wakeAliases": [],
-  "followUpSilenceMs": 15000
+  "followUpSilenceMs": 15000,
+  "externalGateway": true
 }

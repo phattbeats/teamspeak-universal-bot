@@ -46,10 +46,13 @@ test('supervisor: one core per pack, guests share an identity and never autostar
   const root = fresh();
   stack(root, 'supervisor');
   const bots = json(`${root}/config/bots.json`).bots;
-  assert.deepEqual(Object.keys(bots), ['sexton', 'bexton', 'lexton', 'johnny', 'trixie']);
-  assert.deepEqual(Object.values(bots).map((b) => b.port), [9101, 9102, 9103, 9104, 9105]);
+  assert.deepEqual(Object.keys(bots), ['sexton', 'bexton', 'lexton', 'johnny', 'trixie', 'ledger']);
+  assert.deepEqual(Object.values(bots).map((b) => b.port), [9101, 9102, 9103, 9104, 9105, 9106]);
+  // PHA-4364: the transport-only Ledger pack joins switched off, with no core.
+  assert.deepEqual(bots.ledger, { externalGateway: true, enabled: false, port: 9106 });
   const conf = readFileSync(`${root}/run/bots.conf`, 'utf8');
-  for (const id of Object.keys(bots)) assert.match(conf, new RegExp(`\\[program:core-${id}\\]`));
+  for (const id of Object.keys(bots).filter((id) => id !== 'ledger')) assert.match(conf, new RegExp(`\\[program:core-${id}\\]`));
+  assert.doesNotMatch(conf, /\[program:core-ledger\]/);
   assert.match(conf, /\[program:menace-lexton\]/);
   assert.match(conf, /SEXTON_IDENTITY_FILE="[^"]*\/bots\/guest\/sexton-id.txt"[^\n]*\nautostart=false/);
   assert.match(conf, /SEXTON_NICK="Rotten Johnny \[BOT\]"/); // TS shows the bot tag
@@ -67,7 +70,7 @@ test('supervisor: a new pack is picked up with the next free port; ports never m
   writeFileSync(`${root}/config/personas/dexton/voice.json`, '{"wakeNames":["Dexton"]}');
   stack(root, 'supervisor');
   const bots = json(`${root}/config/bots.json`).bots;
-  assert.equal(bots.dexton.port, 9106);
+  assert.equal(bots.dexton.port, 9107);
   assert.equal(bots.sexton.port, 9101);
   assert.equal(json(`${root}/run/summoner.json`).bots.dexton.shifts[0].end, '24:00');
 });
