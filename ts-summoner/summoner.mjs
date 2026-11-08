@@ -1386,7 +1386,7 @@ http.createServer((req, res) => {
     const by = new URL(req.url, 'http://x').searchParams.get('by') || '';
     let body = '';
     req.on('data', (c) => { if (body.length < 4000) body += c; });
-    req.on('end', () => { rec?.heard(by, body); send(200, { summoned: onHeard(by, body) }); });
+    req.on('end', () => { send(200, { summoned: onHeard(by, body) }); });
     return;
   }
   send(404, { error: 'GET /status | POST /summon/<bot> | POST /dismiss/<bot> | POST /voice/<on|off>[?by=] | POST /reload (re-read shifts) | POST /heard?by=<speaker> | POST /event/<takeover|bender|guest|banter>[?who=<guest>|<a>+<b>] | POST /event/end?kind=<takeover|bender|guest>' });
