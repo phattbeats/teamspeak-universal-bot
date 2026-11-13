@@ -61,6 +61,16 @@ fi
 : "${SEXTON_ADDR:?run-sexton: no server address. Set one on the bot or under "server" in /config/bots.json}"
 : "${SEXTON_CHANNEL:?run-sexton: no channel. Set one on the bot or under "server" in /config/bots.json}"
 
+# PHA-4102: the PHATT ID link. ARCADE_SURFACE_SECRET comes from the container env,
+# and supervisord hands its whole env to every core, so it is dropped here for
+# any bot without a "phattId" block in bots.json (stack.mjs sets ARCADE_URL only
+# for those). It stays env-only and is never mapped to a flag: flags show in `ps`.
+if [ -z "${ARCADE_URL:-}" ]; then
+  unset ARCADE_SURFACE_SECRET ARCADE_URL ARCADE_SURFACE_KID PHATT_ID_SERVER_GROUP
+fi
+PHATT_ID_STATE=off
+if [ -n "${ARCADE_URL:-}" ] && [ -n "${ARCADE_SURFACE_SECRET:-}" ]; then PHATT_ID_STATE=on; fi
+
 mkdir -p "$SEXTON_LOG_DIR"
 
 set -- \
@@ -94,5 +104,5 @@ case "$SEXTON_NO_AUDIO" in
   1 | true | True | TRUE | yes | Yes | YES) set -- "$@" --no-audio ;;
 esac
 
-echo "run-sexton: $SEXTON_NICK -> $SEXTON_ADDR:$SEXTON_PORT channel='$SEXTON_CHANNEL' ws=$SEXTON_WS_BIND no_catchup=$SEXTON_NO_CATCHUP no_audio=$SEXTON_NO_AUDIO"
+echo "run-sexton: $SEXTON_NICK -> $SEXTON_ADDR:$SEXTON_PORT channel='$SEXTON_CHANNEL' ws=$SEXTON_WS_BIND no_catchup=$SEXTON_NO_CATCHUP no_audio=$SEXTON_NO_AUDIO phatt_id=$PHATT_ID_STATE"
 exec /usr/local/bin/sexton "$@"

@@ -37,6 +37,26 @@ fact — and tells the room he is doing it.
    (`noWelcome` / `noCatchup` still work as aliases), passed to the core as `SEXTON_DM_*` env.
 3. **Full log on disk.** Every message is appended to `<log-dir>/<channel-name>/YYYY-MM-DD.md`
    as markdown, one line per message, same format.
+4. **PHATT ID link (PHA-4102, opt-in).** A member gets a 6-character code on
+   https://arcade.phatt.vip/teamspeak and PMs the bot `!link CODE` (any case, spaces and dashes
+   ignored). The bot claims it at the arcade with the sender's unique id and nickname and answers
+   by PM. Every private `!link ...` message is taken out of the event batch before anything else
+   sees it, so a code never reaches the bridge (and the LLM behind it), the DM fallback or a
+   log; bots (nick contains the bot tag) and ServerQuery clients are ignored, and each uid gets
+   5 tries a minute. Every 60 s (first 15 s after connect) the bot reports everyone connected
+   (`POST /api/teamspeak/online`, which also feeds arcade presence) and gets back who is linked;
+   with `PHATT_ID_SERVER_GROUP` set it then adds that one group to linked clients missing it and
+   removes it from connected clients that have it but are not linked. No other group is touched.
+   **Outage invariant:** if the call fails, times out (10 s) or answers anything but a 200 with a
+   parseable `linked` list, nothing changes, so an arcade outage never strips anyone's group.
+   Logs carry counts and client ids, never uids or codes. Config: `ARCADE_URL` (on only when it
+   and `ARCADE_SURFACE_SECRET` are both set), `ARCADE_SURFACE_KID` (default `teamspeak1`),
+   `PHATT_ID_SERVER_GROUP`; the secret is read from the environment only, never a flag (flags
+   show in `ps`). Requests are signed like every arcade surface (`X-Arcade-Surface: teamspeak`,
+   `-Kid`, `-Ts`, `-Sig` = base64url HMAC-SHA256 of `<ts>.<body>`), over rustls. The bot's
+   identity needs `i_group_member_add_power` / `i_group_member_remove_power` at least the
+   group's `i_group_needed_member_add_power` / `_remove_power`; a refusal shows up as
+   `SERVER REJECTED ... missing_permission` in the log.
 
 **The rolling log in the channel description was removed**: every
 `channeledit` fired a channel-edit notification sound in TS6, and the catch-up PM and disk log

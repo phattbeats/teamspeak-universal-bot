@@ -63,6 +63,7 @@ use tsclientlib::messages::c2s::{
     OutChannelEditMessage, OutChannelEditPart, OutChannelListRequestMessage, OutClientEditMessage,
     OutClientEditPart, OutClientKickMessage, OutClientKickPart, OutClientMoveMessage, OutClientMovePart,
     OutServerEditMessage, OutServerEditPart, OutServerGroupAddClientMessage, OutServerGroupAddClientPart,
+    OutServerGroupDelClientMessage, OutServerGroupDelClientPart,
 };
 use tsclientlib::{
     events::{Event, PropertyId},
@@ -73,6 +74,7 @@ use tsclientlib::{
 mod audio;
 mod dm;
 mod mixer;
+mod phatt_link;
 mod protocol;
 mod stream;
 mod ws_server;
@@ -214,6 +216,25 @@ struct Args {
     /// either way; push `voice_audio` directly in the meantime.
     #[arg(long, default_value = "")]
     tts_webhook_url: String,
+
+    /// PHA-4102: the arcade base URL for the PHATT ID link
+    /// (`https://arcade.phatt.vip`). Linking is on only when this and the
+    /// `ARCADE_SURFACE_SECRET` env var are both set. The secret is env-only on
+    /// purpose: process arguments are visible to anyone who can run `ps`.
+    #[arg(long, env = "ARCADE_URL", default_value = "")]
+    arcade_url: String,
+
+    /// PHA-4102: which of the arcade's `teamspeak` surface secrets signs the
+    /// requests (`X-Arcade-Kid`).
+    #[arg(long, env = "ARCADE_SURFACE_KID", default_value = phatt_link::DEFAULT_KID)]
+    arcade_surface_kid: String,
+
+    /// PHA-4102: numeric id of the server group the bot keeps in step with
+    /// "linked to a PHATT ID". Empty = no group sync (the presence report to
+    /// the arcade still runs). The bot's identity needs permission to add and
+    /// remove this group.
+    #[arg(long, env = "PHATT_ID_SERVER_GROUP", default_value = "")]
+    phatt_id_server_group: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1056,9 +1077,37 @@ async fn main() -> Result<()> {
     };
     let _stream_out_tx = stream_out_tx;
 
+    // PHA-4102: the PHATT ID link. Built once; it outlives reconnects.
+    let secret = std::env::var("ARCADE_SURFACE_SECRET").ok();
+    let arcade: Option<Arc<phatt_link::Arcade>> =
+        match phatt_link::Config::resolve(&args.arcade_url, &args.arcade_surface_kid, &args.phatt_id_server_group, secret.as_deref()) {
+            Ok(Some(cfg)) => match phatt_link::Arcade::new(cfg) {
+                Ok(a) => {
+                    let c = a.config();
+                    info!(arcade = %c.arcade_url, kid = %c.kid, server_group = ?c.server_group, "PHATT ID link enabled");
+                    Some(Arc::new(a))
+                }
+                Err(e) => {
+                    error!(error = %format!("{e:#}"), "PHATT ID link disabled: HTTP client failed to build");
+                    None
+                }
+            },
+            Ok(None) => {
+                if !args.arcade_url.trim().is_empty() {
+                    warn!("ARCADE_URL is set but ARCADE_SURFACE_SECRET is not: PHATT ID link disabled");
+                }
+                None
+            }
+            Err(e) => {
+                error!(error = %e, "PHATT ID link disabled: bad config");
+                None
+            }
+        };
+    drop(secret);
+
     let mut backoff = BACKOFF_INITIAL;
     loop {
-        let res = run_once(&args, &address, &mixer, &mut cmd_rx, &event_tx, &snapshot, &stream_ctl, &mut stream_out_rx).await;
+        let res = run_once(&args, &address, &mixer, &mut cmd_rx, &event_tx, &snapshot, &stream_ctl, &mut stream_out_rx, &arcade).await;
         if let Some(c) = &stream_ctl {
             let _ = c.send(stream::Ctl::Disconnected);
         }
@@ -1134,6 +1183,7 @@ async fn run_once(
     snapshot: &Arc<TokioMutex<bridge_proto::Snapshot>>,
     stream_ctl: &Option<mpsc::UnboundedSender<stream::Ctl>>,
     stream_out: &mut mpsc::UnboundedReceiver<String>,
+    arcade: &Option<Arc<phatt_link::Arcade>>,
 ) -> Result<()> {
     let identity = if args.identity.is_empty() {
         let id = Identity::create();
@@ -1428,12 +1478,25 @@ async fn run_once(
     // *waits*: it pulls the owned wakeup out, drops the event stream, and
     // the handlers below get `con` back to themselves (same pattern the old
     // `ts_client.rs` used for its own three-way select).
+    // PHA-4102: the PHATT ID link. The arcade calls run in spawned tasks and
+    // hand their results back here, so `con` is still only ever touched by
+    // this loop, like every other handler. The channel is per connection: an
+    // answer that lands after this session died goes nowhere.
+    let (link_tx, mut link_rx) = mpsc::unbounded_channel::<LinkDone>();
+    let mut link_limit = phatt_link::RateLimit::default();
+    let mut sync_tick =
+        tokio::time::interval_at(tokio::time::Instant::now() + phatt_link::SYNC_FIRST, phatt_link::SYNC_EVERY);
+    sync_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut sync_in_flight = false;
+
     enum Wake {
         Cmd(Option<bridge_proto::BridgeCommand>),
         Tick,
         Event(Option<std::result::Result<StreamItem, tsclientlib::Error>>),
         Shutdown,
         StreamOut(Option<String>),
+        Link(Option<LinkDone>),
+        Sync,
     }
 
     loop {
@@ -1443,7 +1506,9 @@ async fn run_once(
                 biased;
                 _ = SHUTDOWN.notified() => Wake::Shutdown,
                 cmd = cmd_rx.recv() => Wake::Cmd(cmd),
+                done = link_rx.recv() => Wake::Link(done),
                 _ = tick.tick() => Wake::Tick,
+                _ = sync_tick.tick(), if arcade.is_some() => Wake::Sync,
                 line = stream_out.recv() => Wake::StreamOut(line),
                 ev = events.next() => Wake::Event(ev),
             }
@@ -1502,6 +1567,43 @@ async fn run_once(
                 }
             }
             Wake::StreamOut(None) => {}
+            Wake::Sync => {
+                if let Some(arcade) = arcade {
+                    if sync_in_flight {
+                        debug!("PHATT ID sync: previous report still running; skipping this round");
+                    } else {
+                        let (body, queried) = phatt_link::online_body(&link_online_clients(&con, own_client_id));
+                        sync_in_flight = true;
+                        let (arcade, tx) = (arcade.clone(), link_tx.clone());
+                        tokio::spawn(async move {
+                            let result = arcade.online(body).await;
+                            let _ = tx.send(LinkDone::Online { queried, result });
+                        });
+                    }
+                }
+            }
+            Wake::Link(Some(LinkDone::Online { queried, result })) => {
+                sync_in_flight = false;
+                match result {
+                    // The outage invariant: no answer, no changes.
+                    Err(e) => warn!(error = %format!("{e:#}"), "PHATT ID sync: arcade unavailable; no group changes this round"),
+                    Ok(linked) => {
+                        let group = arcade.as_ref().and_then(|a| a.config().server_group);
+                        let (added, removed) = match group {
+                            Some(g) => apply_phatt_group(&mut con, &mut state, own_client_id, &queried, &linked, g),
+                            None => (0, 0),
+                        };
+                        info!(reported = queried.len(), linked = linked.len(), added, removed, "PHATT ID sync");
+                    }
+                }
+            }
+            Wake::Link(Some(LinkDone::Claim { client_id, outcome })) => {
+                info!(?client_id, outcome = outcome.label(), "PHATT ID claim answered");
+                if let Err(e) = send_pm(&mut con, client_id, &outcome.reply()) {
+                    warn!(error = %e, ?client_id, "PHATT ID claim reply failed");
+                }
+            }
+            Wake::Link(None) => {}
             Wake::Tick => {
                 audio_state.on_tick(&mut con, mixer, event_tx).await;
             }
@@ -1514,6 +1616,18 @@ async fn run_once(
                     }
                 }
                 Some(Ok(StreamItem::BookEvents(events))) => {
+                    // PHA-4102: `!link CODE` PMs are taken out first, so the
+                    // code never reaches the bridge (and the LLM behind it),
+                    // the DM fallback, the raw-payload debug log or the chat log.
+                    let events = take_link_pms(
+                        &mut con,
+                        events,
+                        own_client_id,
+                        &state.dm.bot_tag,
+                        arcade,
+                        &mut link_limit,
+                        &link_tx,
+                    );
                     // #3342: forward text messages to bridge subscribers
                     // exactly as the old ts_client.rs did, before the
                     // existing text-lane handler below (which logs/PMs the
@@ -1595,6 +1709,163 @@ async fn run_once(
             },
         }
     }
+}
+
+/// PHA-4102: an arcade call finished; the event loop applies the result.
+enum LinkDone {
+    Claim { client_id: ClientId, outcome: phatt_link::ClaimOutcome },
+    Online { queried: HashSet<String>, result: Result<HashSet<String>> },
+}
+
+/// Pull every private `!link ...` message out of `events` and handle it; the
+/// rest pass through untouched.
+fn take_link_pms(
+    con: &mut Connection,
+    events: Vec<Event>,
+    own_client_id: ClientId,
+    bot_tag: &str,
+    arcade: &Option<Arc<phatt_link::Arcade>>,
+    limit: &mut phatt_link::RateLimit,
+    tx: &mpsc::UnboundedSender<LinkDone>,
+) -> Vec<Event> {
+    let mut kept = Vec::with_capacity(events.len());
+    for ev in events {
+        match &ev {
+            Event::Message { target: MessageTarget::Client(_), invoker, message } if phatt_link::is_link_command(message) => {
+                let uid = invoker.uid.as_ref().map(|u| u.to_string());
+                handle_link_pm(con, own_client_id, bot_tag, arcade, limit, tx, invoker.id, &invoker.name, uid, message);
+            }
+            _ => kept.push(ev),
+        }
+    }
+    kept
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_link_pm(
+    con: &mut Connection,
+    own_client_id: ClientId,
+    bot_tag: &str,
+    arcade: &Option<Arc<phatt_link::Arcade>>,
+    limit: &mut phatt_link::RateLimit,
+    tx: &mpsc::UnboundedSender<LinkDone>,
+    client_id: ClientId,
+    nickname: &str,
+    uid: Option<String>,
+    message: &str,
+) {
+    if client_id == own_client_id {
+        return;
+    }
+    let (is_query, book_uid) = con
+        .get_state()
+        .ok()
+        .and_then(|s| {
+            s.clients.get(&client_id).map(|c| {
+                (!matches!(c.client_type, tsclientlib::ClientType::Normal), c.uid.as_ref().map(|u| u.to_string()))
+            })
+        })
+        .unwrap_or((false, None));
+    if is_query || (!bot_tag.is_empty() && nickname.contains(bot_tag)) {
+        debug!(?client_id, "PHATT ID: ignoring !link from a bot or query client");
+        return;
+    }
+    let uid = uid.or(book_uid);
+    let key = uid.clone().unwrap_or_else(|| format!("clid:{}", client_id.0));
+    let reply = |con: &mut Connection, text: &str| {
+        if let Err(e) = send_pm(con, client_id, text) {
+            warn!(error = %e, ?client_id, "PHATT ID reply failed");
+        }
+    };
+    match limit.check(&key, unix_now()) {
+        phatt_link::Rate::Allowed => {}
+        phatt_link::Rate::Limited => return reply(con, phatt_link::REPLY_RATE_LIMITED),
+        phatt_link::Rate::Silent => return,
+    }
+    let Some(arcade) = arcade else {
+        return reply(con, phatt_link::REPLY_DISABLED);
+    };
+    let Some(code) = phatt_link::parse_link_command(message) else {
+        return reply(con, phatt_link::REPLY_USAGE);
+    };
+    let Some(uid) = uid.filter(|u| phatt_link::valid_uid(u)) else {
+        warn!(?client_id, "PHATT ID: !link from a client with no usable unique id");
+        return reply(con, phatt_link::REPLY_UNREACHABLE);
+    };
+    info!(?client_id, "PHATT ID claim requested");
+    let (arcade, tx, nickname) = (arcade.clone(), tx.clone(), nickname.to_string());
+    tokio::spawn(async move {
+        let outcome = arcade.claim(&code, &uid, &nickname).await;
+        let _ = tx.send(LinkDone::Claim { client_id, outcome });
+    });
+}
+
+/// Who `/online` reports: every connected voice client with a uid, not
+/// ServerQuery clients and not us.
+fn link_online_clients(con: &Connection, own_client_id: ClientId) -> Vec<phatt_link::OnlineClient> {
+    let Ok(state) = con.get_state() else { return Vec::new() };
+    state
+        .clients
+        .values()
+        .filter(|c| c.id != own_client_id && matches!(c.client_type, tsclientlib::ClientType::Normal))
+        .filter_map(|c| c.uid.as_ref().map(|u| phatt_link::OnlineClient { uid: u.to_string(), channel_id: c.channel.0 }))
+        .collect()
+}
+
+/// Bring the managed group in line with a successful `/online` answer. Only
+/// ever called with a real answer (see the outage invariant in `phatt_link`).
+/// Returns (added, removed) as sent; the server's verdict on each lands in
+/// `pending_cmds` like every other checked command.
+fn apply_phatt_group(
+    con: &mut Connection,
+    state: &mut ChannelState,
+    own_client_id: ClientId,
+    queried: &HashSet<String>,
+    linked: &HashSet<String>,
+    group: u64,
+) -> (usize, usize) {
+    let clients: Vec<phatt_link::GroupClient> = match con.get_state() {
+        Ok(s) => s
+            .clients
+            .values()
+            .filter(|c| c.id != own_client_id && matches!(c.client_type, tsclientlib::ClientType::Normal))
+            .filter_map(|c| {
+                c.uid.as_ref().map(|u| phatt_link::GroupClient {
+                    client_id: c.id.0,
+                    client_db_id: c.database_id.0,
+                    uid: u.to_string(),
+                    server_groups: c.server_groups.iter().map(|g| g.0).collect(),
+                })
+            })
+            .collect(),
+        Err(e) => {
+            warn!(error = %e, "PHATT ID sync: get_state failed; no group changes this round");
+            return (0, 0);
+        }
+    };
+    let (mut added, mut removed) = (0, 0);
+    for (c, change) in phatt_link::reconcile(&clients, queried, linked, group) {
+        let server_group_id = ServerGroupId(group);
+        let client_db_id = tsclientlib::ClientDbId(c.client_db_id);
+        let (cmd, what) = match change {
+            phatt_link::GroupChange::Add => (
+                OutServerGroupAddClientMessage::new(&mut std::iter::once(OutServerGroupAddClientPart { server_group_id, client_db_id })),
+                "add",
+            ),
+            phatt_link::GroupChange::Remove => (
+                OutServerGroupDelClientMessage::new(&mut std::iter::once(OutServerGroupDelClientPart { server_group_id, client_db_id })),
+                "remove",
+            ),
+        };
+        match cmd.send_with_result(con) {
+            Ok(handle) => {
+                state.pending_cmds.insert(handle.0, format!("PHATT ID group {what} (client {})", c.client_id));
+                if change == phatt_link::GroupChange::Add { added += 1 } else { removed += 1 }
+            }
+            Err(e) => warn!(error = %e, client_id = c.client_id, "PHATT ID group {what} failed to send"),
+        }
+    }
+    (added, removed)
 }
 
 /// The non-`BookEvents`, non-`Audio` `StreamItem`s — file transfer

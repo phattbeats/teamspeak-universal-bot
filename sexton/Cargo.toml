@@ -58,7 +58,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 tokio-tungstenite = "0.21"
 futures = "0.3"
 futures-util = "0.3"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 md-5 = "0.10"
@@ -67,6 +67,22 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+
+# PHA-4102: the PHATT ID link calls the arcade (https://arcade.phatt.vip, public
+# TLS behind Cloudflare, a different host from the bot), so this is the first
+# outbound HTTPS the Sexton makes. reqwest 0.13 is already in the tree (via
+# tsclientlib, TLS off); the `rustls` feature turns on rustls with the aws-lc-rs
+# provider, which is already compiled for str0m/rcgen, so no new native build
+# dependency (no OpenSSL, no cmake). Certificates come from the platform
+# verifier, i.e. the runtime image's `ca-certificates`. No default features:
+# no HTTP/2, no system proxy, no charset decoding. The body is signed byte for
+# byte, so it is serialised by hand (no `json` feature).
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+# HMAC-SHA256 + base64url for the arcade's surface signature (`src/auth.js`).
+# Same versions the lockfile already carries.
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
 
 # PHA-4499 spike: TS6 screen-share sender (raw stream* commands + str0m).
 str0m = "0.24"

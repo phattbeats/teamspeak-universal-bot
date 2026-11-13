@@ -33,6 +33,10 @@ Message types the bridge sends (`out`):
 | 0x06 | `state`        | `{"connected":bool,"channelId":u64,"channelName":string,"ownClientId":u16?}` | —      |
 | 0x07 | `moderation_result` | `{"action":string,"ok":bool,"detail":string}` (answer to every moderation command below) | — |
 
+PHA-4102: a private message that starts with `!link` is never sent as
+`text_message`. The core answers it itself (PHATT ID link, see README), so a
+link code never reaches a bridge client or the LLM behind it.
+
 `roster`'s `RosterEntry` also grew a `serverGroups` field:
 `{"clientId":u16,"nickname":string,"muted":bool,"away":bool,"serverGroups":[string]}`.
 The moderation tool gate (`tools.moderation.allowGroups`) lives on the plugin
