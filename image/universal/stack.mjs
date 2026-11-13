@@ -192,6 +192,22 @@ function dmVars(b, bots) {
   };
 }
 
+/**
+ * PHA-4102: the optional per-bot `phattId` block ({ arcadeUrl, kid, serverGroup }) -> env for that bot's core (the
+ * PHATT ID link). Every other core gets ARCADE_URL="" so a container-wide value never turns linking on for it, and
+ * run-sexton then drops ARCADE_SURFACE_SECRET for it. The secret is never written here (bots.conf is a plain file):
+ * it reaches the core from the container env, and only a core with this block keeps it.
+ */
+function phattIdVars(b) {
+  const p = b.phattId && typeof b.phattId === 'object' ? b.phattId : null;
+  if (!p?.arcadeUrl) return { ARCADE_URL: '', ARCADE_SURFACE_KID: '', PHATT_ID_SERVER_GROUP: '' };
+  return {
+    ARCADE_URL: String(p.arcadeUrl),
+    ARCADE_SURFACE_KID: p.kid ? String(p.kid) : 'teamspeak1',
+    PHATT_ID_SERVER_GROUP: p.serverGroup === undefined || p.serverGroup === null ? '' : String(p.serverGroup),
+  };
+}
+
 const q = (v) => `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`;
 
 function supervisor() {
@@ -225,6 +241,7 @@ function supervisor() {
       SEXTON_NO_CATCHUP: b.noCatchup ? '1' : '0',
       SEXTON_NO_WELCOME: b.noWelcome ? '1' : '0',
       ...dmVars(b, bots),
+      ...phattIdVars(b),
       SEXTON_GUEST_ENV: '/nonexistent',
       ...(VOICE_SWITCH_OFF ? { SEXTON_NO_AUDIO: '1' } : {}),
       ...(b.env || {}),
