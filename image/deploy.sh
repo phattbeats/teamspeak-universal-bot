@@ -36,7 +36,7 @@ MAIN_CONFIG_PATH=${MAIN_CONFIG_PATH:-/root/.openclaw/openclaw.json}
 # Extra `docker run` args, e.g. EXTRA_ARGS="-e SUMMONER_ENABLED=0" for a test instance.
 EXTRA_ARGS=${EXTRA_ARGS:-}
 # Host port for the insights dashboard (#3963); empty publishes nothing.
-INSIGHTS_PUBLISH=${INSIGHTS_PUBLISH-8097}
+INSIGHTS_PUBLISH=${INSIGHTS_PUBLISH-8098}  # host 8097 is taken by cs-party's pool-agent
 # PHA-4499: UDP port viewers connect to for screen-share video (SEXTON_STREAM_PORT); empty publishes nothing.
 STREAM_PUBLISH=${STREAM_PUBLISH-40000}
 

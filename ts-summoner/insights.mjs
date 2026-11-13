@@ -63,6 +63,8 @@ export function openDb(path) {
     try {
       db.exec('PRAGMA journal_mode=WAL;');
       db.exec(`BEGIN IMMEDIATE; ${SCHEMA} COMMIT;`);
+      // Every opener scrubs, so it doesn't hinge on the summoner running (solo mode idles it).
+      purgeSpokenWords(db);
       return db;
     } catch (e) {
       if (db.isTransaction) db.exec('ROLLBACK');
