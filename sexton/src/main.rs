@@ -623,6 +623,30 @@ fn link_filename(url: &str) -> Option<String> {
     plausible.then(|| name.to_string())
 }
 
+/// How much of a link the digest keeps: host and path, no scheme, so the
+/// client has nothing to unfurl but the reader can still tell one link from
+/// the next (`reddit.com/r/frogs/comments/…`, not a bare `reddit.com`).
+const LINK_PREVIEW_LEN: usize = 48;
+
+fn link_preview(url: &str) -> Option<String> {
+    let rest = url.split("://").nth(1).unwrap_or(url);
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let path = path.split('#').next().unwrap_or(path).trim_end_matches('/');
+    link_domain(path)?;
+    // A YouTube watch link is nothing without its `v=`.
+    let mut out = path.to_string();
+    if path.ends_with("/watch") {
+        if let Some(v) = query.split('&').find(|kv| kv.starts_with("v=")) {
+            out = format!("{out}?{v}");
+        }
+    }
+    if out.chars().count() > LINK_PREVIEW_LEN {
+        out = out.chars().take(LINK_PREVIEW_LEN - 1).collect::<String>() + "…";
+    }
+    Some(out)
+}
+
 /// One digest line with every URL replaced by `[link: domain]`, so the DM
 /// shows no embeddable links.
 fn digest_line(m: &LoggedMessage) -> String {
@@ -631,7 +655,7 @@ fn digest_line(m: &LoggedMessage) -> String {
         .split(' ')
         .map(|w| {
             if w.starts_with("http://") || w.starts_with("https://") {
-                match link_domain(w) {
+                match link_preview(w) {
                     Some(d) => format!("[link: {d}]"),
                     None => "[link]".to_string(),
                 }
@@ -2526,7 +2550,7 @@ mod tests {
         push_at(&mut state, 130, "Sexton [BOT]", "Playing https://www.youtube.com/watch?v=abc now");
         let d = state.digest_for(uid, "me").unwrap();
         assert!(!d.contains("me:"), "{d}");
-        assert!(d.contains("Sexton [BOT]: Playing [link: www.youtube.com] now"), "{d}");
+        assert!(d.contains("Sexton [BOT]: Playing [link: youtube.com/watch?v=abc] now"), "{d}");
         assert!(!d.contains("http"), "{d}");
     }
 
@@ -2750,4 +2774,14 @@ mod tests {
         .unwrap();
         assert!(seeded_from(&dir, channel).is_empty());
     }
+    #[test]
+    fn link_preview_keeps_the_path_so_links_are_distinguishable() {
+        assert_eq!(link_preview("https://www.reddit.com/r/frogs/comments/abc/funny/").as_deref(), Some("reddit.com/r/frogs/comments/abc/funny"));
+        assert_eq!(link_preview("https://youtube.com/watch?si=x&v=abc").as_deref(), Some("youtube.com/watch?v=abc"));
+        assert_eq!(link_preview("https://example.com/?utm=1").as_deref(), Some("example.com"));
+        let long = link_preview(&format!("https://a.com/{}", "x".repeat(100))).unwrap();
+        assert_eq!(long.chars().count(), LINK_PREVIEW_LEN);
+        assert!(long.ends_with('…'));
+    }
+
 }
