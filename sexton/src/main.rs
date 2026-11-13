@@ -601,9 +601,11 @@ impl ChannelState {
     }
 }
 
-/// Past this a URL stops being readable in a one-line summary, so it collapses
-/// to its domain instead (#3425).
-const MAX_URL_LEN: usize = 80;
+/// Past this a URL is not a link anyone pasted on purpose, so it collapses to
+/// its domain (#3425). Anything shorter is kept whole: the log is what the
+/// digest and `what_did_i_miss` read, and a link cut down there cannot be
+/// clicked later (PHA-4917: Reddit and X links were stored as bare domains).
+const MAX_URL_LEN: usize = 400;
 
 /// An opaque whitespace-delimited run longer than this is not something a
 /// person typed — it is an attachment token or an inlined blob. We do not know
@@ -668,18 +670,27 @@ fn link_preview(url: &str) -> Option<String> {
     Some(out)
 }
 
-/// One digest line with every URL replaced by `[link: domain]`, so the DM
-/// shows no embeddable links.
+/// A digest link: clickable, but labelled with the short host+path instead of
+/// the raw URL, so the reader can tell links apart without a wall of text.
+/// A URL that would break the BBCode tag falls back to the plain label.
+fn digest_link(url: &str) -> String {
+    let Some(label) = link_preview(url) else { return "[link]".to_string() };
+    let href = if url.to_ascii_lowercase().starts_with("www.") { format!("https://{url}") } else { url.to_string() };
+    if href.contains(['[', ']']) {
+        return format!("[link: {label}]");
+    }
+    format!("[URL={href}]{label}[/URL]")
+}
+
+/// One digest line with every URL turned into a short clickable link.
 fn digest_line(m: &LoggedMessage) -> String {
     let text = m
         .text
         .split(' ')
         .map(|w| {
-            if w.starts_with("http://") || w.starts_with("https://") {
-                match link_preview(w) {
-                    Some(d) => format!("[link: {d}]"),
-                    None => "[link]".to_string(),
-                }
+            let l = w.to_ascii_lowercase();
+            if l.starts_with("http://") || l.starts_with("https://") || l.starts_with("www.") {
+                digest_link(w)
             } else {
                 w.to_string()
             }
@@ -2821,8 +2832,25 @@ mod tests {
         push_at(&mut state, 130, "Sexton [BOT]", "Playing https://www.youtube.com/watch?v=abc now");
         let d = state.digest_for(uid, "me").unwrap();
         assert!(!d.contains("me:"), "{d}");
-        assert!(d.contains("Sexton [BOT]: Playing [link: youtube.com/watch?v=abc] now"), "{d}");
-        assert!(!d.contains("http"), "{d}");
+        assert!(
+            d.contains("Sexton [BOT]: Playing [URL=https://www.youtube.com/watch?v=abc]youtube.com/watch?v=abc[/URL] now"),
+            "{d}"
+        );
+    }
+
+    /// PHA-4917: a real-length Reddit link must reach the digest whole and
+    /// clickable, not as a bare `reddit.com` that reads like spam.
+    #[test]
+    fn a_long_link_survives_the_log_and_is_clickable_in_the_digest() {
+        let url = "https://www.reddit.com/r/funny/comments/1abcdef/this_frog_has_seen_things_and_is_not_okay/?utm_source=share&utm_medium=web3x";
+        assert!(url.len() > 80);
+        assert_eq!(sanitize_message(&format!("[URL]{url}[/URL]")), url);
+        let m = LoggedMessage { ts: 1, time_label: "19:02".into(), nickname: "kyleonrye".into(), text: url.into() };
+        let line = digest_line(&m);
+        assert!(line.starts_with(&format!("19:02  kyleonrye: [URL={url}]reddit.com/r/funny/comments/")), "{line}");
+        assert!(line.trim_end().ends_with("[/URL]"), "{line}");
+        let www = LoggedMessage { text: "www.example.com/a".into(), ..m };
+        assert!(digest_line(&www).contains("[URL=https://www.example.com/a]example.com/a[/URL]"));
     }
 
     /// A hop inside the cooldown sends nothing, and the lines are not lost: the
@@ -2901,7 +2929,7 @@ mod tests {
         assert_eq!(sanitize_message(&format!("look at [url]{short}[/url]")), format!("look at {short}"));
 
         // Past MAX_URL_LEN nothing but the domain is worth reading.
-        let long = format!("https://tracking.example.com/watch?v=abc&{}", "q=1&".repeat(40));
+        let long = format!("https://tracking.example.com/watch?v=abc&{}", "q=1&".repeat(120));
         assert!(long.len() > MAX_URL_LEN);
         assert_eq!(sanitize_message(&long), "[link: tracking.example.com]");
         assert_eq!(sanitize_message(&format!("[url]{long}[/url]")), "[link: tracking.example.com]");
