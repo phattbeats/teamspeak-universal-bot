@@ -52,7 +52,8 @@ fact — and tells the room he is doing it.
    Logs carry counts and client ids, never uids or codes. Config: `ARCADE_URL` (on only when it
    and `ARCADE_SURFACE_SECRET` are both set), `ARCADE_SURFACE_KID` (default `teamspeak1`),
    `PHATT_ID_SERVER_GROUP`; the secret is read from the environment only, never a flag (flags
-   show in `ps`). Requests are signed like every arcade surface (`X-Arcade-Surface: teamspeak`,
+   show in `ps`). On the stack image, put `ARCADE_SURFACE_SECRET=...` in `$APPDATA/phatt-id.env`
+   (0600); `image/deploy.sh` passes it on every deploy. Requests are signed like every arcade surface (`X-Arcade-Surface: teamspeak`,
    `-Kid`, `-Ts`, `-Sig` = base64url HMAC-SHA256 of `<ts>.<body>`), over rustls. The bot's
    identity needs `i_group_member_add_power` / `i_group_member_remove_power` at least the
    group's `i_group_needed_member_add_power` / `_remove_power`; a refusal shows up as
