@@ -414,7 +414,7 @@ async fn main() -> Result<()> {
         }
     }
     if !sid.is_empty() {
-        send_raw(&mut con, &raw_line("stopstream", &[("id", sid)]));
+        send_raw(&mut con, &raw_line("stopstream", &[("id", sid), ("reason", "0".into())]));
         let _ = tokio::time::timeout(Duration::from_secs(1), con.events().next()).await;
     }
     Ok(())

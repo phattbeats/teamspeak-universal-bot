@@ -44,6 +44,8 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
 
 const RETURN_CODE: &str = "4499";
+/// Tags the `stopstream` reply so a refusal is logged instead of dropped (PHA-5171).
+const STOP_RETURN_CODE: &str = "5171";
 /// Keep ffmpeg warm this long after the last viewer leaves (reload / re-watch).
 const IDLE_GRACE: Duration = Duration::from_secs(10);
 const SETUP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -232,7 +234,17 @@ pub fn is_stream_line(text: &str) -> bool {
         || name == "notifyjoinstreamrequest"
         || name == "notifyrespondjoinstreamrequest"
         || name == "notifyremovedfromstream"
-        || (name == "error" && text.contains(&format!("return_code={RETURN_CODE}")))
+        || (name == "error"
+            && (text.contains(&format!("return_code={RETURN_CODE}")) || text.contains(&format!("return_code={STOP_RETURN_CODE}"))))
+}
+
+/// PHA-5171: TS6 refuses `stopstream id=..` alone with 1542 "missing required
+/// parameter" and leaves the share up; it wants `reason` too. Confirmed against
+/// teamspeak.phatt.vip with `stream-stop-probe`: `reason=0` answers ok and drops
+/// our `client_is_streaming` to 0. The server sends no `notifystreamstopped` to
+/// the streamer itself.
+fn stop_line(sid: &str) -> String {
+    raw_line("stopstream", &[("id", sid.to_string()), ("reason", "0".into()), ("return_code", STOP_RETURN_CODE.into())])
 }
 
 fn raw_line(name: &str, args: &[(&str, String)]) -> String {
@@ -837,7 +849,9 @@ impl Actor {
     async fn finish(&mut self, notify: bool, why: &str) {
         self.kill_ffmpeg().await;
         if !self.sid.is_empty() {
-            self.send("stopstream", &[("id", self.sid.clone())]);
+            let line = stop_line(&self.sid);
+            debug!(">> {line}");
+            let _ = self.out_tx.send(line);
         }
         self.viewers.clear();
         self.sid.clear();
@@ -1192,6 +1206,12 @@ impl Actor {
     async fn on_raw(&mut self, name: String, a: HashMap<String, String>) {
         debug!("<< {} {:?}", name, a.iter().filter(|(k, _)| *k != "offer" && *k != "json").collect::<Vec<_>>());
         match name.as_str() {
+            "error" if a.get("return_code").map(|s| s.as_str()) == Some(STOP_RETURN_CODE) => {
+                match a.get("msg").map(|s| s.as_str()).unwrap_or("") {
+                    "ok" => info!("stream stopped (server confirmed)"),
+                    msg => warn!(id = a.get("id").map(|s| s.as_str()).unwrap_or(""), %msg, "server refused stopstream; the share may still be up"),
+                }
+            }
             "error" => {
                 let msg = a.get("msg").map(|s| s.as_str()).unwrap_or("");
                 if self.phase == Phase::AwaitingStart && msg != "ok" {
@@ -1426,6 +1446,14 @@ mod tests {
         assert_eq!(Mode::parse(Some("NOW")), Mode::Now);
         assert_eq!(Mode::parse(Some("next")), Mode::Next);
         assert_eq!(Mode::parse(Some("whatever")), Mode::Queue);
+    }
+
+    #[test]
+    fn stop_carries_the_reason_ts6_requires() {
+        let l = stop_line("e164d808-8a14");
+        assert_eq!(l, format!("stopstream id=e164d808-8a14 reason=0 return_code={STOP_RETURN_CODE}"));
+        assert!(is_stream_line(&format!("error id=1542 msg=missing\\srequired\\sparameter return_code={STOP_RETURN_CODE}")));
+        assert!(!is_stream_line("error id=0 msg=ok return_code=1"));
     }
 
     #[test]
