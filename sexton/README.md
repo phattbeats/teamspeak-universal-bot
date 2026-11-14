@@ -58,6 +58,13 @@ fact — and tells the room he is doing it.
    identity needs `i_group_member_add_power` / `i_group_member_remove_power` at least the
    group's `i_group_needed_member_add_power` / `_remove_power`; a refusal shows up as
    `SERVER REJECTED ... missing_permission` in the log.
+   **VIP group (PHA-5136, opt-in):** with `PHATT_ID_VIP_GROUP` set (bots.json `phattId.vipGroup`) the bot keeps a second
+   group in step the same way, from the `vip: true|false` the arcade puts on each linked entry (a paid phattmedia.club
+   member, which the arcade asks the hub). If any entry has no boolean `vip` (the arcade has no hub key, or the hub did not
+   answer), the VIP group is left as it is that round and the log says so; the PHATT ID group still syncs.
+   On our TS6 (vps1): PHATT ID = server group 10, VIP = 11 (no powers except `i_channel_join_power` 60; add/remove needs
+   power 75, so only Sexton and admins can give it), and the **VIP Lounge** channel (cid 13) needs join power 60, which
+   Normal members (50) do not have.
 
 **The rolling log in the channel description was removed**: every
 `channeledit` fired a channel-edit notification sound in TS6, and the catch-up PM and disk log
