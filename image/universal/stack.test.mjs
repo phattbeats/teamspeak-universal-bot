@@ -260,15 +260,15 @@ test('PHA-4102: a phattId block reaches only that core as env; the secret is nev
   const root = fresh();
   stack(root, 'supervisor');
   const file = json(`${root}/config/bots.json`);
-  file.bots.sexton.phattId = { arcadeUrl: 'https://arcade.example', serverGroup: 42 };
+  file.bots.sexton.phattId = { arcadeUrl: 'https://arcade.example', serverGroup: 42, vipGroup: 11 };
   file.bots.bexton.phattId = { arcadeUrl: 'https://arcade.example', kid: 'teamspeak2' };
   writeFileSync(`${root}/config/bots.json`, JSON.stringify(file));
   stack(root, 'rewire', { ARCADE_SURFACE_SECRET: 'do-not-write-me', ARCADE_URL: 'https://container.example' });
   const conf = readFileSync(`${root}/run/bots.conf`, 'utf8');
   const prog = (id) => conf.split('[program:').find((p) => p.startsWith(`core-${id}]`));
-  assert.match(prog('sexton'), /ARCADE_URL="https:\/\/arcade.example",ARCADE_SURFACE_KID="teamspeak1",PHATT_ID_SERVER_GROUP="42"/);
+  assert.match(prog('sexton'), /ARCADE_URL="https:\/\/arcade.example",ARCADE_SURFACE_KID="teamspeak1",PHATT_ID_SERVER_GROUP="42",PHATT_ID_VIP_GROUP="11"/);
   assert.match(prog('bexton'), /ARCADE_SURFACE_KID="teamspeak2",PHATT_ID_SERVER_GROUP=""/);
   // No block: linking explicitly off, whatever the container env says.
-  assert.match(prog('lexton'), /ARCADE_URL="",ARCADE_SURFACE_KID="",PHATT_ID_SERVER_GROUP=""/);
+  assert.match(prog('lexton'), /ARCADE_URL="",ARCADE_SURFACE_KID="",PHATT_ID_SERVER_GROUP="",PHATT_ID_VIP_GROUP=""/);
   assert.doesNotMatch(conf, /do-not-write-me|ARCADE_SURFACE_SECRET/);
 });

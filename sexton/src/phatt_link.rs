@@ -104,6 +104,9 @@ pub struct Config {
     pub arcade_url: String,
     pub kid: String,
     pub server_group: Option<u64>,
+    /// PHA-5136: the VIP server group, kept in step with the `vip` flag the
+    /// arcade puts on each linked entry (a paid club member). None = off.
+    pub vip_group: Option<u64>,
     secret: String,
 }
 
@@ -113,6 +116,7 @@ impl std::fmt::Debug for Config {
             .field("arcade_url", &self.arcade_url)
             .field("kid", &self.kid)
             .field("server_group", &self.server_group)
+            .field("vip_group", &self.vip_group)
             .field("secret", &"<redacted>")
             .finish()
     }
@@ -130,16 +134,36 @@ impl Config {
         if !(url.starts_with("https://") || url.starts_with("http://")) {
             bail!("ARCADE_URL must be an http(s) URL");
         }
-        let server_group = match server_group.trim() {
-            "" => None,
-            g => Some(g.parse::<u64>().map_err(|_| anyhow!("PHATT_ID_SERVER_GROUP must be a numeric server group id"))?),
-        };
+        let server_group = parse_group(server_group, "PHATT_ID_SERVER_GROUP")?;
         let kid = match kid.trim() {
             "" => DEFAULT_KID.to_string(),
             k => k.to_string(),
         };
-        Ok(Some(Self { arcade_url: url.to_string(), kid, server_group, secret: secret.to_string() }))
+        Ok(Some(Self { arcade_url: url.to_string(), kid, server_group, vip_group: None, secret: secret.to_string() }))
     }
+
+    /// PHA-5136: turn on the VIP group (`PHATT_ID_VIP_GROUP`). Empty = off.
+    pub fn with_vip_group(mut self, vip_group: &str) -> Result<Self> {
+        self.vip_group = parse_group(vip_group, "PHATT_ID_VIP_GROUP")?;
+        Ok(self)
+    }
+}
+
+fn parse_group(g: &str, name: &str) -> Result<Option<u64>> {
+    match g.trim() {
+        "" => Ok(None),
+        g => Ok(Some(g.parse::<u64>().map_err(|_| anyhow!("{name} must be a numeric server group id"))?)),
+    }
+}
+
+/// An `/online` answer: the linked uids, and (PHA-5136) the VIP ones among
+/// them. `vip` is `Some` only when every entry carried a boolean `vip` (or the
+/// list is empty, so nobody can be VIP); otherwise the arcade could not say
+/// (hub not set up or down) and the VIP group is left as it is.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Linked {
+    pub uids: HashSet<String>,
+    pub vip: Option<HashSet<String>>,
 }
 
 /// What a claim came back as. Logged by label only.
@@ -226,7 +250,7 @@ pub fn online_body(clients: &[OnlineClient]) -> (Vec<u8>, HashSet<String>) {
 
 /// The linked uids from an `/online` answer. `Err` on anything but a 200 whose
 /// body is `{"linked":[{"uid":"..."}, ...]}`: the caller then changes nothing.
-pub fn parse_online(status: u16, body: &[u8]) -> Result<HashSet<String>> {
+pub fn parse_online(status: u16, body: &[u8]) -> Result<Linked> {
     if status != 200 {
         bail!("arcade /online answered {status}");
     }
@@ -236,14 +260,20 @@ pub fn parse_online(status: u16, body: &[u8]) -> Result<HashSet<String>> {
         .and_then(|l| l.as_array())
         .ok_or_else(|| anyhow!("arcade /online: no `linked` array"))?;
     let mut out = HashSet::with_capacity(arr.len());
+    let mut vip = Some(HashSet::new());
     for e in arr {
         let uid = e
             .get("uid")
             .and_then(|u| u.as_str())
             .ok_or_else(|| anyhow!("arcade /online: a `linked` entry has no uid"))?;
         out.insert(uid.to_string());
+        match e.get("vip").and_then(|v| v.as_bool()) {
+            Some(true) => { if let Some(v) = vip.as_mut() { v.insert(uid.to_string()); } }
+            Some(false) => {}
+            None => vip = None,
+        }
     }
-    Ok(out)
+    Ok(Linked { uids: out, vip })
 }
 
 /// One connected client as the group reconcile sees it.
@@ -380,7 +410,7 @@ impl Arcade {
         }
     }
 
-    pub async fn online(&self, body: Vec<u8>) -> Result<HashSet<String>> {
+    pub async fn online(&self, body: Vec<u8>) -> Result<Linked> {
         let (status, body) = self.post("/api/teamspeak/online", body).await?;
         parse_online(status, &body)
     }
@@ -470,10 +500,10 @@ mod tests {
     #[test]
     fn online_failures_are_errors_never_an_empty_set() {
         assert_eq!(
-            parse_online(200, format!(r#"{{"linked":[{{"uid":"{U1}","arcade_id":"a","display_name":"d"}}]}}"#).as_bytes()).unwrap(),
+            parse_online(200, format!(r#"{{"linked":[{{"uid":"{U1}","arcade_id":"a","display_name":"d"}}]}}"#).as_bytes()).unwrap().uids,
             HashSet::from([U1.to_string()])
         );
-        assert!(parse_online(200, br#"{"linked":[]}"#).unwrap().is_empty());
+        assert!(parse_online(200, br#"{"linked":[]}"#).unwrap().uids.is_empty());
         for (s, b) in [
             (500, &br#"{"linked":[]}"#[..]),
             (401, br#"{"error":"bad_signature"}"#),
@@ -486,6 +516,24 @@ mod tests {
         ] {
             assert!(parse_online(s, b).is_err(), "{s} {}", String::from_utf8_lossy(b));
         }
+    }
+
+    #[test]
+    fn online_vip_only_when_every_entry_says() {
+        let l = parse_online(200, format!(r#"{{"linked":[{{"uid":"{U1}","vip":true}},{{"uid":"{U2}","vip":false}}]}}"#).as_bytes()).unwrap();
+        assert_eq!(l.uids, HashSet::from([U1.to_string(), U2.to_string()]));
+        assert_eq!(l.vip, Some(HashSet::from([U1.to_string()])));
+        // one entry without it (the arcade could not ask the hub): VIP unknown, the group is left alone
+        let l = parse_online(200, format!(r#"{{"linked":[{{"uid":"{U1}","vip":true}},{{"uid":"{U2}"}}]}}"#).as_bytes()).unwrap();
+        assert_eq!(l.vip, None);
+        assert_eq!(parse_online(200, format!(r#"{{"linked":[{{"uid":"{U1}","vip":"yes"}}]}}"#).as_bytes()).unwrap().vip, None);
+        // nobody linked: nobody is VIP either
+        assert_eq!(parse_online(200, br#"{"linked":[]}"#).unwrap().vip, Some(HashSet::new()));
+        let c = Config::resolve("https://a.example", "", "10", Some("s")).unwrap().unwrap();
+        assert_eq!(c.vip_group, None);
+        assert_eq!(c.clone().with_vip_group(" 11 ").unwrap().vip_group, Some(11));
+        assert_eq!(c.clone().with_vip_group("").unwrap().vip_group, None);
+        assert!(c.with_vip_group("VIP").is_err());
     }
 
     fn gc(id: u16, db: u64, uid: &str, groups: &[u64]) -> GroupClient {

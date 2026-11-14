@@ -235,6 +235,12 @@ struct Args {
     /// remove this group.
     #[arg(long, env = "PHATT_ID_SERVER_GROUP", default_value = "")]
     phatt_id_server_group: String,
+
+    /// PHA-5136: numeric id of the VIP server group, kept in step with the
+    /// arcade's `vip` flag (paid club members among the linked). Empty = off.
+    /// Like the PHATT ID group, the bot needs permission to add and remove it.
+    #[arg(long, env = "PHATT_ID_VIP_GROUP", default_value = "")]
+    phatt_id_vip_group: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1091,11 +1097,13 @@ async fn main() -> Result<()> {
     // PHA-4102: the PHATT ID link. Built once; it outlives reconnects.
     let secret = std::env::var("ARCADE_SURFACE_SECRET").ok();
     let arcade: Option<Arc<phatt_link::Arcade>> =
-        match phatt_link::Config::resolve(&args.arcade_url, &args.arcade_surface_kid, &args.phatt_id_server_group, secret.as_deref()) {
+        match phatt_link::Config::resolve(&args.arcade_url, &args.arcade_surface_kid, &args.phatt_id_server_group, secret.as_deref())
+            .and_then(|c| c.map(|c| c.with_vip_group(&args.phatt_id_vip_group)).transpose())
+        {
             Ok(Some(cfg)) => match phatt_link::Arcade::new(cfg) {
                 Ok(a) => {
                     let c = a.config();
-                    info!(arcade = %c.arcade_url, kid = %c.kid, server_group = ?c.server_group, "PHATT ID link enabled");
+                    info!(arcade = %c.arcade_url, kid = %c.kid, server_group = ?c.server_group, vip_group = ?c.vip_group, "PHATT ID link enabled");
                     Some(Arc::new(a))
                 }
                 Err(e) => {
@@ -1601,10 +1609,17 @@ async fn run_once(
                     Ok(linked) => {
                         let group = arcade.as_ref().and_then(|a| a.config().server_group);
                         let (added, removed) = match group {
-                            Some(g) => apply_phatt_group(&mut con, &mut state, own_client_id, &queried, &linked, g),
+                            Some(g) => apply_phatt_group(&mut con, &mut state, own_client_id, &queried, &linked.uids, g),
                             None => (0, 0),
                         };
-                        info!(reported = queried.len(), linked = linked.len(), added, removed, "PHATT ID sync");
+                        // PHA-5136: the VIP group, the same way, only when the arcade could say who is VIP.
+                        let vip_group = arcade.as_ref().and_then(|a| a.config().vip_group);
+                        let (vip_added, vip_removed) = match (vip_group, &linked.vip) {
+                            (Some(g), Some(vip)) => apply_phatt_group(&mut con, &mut state, own_client_id, &queried, vip, g),
+                            (Some(_), None) => { warn!("PHATT ID sync: arcade did not say who is VIP; no VIP group changes this round"); (0, 0) }
+                            _ => (0, 0),
+                        };
+                        info!(reported = queried.len(), linked = linked.uids.len(), added, removed, vip_added, vip_removed, "PHATT ID sync");
                     }
                 }
             }
@@ -1725,7 +1740,7 @@ async fn run_once(
 /// PHA-4102: an arcade call finished; the event loop applies the result.
 enum LinkDone {
     Claim { client_id: ClientId, outcome: phatt_link::ClaimOutcome },
-    Online { queried: HashSet<String>, result: Result<HashSet<String>> },
+    Online { queried: HashSet<String>, result: Result<phatt_link::Linked> },
 }
 
 /// Pull every private `!link ...` message out of `events` and handle it; the
