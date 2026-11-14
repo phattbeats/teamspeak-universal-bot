@@ -23,6 +23,10 @@ name = "stream-spike"
 path = "src/bin/stream-spike.rs"
 
 [[bin]]
+name = "stream-stop-probe"
+path = "src/bin/stream-stop-probe.rs"
+
+[[bin]]
 name = "bridge-test"
 path = "src/bin/bridge-test.rs"
 
