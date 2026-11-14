@@ -14,6 +14,7 @@
 #   config/openclaw/            the one gateway: openclaw.json, agents, workspaces
 #   config/summoner/            shifts/scenes/guests config.json, live/, state/, query-pass.txt
 #   config/suno-api.env         Suno cookie + 2Captcha key + proxy (0600)
+#   phatt-id.env                optional: ARCADE_SURFACE_SECRET for the PHATT ID link (0600), see sexton/README.md
 #   config/insights/            the insights db + auth.txt, the dashboard login (#3963)
 #   config/personas/<id>/       optional: add or override a persona pack without a rebuild
 #   logs/<id>/                  each bot's room log
@@ -74,6 +75,10 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 publish=""
 [ -n "$INSIGHTS_PUBLISH" ] && publish="-p $INSIGHTS_PUBLISH:8097"
 [ -n "$STREAM_PUBLISH" ] && publish="$publish -p $STREAM_PUBLISH:$STREAM_PUBLISH/udp"
+# PHA-4102: the PHATT ID signing secret (ARCADE_SURFACE_SECRET=..., 0600, host only) rides along on
+# every deploy when the file exists, so a redeploy can't quietly turn the link off.
+envfile=""
+[ -f "$APPDATA/phatt-id.env" ] && envfile="--env-file $APPDATA/phatt-id.env"
 # shellcheck disable=SC2086
 docker run -d \
   --name "$NAME" \
@@ -83,6 +88,7 @@ docker run -d \
   -v "$APPDATA/config:/config" \
   -v "$APPDATA/logs:/var/sexton-logs" \
   $publish \
+  $envfile \
   $EXTRA_ARGS \
   "$IMAGE:$TAG" >/dev/null
 
