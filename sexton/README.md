@@ -43,7 +43,7 @@ fact — and tells the room he is doing it.
    by PM. Every private `!link ...` message is taken out of the event batch before anything else
    sees it, so a code never reaches the bridge (and the LLM behind it), the DM fallback or a
    log; bots (nick contains the bot tag) and ServerQuery clients are ignored, and each uid gets
-   5 tries a minute. Every 60 s (first 15 s after connect) the bot reports everyone connected
+   5 tries a minute. Every 60 s (first 15 s after connect) the bot reports everyone connected (uid, channel id and name)
    (`POST /api/teamspeak/online`, which also feeds arcade presence) and gets back who is linked;
    with `PHATT_ID_SERVER_GROUP` set it then adds that one group to linked clients missing it and
    removes it from connected clients that have it but are not linked. No other group is touched.

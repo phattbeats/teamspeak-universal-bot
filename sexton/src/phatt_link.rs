@@ -198,6 +198,8 @@ pub fn parse_claim(status: u16, body: &[u8]) -> ClaimOutcome {
 pub struct OnlineClient {
     pub uid: String,
     pub channel_id: u64,
+    /// The channel's name, so presence reads "TeamSpeak · Lobby" and not a bare id.
+    pub channel: Option<String>,
 }
 
 /// The `/online` body plus the set of uids it actually covers (deduped,
@@ -211,7 +213,11 @@ pub fn online_body(clients: &[OnlineClient]) -> (Vec<u8>, HashSet<String>) {
             break;
         }
         if valid_uid(&c.uid) && seen.insert(c.uid.clone()) {
-            list.push(serde_json::json!({ "uid": c.uid, "channel_id": c.channel_id }));
+            let mut o = serde_json::json!({ "uid": c.uid, "channel_id": c.channel_id });
+            if let Some(name) = &c.channel {
+                o["channel"] = name.as_str().into();
+            }
+            list.push(o);
         }
     }
     let body = serde_json::to_vec(&serde_json::json!({ "clients": list })).expect("json");
@@ -448,11 +454,15 @@ mod tests {
 
     #[test]
     fn online_body_dedupes_and_drops_what_the_arcade_would_400_on() {
-        let c = |uid: &str, ch| OnlineClient { uid: uid.into(), channel_id: ch };
-        let (body, queried) = online_body(&[c(U1, 1), c(U1, 2), c("serveradmin", 3), c(U2, 4)]);
+        let c = |uid: &str, ch| OnlineClient { uid: uid.into(), channel_id: ch, channel: None };
+        let lobby = OnlineClient { channel: Some("Lobby".into()), ..c(U3, 6) };
+        let (body, queried) = online_body(&[c(U1, 1), c(U1, 2), c("serveradmin", 3), c(U2, 4), lobby]);
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v, serde_json::json!({"clients":[{"uid":U1,"channel_id":1},{"uid":U2,"channel_id":4}]}));
-        assert_eq!(queried, HashSet::from([U1.to_string(), U2.to_string()]));
+        assert_eq!(
+            v,
+            serde_json::json!({"clients":[{"uid":U1,"channel_id":1},{"uid":U2,"channel_id":4},{"uid":U3,"channel_id":6,"channel":"Lobby"}]})
+        );
+        assert_eq!(queried, HashSet::from([U1.to_string(), U2.to_string(), U3.to_string()]));
         let many: Vec<OnlineClient> = (0..1500).map(|i| c(&format!("{i:0>28}"), 1)).collect();
         assert_eq!(online_body(&many).1.len(), MAX_ONLINE);
     }

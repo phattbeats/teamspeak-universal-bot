@@ -1819,7 +1819,13 @@ fn link_online_clients(con: &Connection, own_client_id: ClientId) -> Vec<phatt_l
         .clients
         .values()
         .filter(|c| c.id != own_client_id && matches!(c.client_type, tsclientlib::ClientType::Normal))
-        .filter_map(|c| c.uid.as_ref().map(|u| phatt_link::OnlineClient { uid: u.to_string(), channel_id: c.channel.0 }))
+        .filter_map(|c| {
+            c.uid.as_ref().map(|u| phatt_link::OnlineClient {
+                uid: u.to_string(),
+                channel_id: c.channel.0,
+                channel: state.channels.get(&c.channel).map(|ch| ch.name.clone()),
+            })
+        })
         .collect()
 }
 
