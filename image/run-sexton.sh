@@ -66,7 +66,7 @@ fi
 # any bot without a "phattId" block in bots.json (stack.mjs sets ARCADE_URL only
 # for those). It stays env-only and is never mapped to a flag: flags show in `ps`.
 if [ -z "${ARCADE_URL:-}" ]; then
-  unset ARCADE_SURFACE_SECRET ARCADE_URL ARCADE_SURFACE_KID PHATT_ID_SERVER_GROUP
+  unset ARCADE_SURFACE_SECRET ARCADE_URL ARCADE_SURFACE_KID PHATT_ID_SERVER_GROUP PHATT_ID_VIP_GROUP
 fi
 PHATT_ID_STATE=off
 if [ -n "${ARCADE_URL:-}" ] && [ -n "${ARCADE_SURFACE_SECRET:-}" ]; then PHATT_ID_STATE=on; fi

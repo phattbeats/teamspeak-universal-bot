@@ -193,18 +193,19 @@ function dmVars(b, bots) {
 }
 
 /**
- * PHA-4102: the optional per-bot `phattId` block ({ arcadeUrl, kid, serverGroup }) -> env for that bot's core (the
+ * PHA-4102: the optional per-bot `phattId` block ({ arcadeUrl, kid, serverGroup, vipGroup }) -> env for that bot's core (the
  * PHATT ID link). Every other core gets ARCADE_URL="" so a container-wide value never turns linking on for it, and
  * run-sexton then drops ARCADE_SURFACE_SECRET for it. The secret is never written here (bots.conf is a plain file):
  * it reaches the core from the container env, and only a core with this block keeps it.
  */
 function phattIdVars(b) {
   const p = b.phattId && typeof b.phattId === 'object' ? b.phattId : null;
-  if (!p?.arcadeUrl) return { ARCADE_URL: '', ARCADE_SURFACE_KID: '', PHATT_ID_SERVER_GROUP: '' };
+  if (!p?.arcadeUrl) return { ARCADE_URL: '', ARCADE_SURFACE_KID: '', PHATT_ID_SERVER_GROUP: '', PHATT_ID_VIP_GROUP: '' };
   return {
     ARCADE_URL: String(p.arcadeUrl),
     ARCADE_SURFACE_KID: p.kid ? String(p.kid) : 'teamspeak1',
     PHATT_ID_SERVER_GROUP: p.serverGroup === undefined || p.serverGroup === null ? '' : String(p.serverGroup),
+    PHATT_ID_VIP_GROUP: p.vipGroup === undefined || p.vipGroup === null ? '' : String(p.vipGroup), // PHA-5136
   };
 }
 
