@@ -2,6 +2,7 @@
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 import { createTeamSpeakAgentTools } from "./src/tools/agent-tools.js";
 import { createTeamSpeakPersonaTools } from "./src/tools/persona-tools.js";
+import { createTeamSpeakToolFactory, type TeamSpeakSessionContext } from "./src/tools/scope.js";
 
 export default defineBundledChannelEntry({
   id: "teamspeak",
@@ -32,7 +33,18 @@ export default defineBundledChannelEntry({
    */
   registerFull: (api) => {
     for (const tool of [...createTeamSpeakAgentTools(), ...createTeamSpeakPersonaTools()]) {
-      api.registerTool(tool, { name: tool.name });
+      const name = tool.name;
+      // Per-session factory. A factory that returns `null` omits
+      // the tool for that session, so the admin surface (bans, channel and
+      // server edits, persona edits, the band) is loaded only into TeamSpeak
+      // sessions and stops costing tokens in Signal, Discord, Paperclip and
+      // cron. The core voice tools stay visible everywhere. Nothing is
+      // deleted: a TeamSpeak session still gets every tool it had.
+      const factory = createTeamSpeakToolFactory(tool);
+      api.registerTool((ctx: TeamSpeakSessionContext) => factory(ctx), {
+        name,
+        workspaceAccess: "execute",
+      });
     }
   },
 });
