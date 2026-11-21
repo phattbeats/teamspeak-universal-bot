@@ -1,6 +1,7 @@
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 import { createTeamSpeakAgentTools } from "./src/tools/agent-tools.js";
 import { createTeamSpeakPersonaTools } from "./src/tools/persona-tools.js";
+import { createTeamSpeakToolFactory } from "./src/tools/scope.js";
 var index_default = defineBundledChannelEntry({
   id: "teamspeak",
   name: "TeamSpeak",
@@ -30,7 +31,12 @@ var index_default = defineBundledChannelEntry({
    */
   registerFull: (api) => {
     for (const tool of [...createTeamSpeakAgentTools(), ...createTeamSpeakPersonaTools()]) {
-      api.registerTool(tool, { name: tool.name });
+      const name = tool.name;
+      const factory = createTeamSpeakToolFactory(tool);
+      api.registerTool((ctx) => factory(ctx), {
+        name,
+        workspaceAccess: "execute"
+      });
     }
   }
 });
